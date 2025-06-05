@@ -7,6 +7,7 @@ from extensions.simulation.src.objects.frodo import FRODO_DynamicAgent
 from core.utils.logging_utils import Logger
 
 
+
 class FRODO_ENVIRONMENT_ACTIONS(enum.StrEnum):
     MEASUREMENT = 'frodo_measurement'
     COMMUNICATION = 'frodo_communication'

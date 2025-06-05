@@ -23,8 +23,11 @@ class Button(GUI_Object):
     callbacks: ButtonCallbacks
 
     # === INIT =========================================================================================================
-    def __init__(self, id: str, text=None, config=None):
+    def __init__(self, id: str, text=None, config=None, **kwargs):
         super().__init__(id)
+
+        if config is None:
+            config = {}
 
         self.text = text if text is not None else id
 
@@ -38,7 +41,7 @@ class Button(GUI_Object):
         self.logger = Logger(f"Button {self.id}", 'DEBUG')
         self.callbacks = ButtonCallbacks()
 
-        self.config = {**default_config, **config}
+        self.config = {**default_config, **config, **kwargs}
 
         if text is not None:
             self.config['text'] = text

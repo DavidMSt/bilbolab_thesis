@@ -657,9 +657,7 @@ export class ButtonWidget extends GUI_Object {
     }
 }
 
-
-// === MULTI STATE BUTTON =============================================================================================
-// =====================================================================================================================
+// === MULTI STATE BUTTON ==============================================================================================
 export class MultiStateButtonWidget extends GUI_Object {
     constructor(id, config = {}) {
         super(id, config);
@@ -861,6 +859,10 @@ export class MultiStateButtonWidget extends GUI_Object {
     }
 }
 
+
+// =====================================================================================================================
+
+
 // === SLIDER WIDGET ===================================================================================================
 // =====================================================================================================================
 export class SliderWidget extends GUI_Object {
@@ -896,13 +898,6 @@ export class SliderWidget extends GUI_Object {
 
         const inc = parseFloat(c.increment);
         const decimals = Math.max(0, (inc.toString().split('.')[1] || '').length);
-        //
-        // // — after “const decimals = …” in getHTML()
-        // const minStr = Number(c.min).toFixed(decimals);
-        // const maxStr = Number(c.max).toFixed(decimals);
-        // const maxLen = Math.max(minStr.length, maxStr.length);
-        // // expose e.g. “5th” if your longest label is 5 characters
-        // el.style.setProperty('--value-width', `${maxLen}ch`);
 
         const valueType = inc % 1 === 0 ? 'int' : 'float';
 
@@ -2118,61 +2113,6 @@ export class TextInputWidget extends GUI_Object {
     }
 }
 
-
-/**
- * StatusWidget
- *
- * Displays a simple table of status markers, names, and status texts.
- *
- * Configuration parameters (via constructor opts. Configuration):
- *   - visible      {boolean}   : show/hide widget (default: true)
- *   - color        {string}    : background color (default: 'transparent')
- *   - textColor    {string}    : default text color (default: '#000')
- *   - items        {Array}     : list of rows; each is an object:
- *       • markerColor {string} : circle color
- *       • name        {string} : label text
- *       • nameColor   {string} : (optional) label color
- *       • status      {string} : status text
- *       • statusColor {string} : (optional) status text color
- *   - nameLength   {number|null}: fixes name-column width in “ch” (or null for auto)
- *   - fontSize     {string}    : base font size (e.g. '1em', '14px')
- *
- * Example instantiation:
- *   const statusWidget = new StatusWidget({
- *     id: 'sys-status',
- *     configuration: {
- *       color: '#222',
- *       textColor: '#eee',
- *       fontSize: '0.9em',
- *       nameLength: 12,
- *       items: [
- *         { markerColor:'#0f0', name:'Sensor A', status:'OK',   statusColor:'#0f0' },
- *         { markerColor:'#fa0', name:'Sensor B', status:'WARN', statusColor:'#fa0' },
- *         { markerColor:'#f00', name:'Sensor C', status:'DOWN', statusColor:'#f00' }
- *       ]
- *     },
- *     callbacks: { event: () => {} }
- *   });
- *
- * Two ways to update:
- *
- * 1) Change a single row in place:
- *    statusWidget.update({
- *      updatedItem: {
- *        index: 1,
- *        status: 'OFFLINE',
- *        statusColor: '#f00'
- *      }
- *    });
- *
- * 2) Replace the entire table:
- *    statusWidget.update({
- *      items: [
- *        { markerColor:'#0f0', name: 'Sensor A', status:'OK', statusColor:'#0f0' },
- *        { markerColor:'#f00', name: 'Sensor B', status:'DOWN', statusColor:'#f00' }
- *      ]
- *    });
- */
 export class StatusWidget extends GUI_Object {
     constructor(opts) {
         super({...opts, type: 'status'});
@@ -2264,7 +2204,6 @@ export class StatusWidget extends GUI_Object {
         // no interactions
     }
 }
-
 
 // === TABLE WIDGET ===================================================================
 export class TableWidget extends GUI_Object {
@@ -2424,6 +2363,4 @@ export class TableWidget extends GUI_Object {
 }
 
 /* ================================================================================================================== */
-/* ================================================================================================================== */
-
 

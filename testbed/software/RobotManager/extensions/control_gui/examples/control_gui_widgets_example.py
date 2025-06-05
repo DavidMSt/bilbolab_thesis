@@ -82,12 +82,36 @@ def main():
 
     def reset_button(button, *args, **kwargs):
         if button.state == 'ON':
-            delayed_execution(lambda: button.update(state='OFF'), delay=2)
+            delayed_execution(lambda: button.update(state='OFF'), delay=5)
 
     msb3 = MultiStateButton(id='msb3', states=['OFF', 'ON'],
                             color=[[0.4, 0, 0], [0, 0.4, 0]], title='Reset')
     msb3.callbacks.state.register(reset_button)
     page_buttons.addObject(msb3, row=2, column=15, width=2, height=2)
+
+    # Second category
+    category2 = ControlGUI_Category(id='testcat',
+                                    name='Test Cat',
+                                    )
+
+
+    cat2page = ControlGUI_Page(id='cat2page',
+                               name='Test Page',)
+
+
+    cat2button = Button(id='cat2button', text='Button 2', color=[0.8, 0, 0])
+
+    def test_button_callback(*args, **kwargs):
+        nonlocal cat2button
+        cat2button.update(text=str(random.randint(1, 100)))
+
+    cat2button.callbacks.longClick.register(test_button_callback)
+    cat2page.addObject(cat2button, row = 1, column=1, width=40, height=4)
+
+    category2.addPage(cat2page)
+
+
+    app.addCategory(category2)
 
     # ==================================================================================================================
     while True:

@@ -87,7 +87,7 @@ class UDP:
         for socket in self._sockets.values():
             socket.close()
 
-        if self._thread.is_alive():
+        if hasattr(self, '_thread') and self._thread is not None and self._thread.is_alive():
             self._thread.join()
 
     # ------------------------------------------------------------------------------------------------------------------
