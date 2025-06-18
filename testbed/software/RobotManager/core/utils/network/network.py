@@ -70,50 +70,6 @@ def getInterfaceIP(interface_name):
     return None
 
 
-import socket
-
-
-# def getAllPrivateIPs():
-#     """
-#     Retrieves private IP addresses grouped by common subnet origins:
-#     - '192.*' (Local Wi-Fi/LAN),
-#     - '169.*' (USB or self-assigned),
-#     - '172.*' (Often WSL or Docker),
-#     - '10.*' (Common in enterprise/virtual setups).
-#
-#     :return: A dictionary with keys: 'local_ips', 'usb_ips', 'wsl_ips', 'enterprise_ips',
-#              each containing a list of corresponding IP addresses.
-#     """
-#     ip_groups = {
-#         "local_ips": [],
-#         "usb_ips": [],
-#         "wsl_ips": [],
-#         "enterprise_ips": []
-#     }
-#     try:
-#         hostname = socket.gethostname()
-#         print(f"Retrieving private IP addresses from {hostname}...")
-#         if '.' not in hostname:
-#             hostname = f"{hostname}.local"
-#
-#         ip_addresses = socket.gethostbyname_ex(hostname)[2]
-#
-#         for ip in ip_addresses:
-#             if ip.startswith("192."):
-#                 ip_groups["local_ips"].append(ip)
-#             elif ip.startswith("169."):
-#                 ip_groups["usb_ips"].append(ip)
-#             elif ip.startswith("172."):
-#                 ip_groups["wsl_ips"].append(ip)
-#             elif ip.startswith("10."):
-#                 ip_groups["enterprise_ips"].append(ip)
-#     except Exception as e:
-#         print(f"Error retrieving IPs: {e}")
-#         return ip_groups  # Still return structure, just empty
-#
-#     return ip_groups
-
-
 def getAllPrivateIPs():
     """
     Retrieves private IP addresses grouped by common subnet origins:
@@ -190,31 +146,72 @@ def chooseIpInteractive(ip_data):
         except ValueError:
             print("Invalid input. Please enter a number.")
 
+
 # ----------------------------------------------------------------------------------------------------------------------
-def getHostIP():
+def getHostIP(priorities=None, interactive=False):
     """
-    Retrieves a valid host IP address by using getAllPrivateIPs().
-    If multiple IPs are available, prompts user to choose interactively.
+    Selects a single host IP according to an optional priority list.
 
-    :return: A single selected IP address, or None if none are found.
+    :param priorities: List of priority categories, e.g. ['local','usb','wsl','enterprise'], or None.
+    :param interactive: If True, and more than one candidate is found in the selected pool,
+                        prompt the user to choose; otherwise pick the first match.
+    :return: A single IP string or None.
     """
+    # Validate priorities
+    valid = {'local', 'usb', 'wsl', 'enterprise'}
+    if priorities is not None:
+        if not all(p in valid for p in priorities):
+            raise ValueError(f"Invalid priority; expected subset of {valid}, got {priorities}")
+
     ip_data = getAllPrivateIPs()
-    all_ips = (
-            ip_data.get("local_ips", []) +
-            ip_data.get("usb_ips", []) +
-            ip_data.get("wsl_ips", []) +
-            ip_data.get("enterprise_ips", [])
-    )
 
-    if not all_ips:
-        return None
-    if len(all_ips) == 1:
-        return all_ips[0]
+    # Map shorthand to ip_data keys
+    group_map = {
+        'local': 'local_ips',
+        'usb': 'usb_ips',
+        'wsl': 'wsl_ips',
+        'enterprise': 'enterprise_ips'
+    }
 
-    logger.info("Multiple IP addresses found. Prompting for selection...")
-    time.sleep(0.2)
-    chosen_ip = chooseIpInteractive(ip_data)
-    return chosen_ip
+    # Build the pool of candidate IPs
+    if priorities:
+        # Respect the order of priorities
+        for p in priorities:
+            candidates = ip_data.get(group_map[p], [])
+            if candidates:
+                chosen_group = candidates
+                break
+        else:
+            # None of the priority groups had any IPs
+            return None
+    else:
+        # No priorities → all IPs
+        chosen_group = (
+                ip_data.get('local_ips', []) +
+                ip_data.get('usb_ips', []) +
+                ip_data.get('wsl_ips', []) +
+                ip_data.get('enterprise_ips', [])
+        )
+        if not chosen_group:
+            return None
+
+    # If only one, return it immediately
+    if len(chosen_group) == 1 or not interactive:
+        return chosen_group[0]
+
+    # Otherwise, ask the user to choose among chosen_group
+    print("Multiple matching IPs found:")
+    for i, ip in enumerate(chosen_group, 1):
+        print(f"  {i}) {ip}")
+
+    while True:
+        try:
+            sel = int(input(f"Select an IP [1–{len(chosen_group)}]: "))
+            if 1 <= sel <= len(chosen_group):
+                return chosen_group[sel - 1]
+        except ValueError:
+            pass
+        print("Invalid selection; please enter a number.")
 
 
 def is_ipv4(address):
@@ -391,7 +388,9 @@ def check_internet(timeout=0.25):
 
 
 if __name__ == '__main__':
-    addresses_to_ping = ['192.168.1.1', 'twipr1', '192.168.2.1', 'twipr3', '8.8.8.8', '192.168.20.1']
-    continuousAddressCheck(addresses_to_ping, interval=5)
-
-    time.sleep(20)
+    # addresses_to_ping = ['192.168.1.1', 'twipr1', '192.168.2.1', 'twipr3', '8.8.8.8', '192.168.20.1']
+    # continuousAddressCheck(addresses_to_ping, interval=5)
+    #
+    # time.sleep(20)
+    ip = getHostIP(priorities=['usb', 'local'])
+    print(f"The chosen IP is: {ip}")

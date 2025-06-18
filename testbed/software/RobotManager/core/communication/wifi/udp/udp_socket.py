@@ -6,6 +6,7 @@ from cobs import cobs
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.logging_utils import Logger
+from core.utils.os_utils import getOS
 
 logger = Logger('UDP Socket')
 logger.setLevel('INFO')
@@ -55,9 +56,15 @@ class UDP_Socket:
         self.callbacks = UDPSocketCallbacks()
 
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+        match getOS():
+            case 'Linux'| 'MAC':
+                self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+
         self._socket.settimeout(0)
 
         # set ip and port

@@ -141,7 +141,7 @@ class Startup:
                 else:
                     if self.joystick_connected:
                         self.sound_system.speak("Start Standalone Mode")
-                        process = start_script_in_new_process(script_path=get_full_path('./standalone/standalone.py'))
+                        process = start_script_in_new_process(script_path=get_full_path('../../main.py'))
                     else:
                         self.sound_system.speak("Please connect a joystick before starting standalone mode")
 

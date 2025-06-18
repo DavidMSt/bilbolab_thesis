@@ -6,7 +6,7 @@ import time
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 
 
 # ======================================================================================================================
@@ -137,7 +137,7 @@ class JSPlotCallbacks:
 # ======================================================================================================================
 class JSPlot:
     timeseries: dict[str, JSPlotTimeSeries]
-    websocket_server: SyncWebsocketServer
+    websocket_server: WebsocketServer
 
     plot_config: dict
     callbacks: JSPlotCallbacks
@@ -184,7 +184,7 @@ class JSPlot:
         self.callbacks = JSPlotCallbacks()
 
         if self.server_mode == 'standalone':
-            self.server = SyncWebsocketServer(host=host, port=port)
+            self.server = WebsocketServer(host=host, port=port)
             self.server.callbacks.new_client.register(self._on_new_client)
             self.server.callbacks.client_disconnected.register(self._on_client_disconnected)
             self._thread = threading.Thread(target=self._task)

@@ -1,10 +1,10 @@
 import time
 
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 
 
 def main():
-    server = SyncWebsocketServer(host='localhost', port=8000)
+    server = WebsocketServer(host='localhost', port=8000)
     server.start()
 
     data = {

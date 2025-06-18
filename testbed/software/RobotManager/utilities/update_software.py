@@ -34,6 +34,12 @@ class CredentialDialog(simpledialog.Dialog):
 
 
 class SetupParamsDialog(simpledialog.Dialog):
+    def __init__(self, parent: tk.Misc | None, title: str | None = None):
+        super().__init__(parent, title)
+        self.size_entry = None
+        self.revision_entry = None
+        self.result = None
+
     def body(self, master):
         self.title("Setup Parameters")
 
@@ -121,6 +127,7 @@ def select_software_directory():
         else:
             messagebox.showerror("Invalid Directory",
                                  "The chosen directory does not contain a VERSION file. Please choose a valid Software Directory.")
+            return None
 
 
 def rsync_folder(local_folder, hostname, username, password, remote_folder):

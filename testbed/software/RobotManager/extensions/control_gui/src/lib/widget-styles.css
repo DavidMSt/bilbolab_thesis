@@ -254,6 +254,7 @@
     font-size: 10px;
     pointer-events: none;
     z-index: 10;
+    font-family: sans-serif;
 }
 
 /* tiny arrow pointing down */
@@ -272,21 +273,146 @@
 /* =======================
    Multi-Select Widget
    ======================= */
+/*.multiSelectWidget {*/
+/*    position: relative;*/
+/*    border: 1px solid #444;*/
+/*    width: 100%;*/
+/*    min-width: 48px;*/
+/*    background-color: #333;*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    justify-content: center;*/
+/*    touch-action: none;*/
+/*    font-size: 16px;*/
+/*}*/
+
+/*.multiSelectWidget select {*/
+/*    width: 100%;*/
+/*    background: transparent;*/
+/*    color: inherit;*/
+/*    border: none;*/
+/*    outline: none;*/
+/*    appearance: none;*/
+/*    -webkit-appearance: none;*/
+/*    text-align: center;*/
+/*    text-align-last: center;*/
+/*    padding: 0;*/
+/*    margin: 0;*/
+/*    line-height: 1;*/
+/*    font-size: inherit;*/
+/*    cursor: pointer;*/
+/*}*/
+
+/*.msSelectDropdown {*/
+/*    position: absolute;*/
+/*    right: 5px;*/
+/*    bottom: 2px;*/
+/*    pointer-events: none;*/
+/*    font-size: 9px;*/
+/*    color: #ccc;*/
+/*}*/
+
+/*.msSelectTitle {*/
+/*    position: absolute;*/
+/*    top: 2px;*/
+/*    left: 0;*/
+/*    right: 0;*/
+/*    text-align: center;*/
+/*    font-size: 12px;*/
+/*    font-weight: bold;*/
+/*    pointer-events: none;*/
+/*}*/
+
+/*!* --- hook layout by data-attribute --- *!*/
+/*.multiSelectWidget[data-title-position="top"] {*/
+/*    !* default: title above, centered *!*/
+/*    display: block;*/
+/*    padding-top: 24px; !* make room for the title *!*/
+/*    justify-content: center;*/
+/*}*/
+
+/*.multiSelectWidget[data-title-position="top"] .msSelectTitle {*/
+/*    position: absolute;*/
+/*    top: 2px;*/
+/*    left: 0;*/
+/*    right: 0;*/
+/*    text-align: center;*/
+/*    font-size: 12px;*/
+/*}*/
+
+/*!* --- when titlePosition = left --- *!*/
+/*.multiSelectWidget[data-title-position="left"] {*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    justify-content: space-between;*/
+/*    padding: 0 8px;*/
+/*}*/
+
+/*.multiSelectWidget[data-title-position="left"] .msSelectTitle {*/
+/*    position: static; !* flow in the flex row *!*/
+/*    margin-right: 8px;*/
+/*    font-size: 14px; !* a bit bigger *!*/
+/*    text-align: left;*/
+/*    font-weight: normal;*/
+/*}*/
+
+/*.multiSelectWidget[data-title-position="left"] .msSelectValue {*/
+/*    flex: 1;*/
+/*    text-align: right;*/
+/*    padding-right: 8px;*/
+/*}*/
+
+/*!* ensure arrow stays at right edge *!*/
+/*.multiSelectWidget[data-title-position="left"] .msSelectDropdown {*/
+/*    right: 5px;*/
+/*    bottom: 2px;*/
+/*}*/
+
+/*!* -----------------------------*/
+/*   Multi-Select: top-title tweaks*/
+/*   ----------------------------- *!*/
+/*.multiSelectWidget[data-title-position="top"] {*/
+/*    display: block; !* your existing rule *!*/
+/*    padding-top: 24px; !* your existing rule *!*/
+/*    text-align: center; !* ← center all inline content *!*/
+/*}*/
+
+/*.multiSelectWidget[data-title-position="top"] .msSelectValue {*/
+/*    display: block; !* span will now fill the width *!*/
+/*    width: 100%; !* so its text-align applies *!*/
+/*    text-align: center; !* ← center the value text *!*/
+/*}*/
+/* =======================
+   Multi-Select Widget
+   ======================= */
+/* ================================
+   Multi-Select Widget (all styles)
+   ================================ */
+
+/* 1) Base container (shared by both “top” and “left”) */
 .multiSelectWidget {
     position: relative;
     border: 1px solid #444;
     width: 100%;
     min-width: 48px;
     background-color: #333;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    touch-action: none;
     font-size: 16px;
+    touch-action: none;
 }
 
+/* 2) The invisible <select> overlay to capture clicks */
 .multiSelectWidget select {
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 1;
+
+    /* ensure it inherits text/color if ever visible */
+
     background: transparent;
     color: inherit;
     border: none;
@@ -299,18 +425,19 @@
     margin: 0;
     line-height: 1;
     font-size: inherit;
-    cursor: pointer;
 }
 
+/* 3) Dropdown arrow (▼) */
 .msSelectDropdown {
     position: absolute;
-    right: 5px;
     bottom: 2px;
+    right: 5px;
     pointer-events: none;
     font-size: 9px;
     color: #ccc;
 }
 
+/* 4) Title element (shared positioning, but tweaked per titlePosition) */
 .msSelectTitle {
     position: absolute;
     top: 2px;
@@ -322,63 +449,87 @@
     pointer-events: none;
 }
 
-/* --- hook layout by data-attribute --- */
-.multiSelectWidget[data-title-position="top"] {
-    /* default: title above, centered */
-    display: block;
-    padding-top: 24px; /* make room for the title */
-    justify-content: center;
+/* 5) Value text (shared settings) */
+.msSelectValue {
+    pointer-events: none;
+    font-size: 16px;
+    color: inherit;
+    white-space: nowrap;
 }
 
+/* ===================================================
+   (A) When titlePosition = "top", center the value
+   =================================================== */
+.multiSelectWidget[data-title-position="top"] {
+    /* No extra padding: we’ll absolutely position title + value */
+    display: block; /* keep it block so height is whatever parent/grid gives */
+    position: relative; /* so child absolutes are relative to this container */
+}
+
+/* (A1) Title stays at the very top */
 .multiSelectWidget[data-title-position="top"] .msSelectTitle {
-    position: absolute;
+    /* Already set above, but reiterating for clarity */
     top: 2px;
     left: 0;
     right: 0;
     text-align: center;
     font-size: 12px;
+    font-weight: bold;
 }
 
-/* --- when titlePosition = left --- */
+/* (A2) Value is centered in the very middle of the widget */
+.multiSelectWidget[data-title-position="top"] .msSelectValue {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+/* (A3) Arrow stays anchored at bottom-right */
+.multiSelectWidget[data-title-position="top"] .msSelectDropdown {
+    position: absolute;
+    bottom: 2px;
+    right: 5px;
+    font-size: 9px;
+    pointer-events: none;
+}
+
+/* ===================================================
+   (B) When titlePosition = "left", keep existing flex
+   =================================================== */
 .multiSelectWidget[data-title-position="left"] {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0 8px;
+    position: relative; /* just to be safe */
 }
 
+/* (B1) Title flows in the flex row */
 .multiSelectWidget[data-title-position="left"] .msSelectTitle {
-    position: static; /* flow in the flex row */
+    position: static;
     margin-right: 8px;
-    font-size: 14px; /* a bit bigger */
+    font-size: 14px;
     text-align: left;
+    font-weight: normal;
 }
 
+/* (B2) Value sits to the right of the title */
 .multiSelectWidget[data-title-position="left"] .msSelectValue {
     flex: 1;
     text-align: right;
     padding-right: 8px;
+    font-size: 16px;
 }
 
-/* ensure arrow stays at right edge */
+/* (B3) Arrow still bottom-right of the widget */
 .multiSelectWidget[data-title-position="left"] .msSelectDropdown {
-    right: 5px;
+    position: absolute;
     bottom: 2px;
-}
-
-/* -----------------------------
-   Multi-Select: top-title tweaks
-   ----------------------------- */
-.multiSelectWidget[data-title-position="top"] {
-    display: block; /* your existing rule */
-    padding-top: 24px; /* your existing rule */
-    text-align: center; /* ← center all inline content */
-}
-
-.multiSelectWidget[data-title-position="top"] .msSelectValue {
-    display: block; /* span will now fill the width */
-    width: 100%; /* so its text-align applies */
-    text-align: center; /* ← center the value text */
+    right: 5px;
+    font-size: 9px;
+    pointer-events: none;
 }
 
 
@@ -398,7 +549,7 @@
     color: inherit;
     touch-action: none;
     font-size: 14px;
-    padding: 2px;
+    padding: 0px;
     border: 1.5px solid #444;
 }
 
@@ -432,13 +583,15 @@
 
 .rotaryDialWidget[data-title-position="top"] .rotaryTitle {
     position: static;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
     font-size: 12px;
+
+    margin-top: 2px;
 }
 
 .rotaryDialWidget[data-title-position="top"] .dialWrapper {
-    width: 80%;
-    height: 80%;
+    width: 90%;
+    height: 90%;
 }
 
 .rotaryDialWidget[data-title-position="top"] .dialWrapper .value {
@@ -452,12 +605,13 @@
 
 .rotaryDialWidget[data-title-position="left"] .rotaryTitle {
     position: static;
-    margin-right: 8px;
+    margin-right: 4px;
     font-size: 12px;
+    margin-left: 4px;
 }
 
 .rotaryDialWidget[data-title-position="left"] .dialWrapper {
-    width: 100%;
+    width: 90%;
     height: 100%;
 }
 
@@ -511,10 +665,14 @@
 
 .classicSliderWidget[data-title-position="top"] .csTitle {
     margin-bottom: 4px;
+    font-size: 10pt;
+    font-weight: bold;
 }
 
 .classicSliderWidget[data-title-position="left"] .csTitle {
     margin-right: 8px;
+    font-size: 11pt;
+    font-weight: normal;
 }
 
 /* main area */
@@ -748,10 +906,9 @@
 }
 
 
-/* ================= TextInputWidget ================= */
-/* ─── in your CSS file ────────────────────────────────────────────────────── */
+/*!* ================= TextInputWidget ================= *!*/
 
-/* TextInputWidget container */
+/* Container for the entire widget */
 .textInputWidget {
     position: relative;
     box-sizing: border-box;
@@ -759,88 +916,139 @@
     border-radius: 6px;
     display: flex;
     flex-direction: column;
+    background-color: var(--widget-bg, transparent);
+    color: inherit;
 }
 
-/* when title is on the left */
+/* When title is on the left, use a row layout */
 .textInputWidget[data-title-position="left"] {
     flex-direction: row;
     align-items: center;
 }
 
-/* the title */
+/* Style for the title text */
 .textInputWidget .tiTitle {
-    font-size: 0.9em;
+    font-size: 10pt;
     font-weight: bold;
-    color: inherit;
     margin-bottom: 4px;
 }
 
+/* Remove bottom margin when title is to the left */
 .textInputWidget[data-title-position="left"] .tiTitle {
     margin: 0 4px 0 0;
-    font-size: 10pt;
-    font-weight: bold;
 }
 
-/* the input field */
+/* Container around the input field */
+.textInputWidget .tiInputContainer {
+    position: relative;
+    display: inline-block;
+}
+
+/* Fill available space when title is to the left */
+.textInputWidget[data-title-position="left"] .tiInputContainer {
+    flex: 1;
+    min-width: 0;
+}
+
+/* If titlePosition is "top", absolutely center the input container vertically */
+.textInputWidget[data-title-position="top"] .tiInputContainer {
+    position: absolute;
+    top: 50%;
+    left: 5px;
+    right: 5px;
+    transform: translateY(-50%);
+}
+
+/* The actual text input */
 .textInputWidget .tiInput {
     width: 100%;
     box-sizing: border-box;
-    padding: 1px 3px;
-    font-size: 10pt;
+    padding-left: 4px;
+    font-size: var(--ti-input-font-size, 11pt);
     border: 1px solid #888;
     border-radius: 4px;
     background-color: var(--ti-field-bg, #fff);
     color: var(--ti-field-color, #000);
-    /*margin-right: 4px; !* small gap on the right *!*/
-    text-align: center;
+    text-align: var(--ti-input-text-align, center);
 }
 
-.textInputWidget[data-title-position="top"] .tiInput {
-    margin-right: 0;
-    margin-top: 4px;
-}
-
-/* success “blink” (reuse your existing keyframes) */
+/* Accepted-value animation */
 .textInputWidget.accepted {
     animation: blink-accept 200ms ease-out;
 }
 
-/* error shake + red blink */
+/* Shake and blink-red for error state */
 @keyframes ti-shake {
     0% {
-        transform: translateX(0)
+        transform: translateX(0);
     }
     25% {
-        transform: translateX(-4px)
+        transform: translateX(-4px);
     }
     50% {
-        transform: translateX(4px)
+        transform: translateX(4px);
     }
     75% {
-        transform: translateX(-4px)
+        transform: translateX(-4px);
     }
     100% {
-        transform: translateX(0)
+        transform: translateX(0);
     }
 }
 
 @keyframes ti-blink-error {
     0%, 100% {
-        border-color: red
+        border-color: red;
     }
     50% {
-        border-color: transparent
+        border-color: transparent;
     }
 }
 
 .textInputWidget.error {
-    /* run shake AND border-blink */
-    animation: ti-shake 300ms ease,
-    ti-blink-error 400ms ease;
+    animation: ti-shake 300ms ease, ti-blink-error 400ms ease;
+}
+
+/* Floating tooltip (appended to body) */
+.tiTooltipFloating {
+    position: absolute;
+    z-index: 9999;
+    max-width: 200px;
+    padding: 6px 8px;
+    font-size: 9pt;
+    line-height: 1.2;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border-radius: 4px;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    font-family: "Roboto Light", sans-serif;
+}
+
+.tiTooltipFloating::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 6px;
+    border-style: solid;
+    border-color: rgba(0, 0, 0, 0.75) transparent transparent transparent;
+}
+
+/* Error-style floating tooltip */
+.tiTooltipFloatingError {
+    background-color: darkred;
+    color: #fff;
+}
+
+.tiTooltipFloatingError::after {
+    border-color: darkred transparent transparent transparent;
 }
 
 
-/* =================== StatusWidget =================== */
 /* =================== StatusWidget =================== */
 
 .statusWidget {

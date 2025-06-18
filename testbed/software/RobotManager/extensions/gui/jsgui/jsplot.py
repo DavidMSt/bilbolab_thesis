@@ -4,7 +4,7 @@ import time
 
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 
 
 # ======================================================================================================================
@@ -113,7 +113,7 @@ class JSPlotTimeSeries:
 # ======================================================================================================================
 class JSPlot:
     timeseries: dict[str, JSPlotTimeSeries]
-    websocket_server: SyncWebsocketServer
+    websocket_server: WebsocketServer
 
     options: dict
 
@@ -139,7 +139,7 @@ class JSPlot:
         self.options = {**default_options, **(options or {})}
 
         self.Ts = Ts
-        self.server = SyncWebsocketServer(host=host, port=port)
+        self.server = WebsocketServer(host=host, port=port)
         self.server.callbacks.new_client.register(self._on_new_client)
         self.server.callbacks.client_disconnected.register(self._on_client_disconnected)
 

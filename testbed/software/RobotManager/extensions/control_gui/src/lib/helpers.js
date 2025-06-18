@@ -22,7 +22,11 @@ function _getColor(color) {
             a: a
         };
     } else if (typeof color === 'string') {
+        if (color === 'transparent') {
+            return {r: 0, g: 0, b: 0, a: 0};
+        }
         if (color.startsWith('#')) {
+
             let r, g, b, a = 1;
             if (color.length === 4) {
                 // #rgb shorthand

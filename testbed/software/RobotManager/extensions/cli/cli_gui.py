@@ -22,7 +22,7 @@ from core.utils.logging_utils import Logger
 from core.utils.time import delayed_execution
 
 # === OWN PACKAGES =====================================================================================================
-from core.utils.websockets.websockets import SyncWebsocketClient, SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketClient, WebsocketServer
 
 
 # ======================================================================================================================
@@ -33,14 +33,14 @@ class CLI_GUI_Server_Callbacks:
 
 
 class CLI_GUI_Server:
-    server: SyncWebsocketServer
+    server: WebsocketServer
     cli: CLI
     callbacks: CLI_GUI_Server_Callbacks
     clients: list
 
     def __init__(self, address='localhost', port=8090, buffer_logs: bool = True):
 
-        self.server = SyncWebsocketServer(host=address, port=port)
+        self.server = WebsocketServer(host=address, port=port)
         self.callbacks = CLI_GUI_Server_Callbacks()
         self.buffer_logs = buffer_logs
         if self.buffer_logs:
@@ -200,14 +200,14 @@ class CLI_GUI_Server:
 # ======================================================================================================================
 class CLI_GUI_Client:
     app: CLI_GUI_App
-    websocket: SyncWebsocketClient
+    websocket: WebsocketClient
 
     connected: bool
 
     _exit: bool = False
 
     def __init__(self, address, port=8090):
-        self.websocket = SyncWebsocketClient(address, port, debug=False)
+        self.websocket = WebsocketClient(address, port, debug=False)
         self.websocket.callbacks.connected.register(self._websocket_connected_callback)
         self.websocket.callbacks.message.register(self._websocket_message_callback)
         self.websocket.callbacks.disconnected.register(self._websocket_disconnected_callback)

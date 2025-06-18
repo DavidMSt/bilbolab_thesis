@@ -118,6 +118,7 @@ def _build_value(type_: Type, data: Any, config: Config) -> Any:
             break
     return data
 
+
 def _build_value_for_union(union: Type, data: Any, config: Config) -> Any:
     types = extract_generic(union)
     if is_optional(union) and len(types) == 2:
@@ -168,6 +169,7 @@ def _build_value_for_collection(collection: Type, data: Any, config: Config) -> 
 
 _frozen_dataclass_cache: Dict[Tuple[type, Tuple[str, type]], type] = {}
 
+
 def freeze_dataclass_instance(instance: Any) -> Any:
     """
     Takes a dataclass instance and converts it and all its nested dataclasses into immutable frozen versions.
@@ -209,8 +211,8 @@ def freeze_dataclass_instance(instance: Any) -> Any:
                 ],
                 frozen=True
             )
-            _frozen_dataclass_cache[cache_key] = frozen_cls # type: ignore
-        return _frozen_dataclass_cache[cache_key] # type: ignore
+            _frozen_dataclass_cache[cache_key] = frozen_cls  # type: ignore
+        return _frozen_dataclass_cache[cache_key]  # type: ignore
 
     def freeze_instance(dataclass_instance: Any) -> Any:
         """Recursively convert a dataclass instance into its frozen version."""
@@ -228,6 +230,7 @@ def freeze_dataclass_instance(instance: Any) -> Any:
         return frozen_cls(**frozen_kwargs)
 
     return freeze_instance(instance)
+
 
 def analyze_dataclass(
         dataclass_type: Type[Any],
@@ -340,3 +343,13 @@ def analyze_dataclass(
 
         # Render the figure with the name of the dataclass
         graph.render(dataclass_name, cleanup=True)
+
+
+# ======================================================================================================================
+def update_dataclass_from_dict(dataclass_instance, update_dict):
+    if not is_dataclass(dataclass_instance):
+        raise TypeError("Provided object is not a dataclass instance")
+
+    for field in fields(dataclass_instance):
+        if field.name in update_dict:
+            setattr(dataclass_instance, field.name, update_dict[field.name])

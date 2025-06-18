@@ -8,7 +8,7 @@ import time
 import webbrowser
 
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.websockets.websockets import SyncWebsocketServer as WebsocketClass
+from core.utils.websockets.websockets import WebsocketServer as WebsocketClass
 from core.utils.exit import register_exit_callback
 
 frontend_dir = f"{os.path.dirname(__file__)}/frontend/"

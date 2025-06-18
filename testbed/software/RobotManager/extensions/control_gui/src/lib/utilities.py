@@ -1,3 +1,6 @@
+from core.utils.logging_utils import Logger
+
+
 def check_for_spaces(string):
     return ' ' in string
 
@@ -36,3 +39,17 @@ if __name__ == '__main__':
 
     print(split_path('/'))
     print(split_path('/id1'))
+
+
+def warn_on_unknown_kwargs(kwargs: dict, config_template: dict, logger: Logger):
+    """
+    Logs a warning for any kwargs that aren't present in the config_template.
+
+    Parameters:
+        kwargs (dict): The keyword arguments passed in.
+        config_template (dict): The set of allowed/default config keys.
+        logger (Logger): Logger instance to use for warnings.
+    """
+    for key in kwargs:
+        if key not in config_template:
+            logger.warning(f"Warning: Unrecognized config key passed via kwargs: '{key}'")

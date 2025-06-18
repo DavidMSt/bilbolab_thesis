@@ -4,7 +4,7 @@ import time
 import webbrowser
 
 from core.utils.exit import register_exit_callback
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Union, Any
@@ -332,14 +332,14 @@ class Group:
 # -----------------------------------------------------------------------------
 
 class Dynamic2DPlotter:
-    server: SyncWebsocketServer
+    server: WebsocketServer
     html_file_path: str = "plotter_2d.html"
     _thread: threading.Thread
     _exit: bool = False
 
     def __init__(self):
         # Initialize the WebSocket server.
-        self.server = SyncWebsocketServer(host="localhost", port=8000)
+        self.server = WebsocketServer(host="localhost", port=8000)
         # Create a default group for non-group elements.
         self.default_group = Group(id="default", fullPath="default")
         # Start the background thread that will send updates.

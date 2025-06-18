@@ -8,7 +8,7 @@ from abc import abstractmethod
 from typing import Optional, Union
 
 from core.utils.exit import register_exit_callback
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 
 
 # ======================================================================================================================
@@ -691,7 +691,7 @@ class Group:
 
 # ======================================================================================================================
 class Map:
-    server: SyncWebsocketServer
+    server: WebsocketServer
 
     _root: Group
     _thread: threading.Thread
@@ -726,7 +726,7 @@ class Map:
 
         self.config = {**default_options, **(config or {})}
 
-        self.server = SyncWebsocketServer(host=host, port=port)
+        self.server = WebsocketServer(host=host, port=port)
 
         self.server.callbacks.new_client.register(self._on_new_client)
 

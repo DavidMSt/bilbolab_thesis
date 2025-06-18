@@ -1,4 +1,6 @@
 import random
+import seaborn as sns
+
 
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
@@ -81,3 +83,63 @@ def random_color(len=3):
         return [random.random(), random.random(), random.random(), random.random()]
     else:
         return None
+
+
+# ── NEW ADDITIONS BELOW ─────────────────────────────────────────────────────
+
+# 1) Define some “named” palettes (using Seaborn’s built-in lookup).
+#    Each entry is just a *default* small palette of, say, 8 colors.
+#    You can of course override the size every time you call get_palette().
+
+_PREDEFINED_PALETTES = {
+    "muted":        sns.color_palette("muted"),        # ~8 colors
+    "pastel":       sns.color_palette("pastel"),       # ~8 colors
+    "dark":         sns.color_palette("dark"),         # ~8 colors
+    "bright":       sns.color_palette("bright"),       # ~8 colors
+    "colorblind":   sns.color_palette("colorblind"),   # ~8 colors
+    "deep":         sns.color_palette("deep"),         # ~8 colors
+    # ... you can add more, e.g.:
+    # "cubehelix":    sns.color_palette("cubehelix", 8),
+    # "viridis":      sns.color_palette("viridis",   8),
+    # "inferno":      sns.color_palette("inferno",   8),
+    # "cividis":      sns.color_palette("cividis",   8),
+}
+
+def get_palette(name, n_colors=8):
+    """
+    Return a list of `n_colors` float‐RGB tuples in [0,1].
+    Examples:
+      get_palette("muted", 5)   → 5 “muted” colors
+      get_palette("bright", 10) → 10 “bright” colors
+    If `name` is not found, raises KeyError.
+    """
+    if name not in _PREDEFINED_PALETTES:
+        raise KeyError(f"Palette '{name}' is not defined. Available: {list(_PREDEFINED_PALETTES.keys())}")
+    # Seaborn will automatically cycle/ interpolate if you ask for > base size.
+    return sns.color_palette(name, n_colors)
+
+def get_palette_hex(name, n_colors=8):
+    """
+    Same as get_palette(), but each color is converted to a hex string "#RRGGBB".
+    """
+    float_list = get_palette(name, n_colors)
+    # rgb_to_hex expects a list [r,g,b] in floats 0..1
+    return [rgb_to_hex(color) for color in float_list]
+
+def random_color_from_palette(name):
+    """
+    Return one random float‐RGB tuple from the named palette (using its standard size).
+    """
+    base = _PREDEFINED_PALETTES.get(name)
+    if base is None:
+        raise KeyError(f"Palette '{name}' is not defined.")
+    return random.choice(base)
+
+def random_color_from_palette_hex(name):
+    """
+    Return one random color from the named palette, as "#RRGGBB".
+    """
+    c = random_color_from_palette(name)
+    return rgb_to_hex(c)
+
+# ── END OF NEW ADDITIONS ─────────────────────────────────────────────────────

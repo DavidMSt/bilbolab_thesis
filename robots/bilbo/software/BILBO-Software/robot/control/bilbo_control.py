@@ -513,6 +513,7 @@ class BILBO_Control:
             output_type=ctypes.c_bool
         )
 
+
         if success:
             logger.info(f"Set velocity integral control to {enable}")
 

@@ -1,6 +1,6 @@
 import time
 
-from core.utils.websockets.websockets import SyncWebsocketClient
+from core.utils.websockets.websockets import WebsocketClient
 
 
 def on_connect(*args, **kwargs):
@@ -12,7 +12,7 @@ def on_message(message, *args, **kwargs):
 
 
 def main():
-    client = SyncWebsocketClient(address='127.0.0.1', port=8000)
+    client = WebsocketClient(address='127.0.0.1', port=8000)
     client.callbacks.message.register(on_message)
     client.start()
 

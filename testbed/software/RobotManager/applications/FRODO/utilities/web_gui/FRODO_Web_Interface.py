@@ -5,7 +5,7 @@ import time
 import webbrowser
 
 from core.utils.exit import register_exit_callback
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 
 from dataclasses import dataclass, field, fields
 from typing import Optional, List, Dict, Union, Any
@@ -366,14 +366,14 @@ class Group(PlottableElement):
 # -----------------------------------------------------------------------------
 
 class FRODO_Web_Interface:
-    server: SyncWebsocketServer
+    server: WebsocketServer
     html_file_path: str = "./frodo_web_gui_new.html"
     _thread: threading.Thread
     _exit: bool = False
     videos: dict
 
     def __init__(self):
-        self.server = SyncWebsocketServer(host="localhost", port=8000)
+        self.server = WebsocketServer(host="localhost", port=8000)
         self.default_group = Group(id="default")
         self.videos = {}
         self._thread = threading.Thread(target=self._task, daemon=True)

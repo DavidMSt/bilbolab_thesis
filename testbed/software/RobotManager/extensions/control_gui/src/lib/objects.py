@@ -21,11 +21,42 @@ class GUI_Object(abc.ABC):
 
         if check_for_spaces(widget_id):
             raise ValueError(f"Object id '{widget_id}' contains spaces")
+        if '/' in widget_id:
+            raise ValueError(f"Category id '{widget_id}' contains slashes")
+        if ":" in widget_id:
+            raise ValueError(f"Category id '{widget_id}' contains colons")
 
         self.parent = None
         self.id = widget_id
 
         self.logger = Logger(self.id, 'DEBUG')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def sendMessage(self, data):
+        message = {
+            'type': 'widget_message',
+            'id': self.uid,
+            'data': data
+        }
+
+        gui = self.getGUI()
+        if gui is not None:
+            try:
+                gui.broadcast(message)
+            except Exception as e:
+                self.logger.error(f"Error sending message: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def function(self, function_name, args, spread_args = True):
+        message = {
+            'type': 'function',
+            'data': {
+                'function_name': function_name,
+                'args': args,
+                'spread_args': spread_args,
+            }
+        }
+        self.sendMessage(message)
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendUpdate(self, data):

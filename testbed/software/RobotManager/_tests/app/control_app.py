@@ -3068,7 +3068,6 @@ class ControlApp:
     # ------------------------------------------------------------------------------------------------------------------
     def init(self, root_group: RootGroup):
         self.root_group = root_group
-        # self.current_group = root_group
         self.assign_app_to_tree(root_group)
         self.setup_routes()
 

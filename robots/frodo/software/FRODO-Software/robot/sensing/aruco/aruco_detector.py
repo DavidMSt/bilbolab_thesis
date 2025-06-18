@@ -212,7 +212,8 @@ def print_measurements(measurements):
 
 # ======================================================================================================================
 if __name__ == '__main__':
-    arc_detector = ArucoDetector(camera_version=PyCameraType.V3, marker_size=0.08, image_resolution=(1280, 720), Ts=0.05)
+    arc_detector = ArucoDetector(camera_version=PyCameraType.V3, marker_size=0.08, image_resolution=(1280, 720),
+                                 Ts=0.05)
     arc_detector.callbacks.new_measurement.register(print_measurements)
     arc_detector.start()
 

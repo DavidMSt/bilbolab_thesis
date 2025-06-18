@@ -1,4 +1,4 @@
-import {getColor, shadeColor, splitPath} from "./helpers";
+import {getColor, shadeColor} from "./helpers";
 import {createGridMapContainer} from "./map/map.js";
 import {JSPlot} from "./plot/plot.js"
 
@@ -98,6 +98,41 @@ export class GUI_Object {
      */
     update(data) {
         throw new Error('update() must be implemented by subclass');
+    }
+
+
+    callFunction(function_name, args, spread_args = true) {
+        const fn = this[function_name];
+
+        if (typeof fn !== 'function') {
+            console.warn(`Function '${function_name}' not found or not callable.`);
+            return null;
+        }
+
+        // If args is an array and spreading is enabled
+        if (Array.isArray(args) && spread_args) {
+            return fn.apply(this, args);
+        }
+
+        // Otherwise, pass as a single argument (object, primitive, etc.)
+        return fn.call(this, args);
+    }
+
+    /**
+     *
+     */
+    onMessage(message) {
+        switch (message.type) {
+            case 'update': {
+                this.update(message.data);
+                break;
+            }
+            case 'function': {
+                this.callFunction(message.data.function_name, message.data.args, message.data.spread_args);
+                break;
+            }
+
+        }
     }
 
     /**
@@ -376,6 +411,7 @@ export class ObjectGroup extends GUI_Object {
 
     assignListeners(element) {
     }
+
 }
 
 // =====================================================================================================================
@@ -419,7 +455,6 @@ export class PlotWidget extends GUI_Object {
         this.plot_container = document.createElement('div');
         this.plot_container.id = 'plot_container';
         this.plot_container.className = 'plot-wrapper';
-
 
         this.plot = new JSPlot(this.plot_container, this.configuration.config, this.configuration.plot_config);
 
@@ -859,105 +894,113 @@ export class MultiStateButtonWidget extends GUI_Object {
     }
 }
 
-
-// =====================================================================================================================
-
-
 // === SLIDER WIDGET ===================================================================================================
-// =====================================================================================================================
 export class SliderWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'slider'});
-        const d = this.configuration;
-        const defaults = {
+    constructor(id, config = {}) {
+        super(id, config);
+
+        const default_configuration = {
             title: '',
             visible: true,
-            color: '#333',
-            textColor: '#fff',
-            min: 0,
-            max: 100,
+            color: [0.3, 0.3, 0.3],
+            textColor: [1, 1, 1],
+            min_value: 0,
+            max_value: 10,
             value: 0,
             increment: 1,
             direction: 'horizontal',
             continuousUpdates: false,
-            limitToTicks: false,
-            ticks: [],
+            ticks: null,
+            snapToTicks: false,
             automaticReset: null
-        };
-        this.configuration = {...defaults, ...d};
+        }
+
+        this.configuration = {...default_configuration, ...this.configuration};
+
+        this.element = this._initializeElement();
+
+        this.configureElement(this.configuration);
+
+        this.assignListeners(this.element);
+
     }
 
-    getElement() {
-        const c = this.configuration;
+    _initializeElement() {
         const el = document.createElement('div');
         el.id = this.id;
         el.classList.add('gridItem', 'sliderWidget');
-        if (!c.visible) el.style.display = 'none';
-        el.style.backgroundColor = c.color;
-        el.style.color = c.textColor;
+        return el;
+    }
 
-        const inc = parseFloat(c.increment);
+    configureElement(configuration) {
+        super.configureElement(configuration);
+
+        // ── Visibility ───────────────────────────────────────────────────────────────────────────────────────────────
+        if (!this.configuration.visible) {
+            this.element.style.display = 'none';
+        } else {
+            this.element.style.display = '';
+        }
+
+        // ── Colors ───────────────────────────────────────────────────────────────────────────────────────────────────
+        this.element.style.backgroundColor = getColor(this.configuration.color);
+        this.element.style.color = getColor(this.configuration.textColor);
+
+        // ── Compute increment/decimals/valueType ─────────────────────────────────────────────────────────────────────
+        const inc = parseFloat(this.configuration.increment);
         const decimals = Math.max(0, (inc.toString().split('.')[1] || '').length);
-
         const valueType = inc % 1 === 0 ? 'int' : 'float';
 
-        // dataset
-        el.dataset.min = c.min;
-        el.dataset.max = c.max;
-        el.dataset.increment = inc;
-        el.dataset.decimals = decimals;
-        el.dataset.valueType = valueType;
-        el.dataset.direction = c.direction;
-        el.dataset.continuousUpdates = c.continuousUpdates;
-        el.dataset.limitToTicks = c.limitToTicks;
-        el.dataset.ticks = JSON.stringify(c.ticks);
-        if (c.automaticReset != null) el.dataset.automaticReset = c.automaticReset;
-
-        // initial fill & value
-        const pct = ((c.value - c.min) / (c.max - c.min)) * 100;
-        el.dataset.currentValue = c.value;
-
-        el.innerHTML = `
-  <span class="sliderTitle">${c.title || ''}</span>
-  <div class="sliderFill" style="${c.direction === 'vertical' ? `height:${pct}%; width:100%; bottom:0; top:auto;` : `width:${pct}%; height:100%;`}"></div>
-      <span class="sliderValue">${Number(c.value).toFixed(decimals)}</span>
-      ${c.continuousUpdates ? '<div class="continuousIcon">🔄</div>' : ''}
-    `;
+        // ── Set data-* attributes for later use in event handlers ───────────────────────────────────────────────────
+        // We store min, max, increment, decimals, etc. in data-attributes, so the drag logic can read them.
+        this.element.dataset.min = this.configuration.min_value;
+        this.element.dataset.max = this.configuration.max_value;
+        this.element.dataset.increment = inc;
+        this.element.dataset.decimals = decimals;
+        this.element.dataset.valueType = valueType;
+        this.element.dataset.direction = this.configuration.direction;
+        this.element.dataset.continuousUpdates = String(this.configuration.continuousUpdates);
+        this.element.dataset.limitToTicks = String(this.configuration.snapToTicks);
+        this.element.dataset.ticks = JSON.stringify(this.configuration.ticks || []);
+        if (this.configuration.automaticReset != null) {
+            this.element.dataset.automaticReset = this.configuration.automaticReset;
+        }
+        // ── Compute fill percentage based on current value ───────────────────────────────────────────────────────────
+        const rawPct = ((this.configuration.value - this.configuration.min_value) / (this.configuration.max_value - this.configuration.min_value)) * 100;
+        const pct = Math.min(100, Math.max(0, rawPct));
+        // ── HTML ─────────────────────────────────────────────────────────────────────────────────────────────────────
+        this.element.innerHTML = `
+            <span class="sliderTitle">${this.configuration.title || ''}</span>
+            <div class="sliderFill" style="${this.configuration.direction === 'vertical' ? `height:${pct}%; width:100%; bottom:0; top:auto;` : `width:${pct}%; height:100%;`}"></div>
+            <span class="sliderValue">${Number(this.configuration.value).toFixed(decimals)}</span>
+              ${this.configuration.continuousUpdates ? '<div class="continuousIcon">🔄</div>' : ''}
+            `;
 
         // ticks
-        if (c.ticks.length) {
-            c.ticks.forEach(v => {
+        if (this.configuration.ticks && this.configuration.ticks.length) {
+            this.configuration.ticks.forEach(v => {
                 const tick = document.createElement('div');
                 tick.className = 'sliderTick';
-                const tPct = ((v - c.min) / (c.max - c.min)) * 100;
-                if (c.direction === 'vertical') {
+                const tPct = ((v - this.configuration.min_value) / (this.configuration.max_value - this.configuration.min_value)) * 100;
+                if (this.configuration.direction === 'vertical') {
                     tick.style.top = `${100 - tPct}%`;
                     tick.style.width = '100%';
                 } else {
                     tick.style.left = `${tPct}%`;
                     tick.style.height = '100%';
                 }
-                el.appendChild(tick);
+                this.element.appendChild(tick);
             });
         }
+    }
 
-        this.element = el;
-        return el;
+    getElement() {
+        return this.element;
     }
 
     update(data) {
-        if (data.value == null) return;
-        const el = this.element;
-        el.dataset.currentValue = data.value;
-        const decimals = parseInt(el.dataset.decimals, 10);
-        const vSpan = el.querySelector('.sliderValue');
-        vSpan.textContent = Number(data.value).toFixed(decimals);
-
-        const min = parseFloat(el.dataset.min);
-        const max = parseFloat(el.dataset.max);
-        const pct = ((data.value - min) / (max - min)) * 100;
-        const fill = el.querySelector('.sliderFill');
-        if (el.dataset.direction === 'vertical') fill.style.height = pct + '%'; else fill.style.width = pct + '%';
+        this.configuration = {...this.configuration, ...data};
+        this.configureElement(this.configuration);
     }
 
     assignListeners(el) {
@@ -1028,6 +1071,12 @@ export class SliderWidget extends GUI_Object {
 
             if (el.dataset.automaticReset != null) {
                 el.dataset.currentValue = el.dataset.automaticReset;
+                // b) Fire a second callback so backend sees the “reset to automaticReset” value:
+                this.callbacks.event({
+                    id: this.id,
+                    event: 'slider_change',
+                    data: {value: el.dataset.automaticReset},
+                });
                 this.update({value: parseFloat(el.dataset.automaticReset)});
             }
 
@@ -1040,240 +1089,371 @@ export class SliderWidget extends GUI_Object {
             el.classList.remove('dragging');
         });
     }
-}
 
+    setValue(value) {
+        const el = this.element;
 
-// =====================================================================================================================
-// MultiSelectWidget
-// =====================================================================================================================
-export class MultiSelectWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'multi_select'});
+        const min = parseFloat(el.dataset.min);
+        const max = parseFloat(el.dataset.max);
+        const inc = parseFloat(el.dataset.increment);
+        const decimals = parseInt(el.dataset.decimals, 10);
+        const valueType = el.dataset.valueType;
+        const direction = el.dataset.direction;
 
-        const defaults = {
-            visible: true, color: '#333',      // or an array of colors, matching options.length
-            textColor: '#fff', title: '', options: [],        // [{ value, label }, …]
-            value: null,        // the selected value
-            lockable: false, locked: false, titlePosition: 'top',  // 'top' or 'left'
-            titleStyle: 'bold'     // 'bold' or 'normal'
-        };
-        this.configuration = {...defaults, ...this.configuration};
-        if (!this.configuration.lockable) {
-            this.configuration.locked = false;
-        }
-    }
+        // Clamp value
+        let clamped = Math.max(min, Math.min(max, value));
 
-    /* ============================================================================================================== */
-    _getCurrentColor() {
-        const {color, options, value} = this.configuration;
-        if (Array.isArray(color) && color.length === options.length) {
-            const idx = options.findIndex(opt => opt.value === value);
-            if (idx >= 0) return color[idx];
-        }
-        return color;
-    }
+        // Snap to increment
+        clamped = Math.round(clamped / inc) * inc;
+        if (valueType === 'int') clamped = Math.round(clamped);
+        else clamped = parseFloat(clamped.toFixed(decimals));
 
-    /* ============================================================================================================== */
-    _getCurrentLabel() {
-        const {options, value} = this.configuration;
-        const found = options.find(opt => opt.value === value);
-        return found ? found.label : '';
-    }
+        // Update internal config and dataset
+        this.configuration.value = clamped;
+        el.dataset.currentValue = clamped;
 
-    /* ============================================================================================================== */
-    getElement() {
-        const c = this.configuration;
-        const container = document.createElement('div');
-        container.id = this.id;
-        container.classList.add('gridItem', 'multiSelectWidget');
-        // expose position so CSS can pick it up
-        container.dataset.titlePosition = c.titlePosition;
-
-        if (!c.visible) container.style.display = 'none';
-        container.style.backgroundColor = this._getCurrentColor();
-        container.style.color = c.textColor;
-        container.dataset.lockable = c.lockable;
-        container.dataset.locked = c.locked;
-
-        // build inner HTML
-        let html = '';
-        if (c.title) {
-            html += `<span class="msSelectTitle">${c.title}</span>`;
-        }
-        html += `
-          <span class="msSelectValue">${this._getCurrentLabel()}</span>
-          <select></select>
-          <span class="msSelectDropdown">&#x25BC;</span>
-        `;
-        container.innerHTML = html;
-
-        // populate <select>
-        const select = container.querySelector('select');
-        c.options.forEach(opt => {
-            const o = document.createElement('option');
-            o.value = opt.value;
-            o.textContent = opt.label;
-            if (opt.value === c.value) o.selected = true;
-            select.appendChild(o);
-        });
-        if (c.locked) select.disabled = true;
-
-        // stretch the select invisibly
-        Object.assign(select.style, {
-            position: 'absolute',
-            top: '0',
-            left: '0',
-            width: '100%',
-            height: '100%',
-            opacity: '0',
-            cursor: 'pointer',
-            zIndex: '1',
-        });
-
-        // arrow
-        const arrow = container.querySelector('.msSelectDropdown');
-        Object.assign(arrow.style, {
-            position: 'absolute', bottom: '1px', right: '1px', pointerEvents: 'none', zIndex: '2',
-        });
-
-        // apply titleStyle (font‐weight) – font‐size and layout handled by CSS
-        const titleEl = container.querySelector('.msSelectTitle');
-        if (titleEl) {
-            titleEl.style.fontWeight = (c.titleStyle === 'bold' ? 'bold' : 'normal');
-        }
-
-        this.element = container;
-        return container;
-    }
-
-    /* ============================================================================================================== */
-    update(data) {
-        const c = this.configuration;
-        const container = this.element;
-        const select = container.querySelector('select');
-        const valueEl = container.querySelector('.msSelectValue');
-
-        // options
-        if (data.options) {
-            c.options = data.options;
-            select.innerHTML = '';
-            c.options.forEach(opt => {
-                const o = document.createElement('option');
-                o.value = opt.value;
-                o.textContent = opt.label;
-                select.appendChild(o);
-            });
-        }
-
-        // value
-        if (data.value !== undefined) {
-            c.value = data.value;
-            select.value = data.value;
-            valueEl.textContent = this._getCurrentLabel();
-        }
-
-        // lock state
-        if (data.locked !== undefined && c.lockable) {
-            c.locked = data.locked;
-            select.disabled = c.locked;
-            container.dataset.locked = c.locked;
-        }
-
-        // colors
-        if (data.color) c.color = data.color;
-        if (data.textColor) c.textColor = data.textColor;
-        container.style.backgroundColor = this._getCurrentColor();
-        container.style.color = c.textColor;
-
-        // title text
-        let titleEl = container.querySelector('.msSelectTitle');
-        if (data.title !== undefined) {
-            c.title = data.title;
-            if (c.title) {
-                if (!titleEl) {
-                    titleEl = document.createElement('span');
-                    titleEl.classList.add('msSelectTitle');
-                    container.insertBefore(titleEl, container.firstChild);
-                }
-                titleEl.textContent = c.title;
-            } else if (titleEl) {
-                titleEl.remove();
-                titleEl = null;
+        // Update UI
+        const pct = ((clamped - min) / (max - min)) * 100;
+        const fill = el.querySelector('.sliderFill');
+        const valueLabel = el.querySelector('.sliderValue');
+        if (fill) {
+            if (direction === 'vertical') {
+                fill.style.height = `${pct}%`;
+            } else {
+                fill.style.width = `${pct}%`;
             }
         }
-
-        // titlePosition
-        if (data.titlePosition && data.titlePosition !== c.titlePosition) {
-            c.titlePosition = data.titlePosition;
-            container.dataset.titlePosition = c.titlePosition;
-        }
-
-        // titleStyle
-        if (data.titleStyle && data.titleStyle !== c.titleStyle) {
-            c.titleStyle = data.titleStyle;
-        }
-
-        // reapply titleStyle only (layout via CSS)
-        if (titleEl) {
-            titleEl.style.cssText = '';
-            titleEl.classList.add('msSelectTitle');
-            titleEl.style.fontWeight = (c.titleStyle === 'bold' ? 'bold' : 'normal');
+        if (valueLabel) {
+            valueLabel.textContent = valueType === 'int' ? clamped.toFixed(0) : clamped.toFixed(decimals);
         }
     }
 
-    /* ============================================================================================================== */
-    assignListeners(container) {
-        const select = container.querySelector('select');
-        const c = this.configuration;
-        const valueEl = container.querySelector('.msSelectValue');
-
-        select.addEventListener('change', () => {
-            c.value = select.value;
-            valueEl.textContent = this._getCurrentLabel();
-            this.callbacks.event({
-                id: this.id, event: 'multi_select_change', data: {value: c.value},
-            });
-            container.style.backgroundColor = this._getCurrentColor();
-            container.classList.add('accepted');
-            container.addEventListener('animationend', () => {
-                container.classList.remove('accepted');
-            }, {once: true});
-        });
-
-        select.addEventListener('contextmenu', e => {
-            if (c.lockable) e.preventDefault();
-        });
-
-        // long-press → long-click
-        let longPressTimer;
-        const LP = 500;
-        const startPress = () => {
-            longPressTimer = setTimeout(() => {
-                this.callbacks.event({
-                    id: this.id, event: 'multi_select_long_click', data: {},
-                });
-            }, LP);
-        };
-        const clearPress = () => clearTimeout(longPressTimer);
-
-        container.addEventListener('mousedown', startPress);
-        container.addEventListener('mouseup', clearPress);
-        container.addEventListener('mouseleave', clearPress);
-        container.addEventListener('touchstart', startPress, {passive: true});
-        container.addEventListener('touchend', clearPress);
-        container.addEventListener('touchcancel', clearPress);
-    }
 }
 
-/* ============================================================================================================== */
-/* ============================================================================================================== */
+// === CLASSIC SLIDER WIDGET ===========================================================================================
+export class ClassicSliderWidget extends GUI_Object {
+    constructor(id, config = {}) {
+        super(id, config);
+
+        // Default configuration for the classic slider
+        const default_configuration = {
+            title: '',
+            titlePosition: 'top',       // 'top' | 'bottom' | 'left' | 'right'
+            valuePosition: 'center',    // 'top' | 'bottom' | 'left' | 'right' | 'center'
+            visible: true,
+            backgroundColor: '#333',
+            stemColor: '#888',
+            handleColor: '#ccc',
+            textColor: '#fff',
+            valueFontSize: 12,
+            titleFontSize: 10,
+            min_value: 0,
+            max_value: 100,
+            value: 0,
+            increment: 1,
+            direction: 'horizontal',    // 'horizontal' | 'vertical'
+            continuousUpdates: false,
+            snapToTicks: false,
+            ticks: [],                  // array of numeric tick positions
+            automaticReset: null        // numeric value to reset to after release, or null
+        };
+
+        // Merge defaults with any user-provided configuration
+        this.configuration = {...default_configuration, ...this.configuration};
+
+        // Create the root element, configure it, and wire up listeners
+        this.element = this._initializeElement();
+        this.configureElement(this.configuration);
+        this.assignListeners(this.element);
+    }
+
+    // Create the root <div> for the widget
+    _initializeElement() {
+        const el = document.createElement('div');
+        el.id = this.id;
+        el.classList.add('gridItem', 'classicSliderWidget');
+        return el;
+    }
+
+    // Apply configuration to the element (build innerHTML, set styles & data-attributes)
+    configureElement(configuration) {
+        super.configureElement(configuration);
+        const c = this.configuration;
+        const el = this.element;
+
+        // ── Visibility ─────────────────────────────────────────────────────────────────
+        if (!c.visible) {
+            el.style.display = 'none';
+        } else {
+            el.style.display = '';
+        }
+
+        // ── Colors & CSS variables ─────────────────────────────────────────────────────
+        el.style.backgroundColor = getColor(c.backgroundColor);
+        el.style.color = getColor(c.textColor);
+        el.style.setProperty('--stem-color', getColor(c.stemColor));
+        el.style.setProperty('--handle-color', getColor(c.handleColor));
+
+        // ── Layout flags as data-attributes ─────────────────────────────────────────────
+        el.dataset.titlePosition = c.titlePosition;
+        el.dataset.valuePosition = c.valuePosition;
+        el.dataset.direction = c.direction;
+        el.dataset.continuousUpdates = String(c.continuousUpdates);
+        el.dataset.snapToTicks = String(c.snapToTicks);
+
+        // ── Numeric metadata ────────────────────────────────────────────────────────────
+        const inc = parseFloat(c.increment);
+        const decimals = Math.max(0, (inc.toString().split('.')[1] || '').length);
+
+        el.dataset.min = c.min_value;
+        el.dataset.max = c.max_value;
+        el.dataset.increment = inc;
+        el.dataset.decimals = decimals;
+        el.dataset.ticks = JSON.stringify(c.ticks || []);
+        if (c.automaticReset != null) {
+            el.dataset.automaticReset = c.automaticReset;
+        }
+
+        // Compute max label width (for monospace alignment)
+        const minStr = Number(c.min_value).toFixed(decimals);
+        const maxStr = Number(c.max_value).toFixed(decimals);
+        const maxLen = Math.max(minStr.length, maxStr.length);
+        el.style.setProperty('--value-width', `${maxLen}ch`);
+
+        // ── Compute current fill/handle percentage ───────────────────────────────────────
+        const pctRaw = ((c.value - c.min_value) / (c.max_value - c.min_value)) * 100;
+        const pct = Math.min(100, Math.max(0, pctRaw));
+
+        // ── Build inner HTML ────────────────────────────────────────────────────────────
+        // Note: CSS should use data-title-position and data-value-position to place .csTitle/.csValue appropriately.
+        el.innerHTML = `
+            <span class="csTitle">${c.title}</span>
+            <div class="csMain">
+                <div class="csSliderContainer">
+                    <div class="csStem"></div>
+                    <div class="csFill" style="${
+            c.direction === 'vertical'
+                ? `height: ${pct}%;`
+                : `width: ${pct}%;`
+        }"></div>
+                    <div class="csHandle" style="${
+            c.direction === 'vertical'
+                ? `bottom: ${pct}%;`
+                : `left: ${pct}%;`
+        }"></div>
+                </div>
+                <span class="csValue">${Number(c.value).toFixed(decimals)}</span>
+                ${c.continuousUpdates ? '<div class="continuousIcon">🔄</div>' : ''}
+            </div>
+        `;
+
+        // ── Render tick marks if provided ────────────────────────────────────────────────
+        if (Array.isArray(c.ticks) && c.ticks.length) {
+            const track = el.querySelector('.csSliderContainer');
+            c.ticks.forEach(v => {
+                const t = document.createElement('div');
+                t.className = 'csTick';
+                const tPct = ((v - c.min_value) / (c.max_value - c.min_value)) * 100;
+                if (c.direction === 'vertical') {
+                    t.style.bottom = `${tPct}%`;
+                } else {
+                    t.style.left = `${tPct}%`;
+                }
+                track.appendChild(t);
+            });
+        }
+    }
+
+    // Return the root element so it can be inserted into the DOM
+    getElement() {
+        return this.element;
+    }
+
+    // Update the widget’s configuration and re-render
+    update(data) {
+        // Merge any provided data (e.g., { value: 42 }) into configuration
+        this.configuration = {...this.configuration, ...data};
+        this.configureElement(this.configuration);
+    }
+
+    setValue(value) {
+        const el = this.element;
+
+        const min = parseFloat(el.dataset.min);
+        const max = parseFloat(el.dataset.max);
+        const inc = parseFloat(el.dataset.increment);
+        const decimals = parseInt(el.dataset.decimals, 10);
+        const direction = el.dataset.direction;
+        const valueType = inc % 1 === 0 ? 'int' : 'float';
+
+        // Clamp and round the value
+        let clamped = Math.max(min, Math.min(max, value));
+        clamped = Math.round(clamped / inc) * inc;
+        if (valueType === 'int') clamped = Math.round(clamped);
+        else clamped = parseFloat(clamped.toFixed(decimals));
+
+        // Update internal config
+        this.configuration.value = clamped;
+
+        // Update fill, handle, and display
+        const pct = ((clamped - min) / (max - min)) * 100;
+        const fill = el.querySelector('.csFill');
+        const handle = el.querySelector('.csHandle');
+        const valueLabel = el.querySelector('.csValue');
+
+        if (direction === 'vertical') {
+            if (fill) fill.style.height = `${pct}%`;
+            if (handle) handle.style.bottom = `${pct}%`;
+        } else {
+            if (fill) fill.style.width = `${pct}%`;
+            if (handle) handle.style.left = `${pct}%`;
+        }
+
+        if (valueLabel) {
+            valueLabel.textContent = valueType === 'int'
+                ? clamped.toFixed(0)
+                : clamped.toFixed(decimals);
+        }
+    }
+
+
+    // Attach pointer listeners to handle dragging, snapping, and events
+    assignListeners(el) {
+        let dragging = false;
+        let trackLength;
+        let rect;
+        const dir = el.dataset.direction;
+
+        // The “track” region where pointerdown should start dragging
+        const trackEl = el.querySelector('.csSliderContainer');
+
+        // Compute a new raw value based on a pointer event
+        const updateFromPointer = (e) => {
+            const min = parseFloat(el.dataset.min);
+            const max = parseFloat(el.dataset.max);
+            const inc = parseFloat(el.dataset.increment);
+            const decimals = parseInt(el.dataset.decimals, 10);
+            let raw;
+
+            if (dir === 'vertical') {
+                const pos = Math.max(0, Math.min(rect.height, rect.bottom - e.clientY));
+                raw = min + (pos / trackLength) * (max - min);
+            } else {
+                const pos = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+                raw = min + (pos / trackLength) * (max - min);
+            }
+
+            if (el.dataset.snapToTicks === 'true') {
+                const ticks = JSON.parse(el.dataset.ticks);
+                if (Array.isArray(ticks) && ticks.length) {
+                    raw = ticks.reduce((prev, curr) =>
+                            Math.abs(curr - raw) < Math.abs(prev - raw) ? curr : prev,
+                        ticks[0]
+                    );
+                }
+            } else {
+                raw = Math.round(raw / inc) * inc;
+                raw = parseFloat(raw.toFixed(decimals));
+            }
+
+            // Clamp to [min, max]
+            raw = Math.max(min, Math.min(max, raw));
+
+            // Update configuration.value so .configureElement will reflect it if called
+            this.configuration.value = raw;
+
+            // Update the fill, handle, and numeric display immediately
+            const fill = el.querySelector('.csFill');
+            const handle = el.querySelector('.csHandle');
+            const vSpan = el.querySelector('.csValue');
+            vSpan.textContent = Number(raw).toFixed(decimals);
+
+            const snappedPct = ((raw - min) / (max - min)) * 100;
+            if (dir === 'vertical') {
+                fill.style.height = `${snappedPct}%`;
+                handle.style.bottom = `${snappedPct}%`;
+            } else {
+                fill.style.width = `${snappedPct}%`;
+                handle.style.left = `${snappedPct}%`;
+            }
+
+            // Fire continuous update event if requested
+            if (el.dataset.continuousUpdates === 'true') {
+                this.callbacks.event({
+                    id: this.id,
+                    event: 'slider_change',
+                    data: {value: raw}
+                });
+            }
+
+            return raw;
+        };
+
+        // Start dragging when pointerdown occurs on the track
+        trackEl.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            rect = trackEl.getBoundingClientRect();
+            trackLength = dir === 'vertical' ? rect.height : rect.width;
+            dragging = true;
+            el.setPointerCapture?.(e.pointerId);
+            el.classList.add('dragging');
+
+            const newValue = updateFromPointer(e);
+            // If continuousUpdates is true, we've already fired event inside updateFromPointer
+        });
+
+        // Continue updating as the pointer moves (anywhere over the widget)
+        el.addEventListener('pointermove', (e) => {
+            if (!dragging) return;
+            updateFromPointer(e);
+        });
+
+        // End dragging on pointerup
+        el.addEventListener('pointerup', (e) => {
+            if (!dragging) return;
+            dragging = false;
+            el.releasePointerCapture?.(e.pointerId);
+
+            // Final value after dragging
+            const finalValue = this.configuration.value;
+            this.callbacks.event({
+                id: this.id,
+                event: 'slider_change',
+                data: {value: finalValue}
+            });
+
+            // If automaticReset is set, reset to that value and fire a second callback
+            if (el.dataset.automaticReset != null) {
+                const resetValue = parseFloat(el.dataset.automaticReset);
+                this.configuration.value = resetValue;
+                this.configureElement(this.configuration);
+                this.callbacks.event({
+                    id: this.id,
+                    event: 'slider_change',
+                    data: {value: resetValue}
+                });
+            }
+
+            el.classList.remove('dragging');
+            if (el.dataset.continuousUpdates !== 'true') {
+                el.classList.add('accepted');
+                el.addEventListener(
+                    'animationend',
+                    () => el.classList.remove('accepted'),
+                    {once: true}
+                );
+            }
+        });
+    }
+
+}
 
 /* ============================================================================================================== */
 export class RotaryDialWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'rotary_dial'});
+    constructor(id, config = {}) {
+        super(id, config);
 
-        const d = this.configuration;
+        // Default configuration
         const defaults = {
             visible: true,
             color: '#333',
@@ -1288,12 +1468,17 @@ export class RotaryDialWidget extends GUI_Object {
             increment: 1,
             continuousUpdates: false,
             limitToTicks: false,
-            dialWidth: 5           // <— new: thickness of the dial arc
+            dialWidth: 5           // thickness of the dial arc
         };
 
-        // enforce only 'top' or 'left'
-        const pos = d.titlePosition === 'left' ? 'left' : 'top';
-        this.configuration = {...defaults, ...d, titlePosition: pos};
+        // Enforce only 'top' or 'left' for titlePosition
+        const pos = this.configuration.titlePosition === 'left' ? 'left' : 'top';
+        this.configuration = {...defaults, ...this.configuration, titlePosition: pos};
+
+        // Create and configure the root element
+        this.element = this._initializeElement();
+        this.configureElement(this.configuration);
+        this.assignListeners(this.element);
     }
 
     /* ============================================================================================================== */
@@ -1307,19 +1492,22 @@ export class RotaryDialWidget extends GUI_Object {
         const ctx = canvas.getContext('2d');
         const w = canvas.clientWidth, h = canvas.clientHeight;
         const cx = w / 2, cy = h / 2;
-        const radius = Math.min(w, h) / 2 * 0.8;
+        const radius = (Math.min(w, h) / 2) * 0.8;
 
         const minVal = +el.dataset.min;
         const maxVal = +el.dataset.max;
         const curVal = +el.dataset.value;
         const ticks = JSON.parse(el.dataset.ticks);
-        const clr = el.dataset.dialColor;
+        const clr = getColor(el.dataset.dialColor);
         const dialWidth = +el.dataset.dialWidth;
 
+        // Define the angular span (gap of 20° centered at top)
         const gapDeg = 20;
         const startAngle = this._deg2rad(90 + gapDeg / 2);
         const endAngle = this._deg2rad(450 - gapDeg / 2);
-        const totalAngle = endAngle <= startAngle ? endAngle + 2 * Math.PI - startAngle : endAngle - startAngle;
+        const totalAngle = endAngle <= startAngle
+            ? endAngle + 2 * Math.PI - startAngle
+            : endAngle - startAngle;
 
         ctx.clearRect(0, 0, w, h);
 
@@ -1373,7 +1561,9 @@ export class RotaryDialWidget extends GUI_Object {
         const gapDeg = 20;
         const startAngle = this._deg2rad(90 + gapDeg / 2);
         const endAngle = this._deg2rad(450 - gapDeg / 2);
-        const totalAngle = endAngle <= startAngle ? endAngle + 2 * Math.PI - startAngle : endAngle - startAngle;
+        const totalAngle = endAngle <= startAngle
+            ? endAngle + 2 * Math.PI - startAngle
+            : endAngle - startAngle;
 
         let delta = ang - startAngle;
         if (delta < 0) delta += 2 * Math.PI;
@@ -1398,27 +1588,39 @@ export class RotaryDialWidget extends GUI_Object {
     }
 
     /* ============================================================================================================== */
-    getElement() {
-
-        const c = this.configuration;
-        // if left‐title but not wide enough, bail out with an empty container
-
+    _initializeElement() {
         const el = document.createElement('div');
         el.id = this.id;
         el.classList.add('gridItem', 'rotaryDialWidget');
-        if (!c.visible) el.style.display = 'none';
-        el.style.backgroundColor = c.color;
-        el.style.color = c.textColor;
+        return el;
+    }
 
+    /* ============================================================================================================== */
+    configureElement(config = {}) {
+        super.configureElement(config);
+        const c = this.configuration;
+        const el = this.element;
+
+        // Visibility
+        if (!c.visible) {
+            el.style.display = 'none';
+        } else {
+            el.style.display = '';
+        }
+
+        // Base colors
+        el.style.backgroundColor = getColor(c.color);
+        el.style.color = getColor(c.textColor);
+
+        // Numeric metadata
         const inc = +c.increment;
         const dec = Math.max(0, (inc.toString().split('.')[1] || '').length);
-
 
         el.dataset.min = c.min;
         el.dataset.max = c.max;
         el.dataset.value = c.value;
         el.dataset.ticks = JSON.stringify(c.ticks);
-        el.dataset.dialColor = c.dialColor;
+        el.dataset.dialColor = getColor(c.dialColor);
         el.dataset.increment = inc;
         el.dataset.decimals = dec;
         el.dataset.continuousUpdates = c.continuousUpdates;
@@ -1426,37 +1628,79 @@ export class RotaryDialWidget extends GUI_Object {
         el.dataset.titlePosition = c.titlePosition;
         el.dataset.dialWidth = c.dialWidth;
 
+        // Displayed value (integer if increment is integer, else fixed decimals)
         const disp = (inc % 1 === 0) ? c.value : Number(c.value).toFixed(dec);
 
+        // Build innerHTML
         el.innerHTML = `
-      <span class="rotaryTitle">${c.title}</span>
-      <div class="dialWrapper">
-        <canvas></canvas>
-        <div class="value">${disp}</div>
-      </div>
-      ${c.continuousUpdates ? '<div class="continuousIcon">🔄</div>' : ''}
-    `;
+            <span class="rotaryTitle">${c.title}</span>
+            <div class="dialWrapper">
+                <canvas></canvas>
+                <div class="value">${disp}</div>
+            </div>
+            ${c.continuousUpdates ? '<div class="continuousIcon">🔄</div>' : ''}
+        `;
+    }
 
-        this.element = el;
-        return el;
+    /* ============================================================================================================== */
+    getElement() {
+        return this.element;
     }
 
     /* ============================================================================================================== */
     update(data) {
         if (data.value == null) return;
+        // Merge into configuration
+        this.configuration.value = data.value;
+
         const el = this.element;
         el.dataset.value = data.value;
-        const dec = +el.dataset.decimals;
-        const inc = +el.dataset.increment;
 
-        el.querySelector('.value').textContent = (inc % 1 === 0) ? parseInt(data.value, 10) : Number(data.value).toFixed(dec);
+        const inc = +el.dataset.increment;
+        const dec = +el.dataset.decimals;
+        const disp = (inc % 1 === 0) ? parseInt(data.value, 10) : Number(data.value).toFixed(dec);
+        el.querySelector('.value').textContent = disp;
 
         this._drawDial(el);
     }
 
+    setValue(value) {
+        const el = this.element;
+
+        const min = +el.dataset.min;
+        const max = +el.dataset.max;
+        const inc = +el.dataset.increment;
+        const dec = +el.dataset.decimals;
+        const limit = el.dataset.limitToTicks === 'true';
+        const ticks = JSON.parse(el.dataset.ticks);
+        const isInt = inc % 1 === 0;
+
+        // Clamp and optionally snap
+        let clamped = Math.max(min, Math.min(max, value));
+        if (limit && ticks.length) {
+            clamped = ticks.reduce((p, c) => Math.abs(c - clamped) < Math.abs(p - clamped) ? c : p, ticks[0]);
+        } else {
+            clamped = Math.round(clamped / inc) * inc;
+            clamped = parseFloat(clamped.toFixed(dec));
+        }
+
+        // Update internal config and DOM
+        this.configuration.value = clamped;
+        el.dataset.value = clamped;
+
+        const disp = isInt ? clamped.toFixed(0) : clamped.toFixed(dec);
+        const valueLabel = el.querySelector('.value');
+        if (valueLabel) {
+            valueLabel.textContent = disp;
+        }
+
+        this._drawDial(el);
+    }
+
+
     /* ============================================================================================================== */
     assignListeners(el) {
-        // initial draw
+        // Initial draw once the element is in the DOM and has its size
         requestAnimationFrame(() => {
             const canvas = el.querySelector('canvas');
             const r = canvas.getBoundingClientRect();
@@ -1477,9 +1721,9 @@ export class RotaryDialWidget extends GUI_Object {
             startX = e.clientX;
             startVal = +el.dataset.value;
             el.classList.add('dragging');
-            // if (cont) el.classList.add('dragging');
             canvas.setPointerCapture(e.pointerId);
         };
+
         const onMove = e => {
             if (startX == null) return;
             moved = true;
@@ -1498,7 +1742,8 @@ export class RotaryDialWidget extends GUI_Object {
             raw = Math.max(minVal, Math.min(maxVal, raw));
 
             el.dataset.value = raw;
-            el.querySelector('.value').textContent = (inc % 1 === 0) ? raw : raw.toFixed(+el.dataset.decimals);
+            const disp = (inc % 1 === 0) ? raw : raw.toFixed(+el.dataset.decimals);
+            el.querySelector('.value').textContent = disp;
             this._drawDial(el);
 
             if (cont && raw !== el._last) {
@@ -1506,11 +1751,13 @@ export class RotaryDialWidget extends GUI_Object {
                 el._last = raw;
             }
         };
+
         const onUp = e => {
             canvas.releasePointerCapture(e.pointerId);
             startX = null;
             const final = +el.dataset.value;
             this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: final}});
+
             if (!cont) {
                 el.classList.add('accepted');
                 el.addEventListener('animationend', () => el.classList.remove('accepted'), {once: true});
@@ -1523,210 +1770,575 @@ export class RotaryDialWidget extends GUI_Object {
         canvas.addEventListener('pointerup', onUp);
         canvas.addEventListener('pointercancel', onUp);
 
-        // click‐to‐set
+        // Click-to-set: only if no drag movement
         canvas.addEventListener('click', e => {
             if (moved) return;
             const v = this._valueFromAngle(el, e);
             el.dataset.value = v;
-            el.querySelector('.value').textContent = (inc % 1 === 0) ? v : v.toFixed(+el.dataset.decimals);
+            const dec = +el.dataset.decimals;
+            const disp = (inc % 1 === 0) ? v : v.toFixed(dec);
+            el.querySelector('.value').textContent = disp;
             this._drawDial(el);
             this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: v}});
         });
     }
+
 }
 
 /* ============================================================================================================== */
-/* ============================================================================================================== */
+export class MultiSelectWidget extends GUI_Object {
+    constructor(id, config = {}) {
+        super(id, config);
 
-/* ============================================================================================================== */
-export class ClassicSliderWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'classic_slider'});
-        const d = this.configuration;
         const defaults = {
-            title: '',
-            titlePosition: 'top',
-            valuePosition: 'center',
             visible: true,
-            backgroundColor: '#444',
-            stemColor: '#888',
-            handleColor: '#ccc',
-            textColor: '#fff',
-            min: 0,
-            max: 100,
-            value: 0,
-            increment: 1,
-            direction: 'horizontal',
-            continuousUpdates: false,
-            limitToTicks: false,
-            ticks: [],
-            automaticReset: null
+            color: "#333",        // or a single color; per-option colors can be specified in options[color]
+            textColor: "#fff",
+            title: "",
+            options: {},          // { valueKey: { label, color? }, … }
+            value: null,          // the selected valueKey
+            lockable: false,
+            locked: false,
+            titlePosition: "top",  // 'top' or 'left'
+            // titleStyle: "bold"     // 'bold' or 'normal'
         };
-        this.configuration = {...defaults, ...d};
-    }
 
-    getElement() {
-        const c = this.configuration;
-        const el = document.createElement('div');
-        el.id = this.id;
-        el.classList.add('gridItem', 'classicSliderWidget');
-        if (!c.visible) el.style.display = 'none';
-        el.style.backgroundColor = c.backgroundColor;
-        el.style.color = c.textColor;
-        el.style.setProperty('--stem-color', c.stemColor);
-        el.style.setProperty('--handle-color', c.handleColor);
-
-        // layout flags
-        el.dataset.titlePosition = c.titlePosition;
-        el.dataset.valuePosition = c.valuePosition;
-        el.dataset.direction = c.direction;
-        el.dataset.continuousUpdates = c.continuousUpdates;
-        el.dataset.limitToTicks = c.limitToTicks;
-
-        // numeric metadata
-        const inc = parseFloat(c.increment);
-        const decimals = Math.max(0, (inc.toString().split('.')[1] || '').length);
-        el.dataset.min = c.min;
-        el.dataset.max = c.max;
-        el.dataset.increment = inc;
-        el.dataset.decimals = decimals;
-        el.dataset.ticks = JSON.stringify(c.ticks);
-        if (c.automaticReset != null) el.dataset.automaticReset = c.automaticReset;
-
-        // compute max label width
-        const minStr = Number(c.min).toFixed(decimals);
-        const maxStr = Number(c.max).toFixed(decimals);
-        const maxLen = Math.max(minStr.length, maxStr.length);
-        el.style.setProperty('--value-width', `${maxLen}ch`);
-
-        // initial fill/handle pos
-        const pct = ((c.value - c.min) / (c.max - c.min)) * 100;
-
-        el.innerHTML = `
-    <span class="csTitle">${c.title}</span>
-    <div class="csMain">
-      <div class="csSliderContainer">
-        <div class="csStem"></div>
-        <div class="csFill" style="${c.direction === 'vertical' ? `height:${pct}%;` : `width:${pct}%;`}"></div>
-        <div class="csHandle" style="${c.direction === 'vertical' ? `bottom:${pct}%;` : `left:${pct}%;`}"></div>
-      </div>
-      <span class="csValue">${Number(c.value).toFixed(decimals)}</span>
-      ${c.continuousUpdates ? '<div class="continuousIcon">🔄</div>' : ''}
-    </div>
-  `;
-
-        // ticks
-        if (c.ticks.length) {
-            const track = el.querySelector('.csSliderContainer');
-            c.ticks.forEach(v => {
-                const t = document.createElement('div');
-                t.className = 'csTick';
-                const tPct = ((v - c.min) / (c.max - c.min)) * 100;
-                if (c.direction === 'vertical') {
-                    t.style.bottom = `${tPct}%`;
-                } else {
-                    t.style.left = `${tPct}%`;
-                }
-                track.appendChild(t);
-            });
+        this.configuration = {...defaults, ...this.configuration};
+        if (!this.configuration.lockable) {
+            this.configuration.locked = false;
         }
 
-        this.element = el;
+        this.element = this._initializeElement();
+        this.configureElement(this.configuration);
+        this.assignListeners(this.element);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Determine the current background‐color. If the currently selected option
+     * has its own .color property, use that; otherwise fall back to config.color.
+     */
+    _getCurrentColor() {
+        const {color, options, value} = this.configuration;
+        const optObj = options[value];
+        if (optObj && optObj.color) {
+            return optObj.color;
+        }
+        return color;
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Find the label corresponding to the current `value`.
+     */
+    _getCurrentLabel() {
+        const {options, value} = this.configuration;
+        const found = options[value];
+        return found ? found.label : "";
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Create the root container. Inner content is built in `configureElement()`.
+     */
+    _initializeElement() {
+        const container = document.createElement("div");
+        container.id = this.id;
+        container.classList.add("gridItem", "multiSelectWidget");
+        return container;
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Apply `this.configuration` to the DOM: set styles, rebuild innerHTML, repopulate <select>.
+     */
+    configureElement(config = {}) {
+        super.configureElement(config);
+        const c = this.configuration;
+        const container = this.element;
+
+        // ── Visibility ───────────────────────────────────────────────────────────────────────────────────────────────
+        if (!c.visible) {
+            container.style.display = "none";
+        } else {
+            container.style.display = "";
+        }
+
+        // ── Dataset flags for CSS layout or external styling ─────────────────────────────────────────────────────────
+        container.dataset.titlePosition = c.titlePosition;
+        container.dataset.lockable = c.lockable;
+        container.dataset.locked = c.locked;
+
+        // ── Colors ───────────────────────────────────────────────────────────────────────────────────────────────────
+        container.style.backgroundColor = getColor(this._getCurrentColor());
+        container.style.color = getColor(c.textColor);
+
+        // ── Build inner HTML ─────────────────────────────────────────────────────────────────────────────────────────
+        let html = "";
+        if (c.title) {
+            html += `<span class="msSelectTitle">${c.title}</span>`;
+        }
+        html += `
+            <span class="msSelectValue">${this._getCurrentLabel()}</span>
+            <select></select>
+            <span class="msSelectDropdown">&#x25BC;</span>
+        `;
+        container.innerHTML = html;
+
+        // ── Populate <select> with options (now `options` is an object) ───────────────────────────────────────────────
+        const select = container.querySelector("select");
+        // Clear any existing children (in case configureElement is called again)
+        select.innerHTML = "";
+
+        Object.entries(c.options).forEach(([optValue, optDef]) => {
+            const o = document.createElement("option");
+            o.value = optValue;
+            o.textContent = optDef.label;
+            if (optValue === c.value) {
+                o.selected = true;
+            }
+            select.appendChild(o);
+        });
+
+        if (c.locked) {
+            select.disabled = true;
+        } else {
+            select.disabled = false;
+        }
+
+        // ── Stretch the <select> invisibly to capture clicks ──────────────────────────────────────────────────────────
+        Object.assign(select.style, {
+            position: "absolute",
+            top: "0",
+            left: "0",
+            width: "100%",
+            height: "100%",
+            opacity: "0",
+            cursor: "pointer",
+            zIndex: "1",
+        });
+
+        // ── Style the dropdown arrow ─────────────────────────────────────────────────────────────────────────────────
+        const arrow = container.querySelector(".msSelectDropdown");
+        Object.assign(arrow.style, {
+            position: "absolute",
+            bottom: "1px",
+            right: "1px",
+            pointerEvents: "none",
+            zIndex: "2",
+        });
+
+        // ── Apply titleStyle (font‐weight) ───────────────────────────────────────────────────────────────────────────
+        // const titleEl = container.querySelector(".msSelectTitle");
+        // if (titleEl) {
+        //     titleEl.style.fontWeight = (c.titleStyle === "bold" ? "bold" : "normal");
+        // }
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    setValue(value) {
+        const c = this.configuration;
+        const el = this.element;
+        const select = el.querySelector("select");
+        const valueEl = el.querySelector(".msSelectValue");
+
+        if (!(value in c.options)) return; // ignore unknown values
+
+        // Update internal state
+        c.value = value;
+
+        // Update <select>
+        if (select) {
+            select.value = value;
+        }
+
+        // Update visible label
+        if (valueEl) {
+            valueEl.textContent = this._getCurrentLabel();
+        }
+
+        // Update background color if per-option color exists
+        el.style.backgroundColor = getColor(this._getCurrentColor());
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Expose the root element for insertion into the DOM.
+     */
+    getElement() {
+        return this.element;
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Merge `data` into configuration, then re-render.
+     * Reassign listeners because the inner <select> may be rebuilt.
+     */
+    update(data) {
+        this.configuration = {...this.configuration, ...data};
+        this.configureElement(this.configuration);
+        this.assignListeners(this.element);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Wire up event listeners on the <select> and the container for change, right-click (lock prevention),
+     * and long-press → long-click detection.
+     */
+    assignListeners(container) {
+        // Clear any previously attached listeners by cloning the node
+        // (Prevents duplicate handlers if `update()` is called repeatedly.)
+        const fresh = container.cloneNode(false);
+        container.parentNode?.replaceChild(fresh, container);
+        this.element = fresh;
+
+        // Re-apply the contents (they were lost by cloneNode). Then proceed to attach listeners.
+        this.configureElement(this.configuration);
+
+        const select = this.element.querySelector("select");
+        const c = this.configuration;
+        const valueEl = this.element.querySelector(".msSelectValue");
+
+        // ── On selection change ───────────────────────────────────────────────────────────────────────────────────────
+        select.addEventListener("change", () => {
+            c.value = select.value;
+            valueEl.textContent = this._getCurrentLabel();
+
+            this.callbacks.event({
+                id: this.id,
+                event: "multi_select_change",
+                data: {value: c.value},
+            });
+
+            this.element.style.backgroundColor = getColor(this._getCurrentColor());
+            this.element.classList.add("accepted");
+            this.element.addEventListener(
+                "animationend",
+                () => {
+                    this.element.classList.remove("accepted");
+                },
+                {once: true}
+            );
+        });
+
+        // ── Prevent default context menu if lockable ─────────────────────────────────────────────────────────────────
+        select.addEventListener("contextmenu", (e) => {
+            if (c.lockable) {
+                e.preventDefault();
+            }
+        });
+
+        // ── Long-press detection for long-click event ──────────────────────────────────────────────────────────────
+        let longPressTimer;
+        const LP_THRESHOLD = 500;
+        const startPress = () => {
+            longPressTimer = setTimeout(() => {
+                this.callbacks.event({
+                    id: this.id,
+                    event: "multi_select_long_click",
+                    data: {},
+                });
+            }, LP_THRESHOLD);
+        };
+        const clearPress = () => {
+            clearTimeout(longPressTimer);
+        };
+
+        this.element.addEventListener("mousedown", startPress);
+        this.element.addEventListener("mouseup", clearPress);
+        this.element.addEventListener("mouseleave", clearPress);
+        this.element.addEventListener("touchstart", startPress, {passive: true});
+        this.element.addEventListener("touchend", clearPress);
+        this.element.addEventListener("touchcancel", clearPress);
+    }
+
+}
+
+// =====================================================================================================================
+
+
+/**
+ * InputWidget (refactored):
+ *  - Reads `datatype` and `tooltip` from the configuration sent by Python
+ *  - Renders a custom tooltip on hover with minimal delay
+ *  - Sends raw string to Python, then updates/normalizes based on Python's response
+ */
+export class InputWidget extends GUI_Object {
+    constructor(id, config = {}) {
+        super(id, config);
+
+        const defaults = {
+            visible: true,
+            color: 'transparent',
+            textColor: '#000',
+            inputFieldColor: '#fff',
+            inputFieldTextColor: '#000',
+            inputFieldFontSize: 11,
+            inputFieldAlign: 'center',
+            title: '',
+            titlePosition: 'top',
+            value: '',
+            tooltip: null,
+            inputFieldWidth: '100%',
+            inputFieldPosition: 'center',
+        };
+
+        this.configuration = {...defaults, ...this.configuration};
+        this._prevValue = this.configuration.value;
+        this._tooltipEl = null;
+        this._tooltipTimeout = null; // ⬅️ For auto-hiding temporary tooltip
+
+        this.element = this._initializeElement();
+        this.configureElement(this.configuration);
+    }
+
+    _initializeElement() {
+        const el = document.createElement('div');
+        el.id = this.id;
+        el.classList.add('gridItem', 'textInputWidget');
         return el;
     }
 
-
-    /* ============================================================================================================== */
-    update(data) {
-        if (data.value == null) return;
+    configureElement(config = {}) {
+        super.configureElement(config);
+        const c = this.configuration;
         const el = this.element;
-        const raw = parseFloat(data.value);
-        el.dataset.value = raw;
 
-        const min = +el.dataset.min, max = +el.dataset.max, decimals = +el.dataset.decimals,
-            pct = ((raw - min) / (max - min)) * 100;
+        el.dataset.titlePosition = c.titlePosition;
+        el.style.display = c.visible ? '' : 'none';
 
-        const fill = el.querySelector('.csFill'), handle = el.querySelector('.csHandle'),
-            vSpan = el.querySelector('.csValue');
+        el.style.backgroundColor = getColor(c.color);
+        el.style.color = getColor(c.textColor);
 
-        vSpan.textContent = Number(raw).toFixed(decimals);
+        el.style.setProperty('--ti-field-bg', getColor(c.inputFieldColor));
+        el.style.setProperty('--ti-field-color', getColor(c.inputFieldTextColor));
+        const fontSizeVal = typeof c.inputFieldFontSize === 'number'
+            ? `${c.inputFieldFontSize}pt`
+            : c.inputFieldFontSize;
+        el.style.setProperty('--ti-input-font-size', fontSizeVal);
+        el.style.setProperty('--ti-input-text-align', c.inputFieldAlign);
 
-        if (el.dataset.direction === 'vertical') {
-            fill.style.height = `${pct}%`;
-            handle.style.bottom = `${pct}%`;
+        const displayValue = (c.value === null || c.value === 'null') ? '' : c.value;
+
+        let html = '';
+        if (c.title) {
+            html += `<span class="tiTitle">${c.title}</span>`;
+        }
+        html += `
+            <div class="tiInputContainer">
+                <input
+                    class="tiInput"
+                    type="text"
+                    value="${displayValue}"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                />
+            </div>
+        `;
+        el.innerHTML = html;
+
+        const input = el.querySelector('.tiInput');
+        const container = el.querySelector('.tiInputContainer');
+
+        if (c.inputFieldWidth !== null) {
+            input.style.width = c.inputFieldWidth;
         } else {
-            fill.style.width = `${pct}%`;
-            handle.style.left = `${pct}%`;
+            input.style.width = '';
+        }
+
+        if (c.inputFieldPosition === 'center') {
+            input.style.display = 'block';
+            input.style.marginLeft = 'auto';
+            input.style.marginRight = 'auto';
+        } else if (c.inputFieldPosition === 'right') {
+            input.style.display = 'block';
+            input.style.marginLeft = 'auto';
+            input.style.marginRight = '4px';
+        } else {
+            input.style.marginLeft = '';
+            input.style.marginRight = '';
+        }
+
+        this.assignListeners(this.element);
+    }
+
+    update(data) {
+        Object.assign(this.configuration, data);
+        const el = this.element;
+        const input = el.querySelector('.tiInput');
+
+        if (data.event === 'revert') {
+            input.value = this._prevValue;
+            return this._animateError();
+        }
+
+        if (data.inputFieldColor !== undefined) {
+            el.style.setProperty('--ti-field-bg', getColor(data.inputFieldColor));
+        }
+        if (data.inputFieldTextColor !== undefined) {
+            el.style.setProperty('--ti-field-color', getColor(data.inputFieldTextColor));
+        }
+        if (data.textColor !== undefined) {
+            el.style.color = getColor(data.textColor);
+        }
+
+        if (data.inputFieldFontSize !== undefined) {
+            const fontSizeVal = typeof this.configuration.inputFieldFontSize === 'number'
+                ? `${this.configuration.inputFieldFontSize}px`
+                : this.configuration.inputFieldFontSize;
+            el.style.setProperty('--ti-input-font-size', fontSizeVal);
+        }
+        if (data.inputFieldAlign !== undefined) {
+            el.style.setProperty('--ti-input-text-align', this.configuration.inputFieldAlign);
+        }
+
+        if (data.titlePosition !== undefined) {
+            el.dataset.titlePosition = this.configuration.titlePosition;
+        }
+
+        if (data.value !== undefined) {
+            input.value = (data.value === null || data.value === 'null') ? '' : data.value;
+            this._prevValue = data.value;
+            // this._animateAccepted();
+        }
+
+        if (
+            data.inputFieldWidth !== undefined ||
+            data.inputFieldPosition !== undefined ||
+            data.titlePosition !== undefined
+        ) {
+            this.configureElement(this.configuration);
+        }
+
+        if (data.tooltip !== undefined) {
+            this.configuration.tooltip = data.tooltip;
         }
     }
 
-    /* ============================================================================================================== */
     assignListeners(el) {
-        let dragging = false, trackLength, rect;
-        const dir = el.dataset.direction;
-        const trackEl = el.querySelector('.csSliderContainer');
+        const input = el.querySelector('.tiInput');
+        const container = el.querySelector('.tiInputContainer');
 
-        const updateFromPointer = e => {
-            const min = +el.dataset.min, max = +el.dataset.max, inc = +el.dataset.increment,
-                decimals = +el.dataset.decimals;
-
-            let raw = dir === 'vertical' ? ((rect.bottom - e.clientY) / trackLength) * (max - min) + min : ((e.clientX - rect.left) / trackLength) * (max - min) + min;
-
-            if (el.dataset.limitToTicks === 'true') {
-                const ticks = JSON.parse(el.dataset.ticks);
-                if (ticks.length) {
-                    raw = ticks.reduce((p, c) => Math.abs(c - raw) < Math.abs(p - raw) ? c : p, ticks[0]);
-                }
-            } else {
-                raw = Math.round(raw / inc) * inc;
-                raw = parseFloat(raw.toFixed(decimals));
-            }
-            raw = Math.max(min, Math.min(max, raw));
-            this.update({value: raw});
-            if (el.dataset.continuousUpdates === 'true') {
-                this.callbacks.event({id: this.id, event: 'slider_change', data: {value: raw}});
-            }
-            return raw;
+        const commit = () => {
+            const v = input.value.trim();
+            this.callbacks.event({
+                event: 'text_input_commit',
+                id: this.id,
+                data: {value: v}
+            });
         };
 
-        // only start drag when clicking on the bar
-        trackEl.addEventListener('pointerdown', e => {
-            e.preventDefault();
-            rect = trackEl.getBoundingClientRect();
-            trackLength = dir === 'vertical' ? rect.height : rect.width;
-            dragging = true;
-            el.setPointerCapture?.(e.pointerId);
-            el.classList.add('dragging')
-            // if (el.dataset.continuousUpdates === 'true') el.classList.add('dragging');
-            updateFromPointer(e);
-        });
-
-        // continue anywhere over the widget
-        el.addEventListener('pointermove', e => {
-            if (!dragging) return;
-            updateFromPointer(e);
-        });
-
-        el.addEventListener('pointerup', e => {
-            if (!dragging) return;
-            dragging = false;
-            el.releasePointerCapture?.(e.pointerId);
-            const final = +el.dataset.value;
-            this.callbacks.event({id: this.id, event: 'slider_change', data: {value: final}});
-            if (el.dataset.automaticReset != null) {
-                this.update({value: +el.dataset.automaticReset});
-            }
-            el.classList.remove('dragging');
-            if (el.dataset.continuousUpdates !== 'true') {
-                el.classList.add('accepted');
-                el.addEventListener('animationend', () => el.classList.remove('accepted'), {once: true});
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+                input.blur();
             }
         });
+        input.addEventListener('blur', () => {
+            const prev = this._prevValue;
+            input.value = (prev === null || prev === 'null') ? '' : prev;
+            this._hideTooltip();
+        });
+
+        container.addEventListener('mouseenter', () => this._showTooltip());
+        container.addEventListener('mouseleave', () => this._hideTooltip());
+        window.addEventListener('scroll', () => this._hideTooltip(), true);
+        window.addEventListener('resize', () => this._hideTooltip());
+    }
+
+    // _showTooltip(text = null, autoHide = false) { // ⬅️ added args
+    _showTooltip(text = null, autoHide = false, isError = false) { // ⬅️ new param
+        const content = text || this.configuration.tooltip;
+        if (!content) return;
+
+        if (!this._tooltipEl) {
+            this._tooltipEl = document.createElement('div');
+            this._tooltipEl.classList.add('tiTooltipFloating');
+            document.body.appendChild(this._tooltipEl);
+        }
+
+        // Adjust class for error
+        this._tooltipEl.classList.toggle('tiTooltipFloatingError', isError); // ⬅️
+
+        this._tooltipEl.textContent = content;
+        const container = this.element.querySelector('.tiInputContainer');
+        const rect = container.getBoundingClientRect();
+        const tip = this._tooltipEl;
+
+        tip.style.visibility = 'hidden';
+        tip.style.opacity = '0';
+        tip.style.position = 'absolute';
+        tip.style.left = '0';
+        tip.style.top = '0';
+
+        document.body.appendChild(tip);
+        const tipRect = tip.getBoundingClientRect();
+
+        const top = Math.max(8, rect.top - tipRect.height - 6) + window.scrollY;
+        const left = rect.left + (rect.width - tipRect.width) / 2 + window.scrollX;
+
+        Object.assign(tip.style, {
+            top: `${top}px`,
+            left: `${left}px`,
+            visibility: 'visible',
+            opacity: '1',
+            transition: 'opacity 0.15s ease-in-out'
+        });
+
+        if (autoHide) {
+            clearTimeout(this._tooltipTimeout);
+            this._tooltipTimeout = setTimeout(() => this._hideTooltip(), 3000);
+        }
+    }
+
+
+    _hideTooltip() {
+        if (this._tooltipEl) {
+            this._tooltipEl.style.visibility = 'hidden';
+            this._tooltipEl.style.opacity = '0';
+        }
+    }
+
+    _animateAccepted() {
+        const el = this.element;
+        el.classList.add('accepted');
+        el.addEventListener('animationend', () => el.classList.remove('accepted'), {once: true});
+    }
+
+    _animateError() {
+        const el = this.element;
+        el.classList.add('error');
+        el.addEventListener('animationend', () => el.classList.remove('error'), {once: true});
+    }
+
+    validateInput({valid, value, message}) {
+        const input = this.element.querySelector('.tiInput');
+
+        if (valid) {
+            input.value = (value === null || value === 'null') ? '' : value;
+            this._prevValue = value;
+            this._animateAccepted();
+        } else {
+            input.value = (value === null || value === 'null') ? '' : value;
+            this._prevValue = value;
+            this._animateError();
+
+            if (message) {
+                this._showTooltip(message, true, true); // ⬅️ show temporary tooltip
+            }
+        }
+    }
+
+    getElement() {
+        return this.element;
     }
 }
 
 
-// =====================================================================================================================
+// ALL BELOW ARE UNFACTORED!
+
 // DigitalNumberWidget
 // =====================================================================================================================
 export class DigitalNumberWidget extends GUI_Object {
@@ -1962,156 +2574,7 @@ export class TextWidget extends GUI_Object {
 /* ============================================================================================================== */
 
 /* ============================================================================================================== */
-export class TextInputWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'text_input'});
-        const d = this.configuration;
-        const defaults = {
-            visible: true,
-            color: 'transparent',
-            textColor: '#000',
-            textInputFieldColor: '#fff',
-            inputTextColor: '#000',
-            title: '',
-            titlePosition: 'top',   // 'top' or 'left'
-            datatype: null,         // 'int' | 'float' | null
-            value: '',
-            validator: null
-        };
-        this.configuration = {...defaults, ...d};
-        this._prevValue = this.configuration.value;
-    }
 
-    /* ============================================================================================================== */
-    getElement() {
-        const c = this.configuration;
-        const el = document.createElement('div');
-        el.id = this.id;
-        el.classList.add('gridItem', 'textInputWidget');
-        el.dataset.titlePosition = c.titlePosition;
-        if (!c.visible) el.style.display = 'none';
-
-        // container & CSS variable styling
-        el.style.backgroundColor = c.color;
-        el.style.color = c.textColor;
-        el.style.setProperty('--ti-field-bg', c.textInputFieldColor);
-        el.style.setProperty('--ti-field-color', c.inputTextColor);
-
-        // inner HTML
-        let html = '';
-        if (c.title) {
-            html += `<span class="tiTitle">${c.title}</span>`;
-        }
-        html += `<input
-      class="tiInput"
-      type="text"
-      value="${c.value}"
-      autocomplete="off"
-      autocapitalize="none"
-      spellcheck="false"
-    />`;
-
-        el.innerHTML = html;
-        this.element = el;
-        return el;
-    }
-
-    /* ============================================================================================================== */
-    update(data) {
-        // handle external updates and color changes
-        const c = this.configuration;
-        Object.assign(c, data);
-        const el = this.element;
-        const input = el.querySelector('.tiInput');
-
-        if (data.event === 'revert') {
-            input.value = this._prevValue;
-            return this._animateError();
-        }
-
-        if (data.textInputFieldColor) {
-            el.style.setProperty('--ti-field-bg', data.textInputFieldColor);
-        }
-        if (data.inputTextColor) {
-            el.style.setProperty('--ti-field-color', data.inputTextColor);
-        }
-        if (data.textColor) {
-            el.style.color = data.textColor;
-        }
-
-        if (data.value !== undefined) {
-            input.value = data.value;
-            this._prevValue = data.value;
-            this._animateAccepted();
-        }
-    }
-
-    /* ============================================================================================================== */
-    assignListeners(el) {
-        const input = el.querySelector('.tiInput');
-
-        const commit = () => {
-            const v = input.value.trim();
-            const dt = this.configuration.datatype;
-
-            // validate
-            if (dt === 'int' && !/^[-+]?\d+$/.test(v)) {
-                input.value = this._prevValue;
-                this._animateError();
-                return;
-            }
-            if (dt === 'float' && !/^[-+]?\d+(\.\d+)?$/.test(v)) {
-                input.value = this._prevValue;
-                this._animateError();
-                return;
-            }
-
-            if (this.configuration.validator) {
-                const valid = this.configuration.validator(v);
-                if (!valid) {
-                    input.value = this._prevValue;
-                    this._animateError();
-                    return;
-                }
-            }
-
-            // accept
-            this._prevValue = v;
-            this.callbacks.event({
-                id: this.id, event: 'text_input_change', data: {value: v}
-            });
-            this._animateAccepted();
-        };
-
-        // ENTER: try to commit
-        input.addEventListener('keydown', e => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                commit();
-                input.blur();
-            }
-        });
-
-        // BLUR: always revert silently
-        input.addEventListener('blur', () => {
-            input.value = this._prevValue;
-        });
-    }
-
-    /* ============================================================================================================== */
-    _animateAccepted() {
-        const el = this.element;
-        el.classList.add('accepted');
-        el.addEventListener('animationend', () => el.classList.remove('accepted'), {once: true});
-    }
-
-    /* ============================================================================================================== */
-    _animateError() {
-        const el = this.element;
-        el.classList.add('error');
-        el.addEventListener('animationend', () => el.classList.remove('error'), {once: true});
-    }
-}
 
 export class StatusWidget extends GUI_Object {
     constructor(opts) {

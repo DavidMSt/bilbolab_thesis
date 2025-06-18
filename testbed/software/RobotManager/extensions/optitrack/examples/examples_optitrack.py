@@ -2,7 +2,7 @@ import time
 import math
 
 from extensions.optitrack.optitrack import OptiTrack, RigidBodySample
-from core.utils.websockets.websockets import SyncWebsocketServer
+from core.utils.websockets.websockets import WebsocketServer
 from core.utils.orientation.orientation_2d import calculate_projection, angle_between_two_vectors
 
 data = {}
@@ -18,7 +18,7 @@ def example_optitrack():
     optitrack.callbacks.sample.register(optitrack_callback)
     optitrack.start()
 
-    server = SyncWebsocketServer(host='localhost', port=8000)
+    server = WebsocketServer(host='localhost', port=8000)
     server.start()
 
     # time.sleep(1)

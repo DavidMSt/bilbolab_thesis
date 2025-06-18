@@ -267,17 +267,17 @@ class BILBO_Logging:
             else:
                 self.sample_index += SAMPLE_BUFFER_LL_SIZE
 
-            if self.sample_index != from_dict(BILBO_Sample,
-                                              self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick:
-                logger.warning(
-                    f"Sample index mismatch: HL: {self.sample_index} != LL: {from_dict(BILBO_Sample, self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick}")
-
             self._num_samples += SAMPLE_BUFFER_LL_SIZE
 
             if self._num_samples % 2000 == 0:
                 logger.debug(f"Samples collected: {self._num_samples}")
 
         self.sample = from_dict(BILBO_Sample, self._sample_buffer[self._index_sample_buffer - 1])
+
+        if self.sample_index != from_dict(BILBO_Sample,
+                                          self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick:
+            logger.warning(
+                f"Sample index mismatch: HL: {self.sample_index} != LL: {from_dict(BILBO_Sample, self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick}")
 
         elapsed_time = timer.stop()
 
