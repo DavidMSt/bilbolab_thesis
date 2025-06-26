@@ -94,7 +94,6 @@ class BILBO_SPI_Interface:
         data[0] = 0x66
         data[1] = command
         data[2:4] = len_byte_list
-
         self.interface.send(data)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -116,9 +115,9 @@ class BILBO_SPI_Interface:
         data_rx_bytes = bytearray(SAMPLE_BUFFER_LL_SIZE * sizeof(bilbo_ll_sample_struct))
         with self.lock:
             self._sendCommand(BILBO_SPI_Command_Type.READ_SAMPLE, 0)
-            precise_sleep(0.002)
+            precise_sleep(0.005)
             self.interface.readinto(data_rx_bytes, start=0,
-                                    end=SAMPLE_BUFFER_LL_SIZE * sizeof(bilbo_ll_sample_struct))
+                                    end=SAMPLE_BUFFER_LL_SIZE * sizeof(bilbo_ll_sample_struct), write_value=0x05)
 
         samples = []
         for i in range(0, SAMPLE_BUFFER_LL_SIZE):

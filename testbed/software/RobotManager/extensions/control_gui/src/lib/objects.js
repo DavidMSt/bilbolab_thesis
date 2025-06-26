@@ -202,7 +202,7 @@ export class ObjectGroup extends GUI_Object {
             this.titleBar.textContent = this.configuration.title;
             this.titleBar.style.fontSize = this.configuration.titleFontSize;
             this.titleBar.style.color = this.configuration.titleColor;
-            this.titleBar.style.textAlign = this.configuration.titlePosition;
+            this.titleBar.style.textAlign = this.configuration.title_position;
             this.container.appendChild(this.titleBar);
         }
 
@@ -484,7 +484,7 @@ export class ButtonWidget extends GUI_Object {
         const default_configuration = {
             visible: true,
             color: 'rgba(79,170,108,0.81)',
-            textColor: '#ffffff',
+            text_color: '#ffffff',
             fontSize: 12,
         }
 
@@ -526,8 +526,8 @@ export class ButtonWidget extends GUI_Object {
 
         this.element.classList.add('gridItem', 'buttonItem');
         this.element.style.backgroundColor = getColor(this.configuration.color);
-        this.element.style.color = getColor(this.configuration.textColor);
-        this.element.style.fontSize = `${this.configuration.fontSize}px`;
+        this.element.style.color = getColor(this.configuration.text_color);
+        this.element.style.fontSize = `${this.configuration.font_size}px`;
 
         if (!this.configuration.visible) {
             this.element.style.display = 'none';
@@ -700,7 +700,7 @@ export class MultiStateButtonWidget extends GUI_Object {
         const defaults = {
             visible: true,
             color: [0.2, 0.3, 0.4],
-            textColor: '#fff',
+            text_color: '#fff',
             states: [],
             state_index: 0,
             text: '',
@@ -713,9 +713,12 @@ export class MultiStateButtonWidget extends GUI_Object {
 
         this.configureElement(this.configuration);
 
+        this._attachIndicatorListeners();
         this.assignListeners(this.element);
 
     }
+
+    0
 
     /* ============================================================================================================== */
     _initializeElement() {
@@ -736,7 +739,7 @@ export class MultiStateButtonWidget extends GUI_Object {
         this.configuration.state = this.configuration.states.length ? this.configuration.states[this.configuration.state_index] : '';
 
         if (!this.configuration.visible) this.element.style.display = 'none';
-        this.element.style.color = getColor(this.configuration.textColor);
+        this.element.style.color = getColor(this.configuration.text_color);
         this.element.style.backgroundColor = getColor(this._getCurrentColor());
         this.element.innerHTML = this._renderContent();
     }
@@ -903,16 +906,18 @@ export class SliderWidget extends GUI_Object {
             title: '',
             visible: true,
             color: [0.3, 0.3, 0.3],
-            textColor: [1, 1, 1],
+            text_color: [1, 1, 1],
             min_value: 0,
             max_value: 10,
             value: 0,
             increment: 1,
             direction: 'horizontal',
             continuousUpdates: false,
+            maxContinuousUpdatesPerSecond: 20,
             ticks: null,
             snapToTicks: false,
-            automaticReset: null
+            automaticReset: null,
+
         }
 
         this.configuration = {...default_configuration, ...this.configuration};
@@ -944,7 +949,7 @@ export class SliderWidget extends GUI_Object {
 
         // ── Colors ───────────────────────────────────────────────────────────────────────────────────────────────────
         this.element.style.backgroundColor = getColor(this.configuration.color);
-        this.element.style.color = getColor(this.configuration.textColor);
+        this.element.style.color = getColor(this.configuration.text_color);
 
         // ── Compute increment/decimals/valueType ─────────────────────────────────────────────────────────────────────
         const inc = parseFloat(this.configuration.increment);
@@ -1003,10 +1008,137 @@ export class SliderWidget extends GUI_Object {
         this.configureElement(this.configuration);
     }
 
-    assignListeners(el) {
-        let dragging = false, trackLength, direction = el.dataset.direction;
-        let rect;
+    // assignListeners(el) {
+    //     let dragging = false, trackLength, direction = el.dataset.direction;
+    //     let rect;
+    //
+    //     const updateFromPointer = e => {
+    //         const min = parseFloat(el.dataset.min);
+    //         const max = parseFloat(el.dataset.max);
+    //         const inc = parseFloat(el.dataset.increment);
+    //         const decimals = parseInt(el.dataset.decimals, 10);
+    //         const valueType = el.dataset.valueType;
+    //         const fill = el.querySelector('.sliderFill');
+    //
+    //         const pos = direction === 'vertical' ? (rect.bottom - e.clientY) : (e.clientX - rect.left);
+    //         const rawPct = Math.max(0, Math.min(1, pos / trackLength));
+    //         let raw = min + rawPct * (max - min);
+    //
+    //         // snapping
+    //         if (el.dataset.limitToTicks === 'true') {
+    //             const ticks = JSON.parse(el.dataset.ticks);
+    //             if (ticks.length) {
+    //                 raw = ticks.reduce((p, c) => Math.abs(c - raw) < Math.abs(p - raw) ? c : p, ticks[0]);
+    //             }
+    //         } else {
+    //             raw = Math.round(raw / inc) * inc;
+    //             if (valueType === 'int') raw = Math.round(raw); else raw = parseFloat(raw.toFixed(decimals));
+    //         }
+    //
+    //         el.dataset.currentValue = raw;
+    //         el.querySelector('.sliderValue').textContent = valueType === 'int' ? raw.toFixed(0) : raw.toFixed(decimals);
+    //
+    //         const snappedPct = (raw - min) / (max - min);
+    //         if (direction === 'vertical') fill.style.height = (snappedPct * 100) + '%'; else fill.style.width = (snappedPct * 100) + '%';
+    //
+    //         return raw;
+    //     };
+    //
+    //     el.addEventListener('pointerdown', e => {
+    //         if (el.dataset.continuousUpdates === 'true') {
+    //             el.classList.add('dragging');
+    //         }
+    //         e.preventDefault();
+    //         rect = el.getBoundingClientRect();
+    //         trackLength = direction === 'vertical' ? rect.height : rect.width;
+    //         dragging = true;
+    //         el.setPointerCapture(e.pointerId);
+    //
+    //         const newValue = updateFromPointer(e);
+    //         if (el.dataset.continuousUpdates === 'true') this.callbacks.event({
+    //             id: this.id, event: 'slider_change', data: {value: newValue}
+    //         });
+    //     });
+    //
+    //     el.addEventListener('pointermove', e => {
+    //         if (!dragging) return;
+    //         const newValue = updateFromPointer(e);
+    //         if (el.dataset.continuousUpdates === 'true') this.callbacks.event({
+    //             id: this.id, event: 'slider_change', data: {value: newValue}
+    //         });
+    //     });
+    //
+    //     el.addEventListener('pointerup', e => {
+    //         dragging = false;
+    //         el.releasePointerCapture(e.pointerId);
+    //         const finalValue = parseFloat(el.dataset.currentValue);
+    //         this.callbacks.event({id: this.id, event: 'slider_change', data: {value: finalValue}});
+    //
+    //         if (el.dataset.automaticReset != null) {
+    //             el.dataset.currentValue = el.dataset.automaticReset;
+    //             // b) Fire a second callback so backend sees the “reset to automaticReset” value:
+    //             this.callbacks.event({
+    //                 id: this.id,
+    //                 event: 'slider_change',
+    //                 data: {value: el.dataset.automaticReset},
+    //             });
+    //             this.update({value: parseFloat(el.dataset.automaticReset)});
+    //         }
+    //
+    //         if (el.dataset.continuousUpdates !== 'true') {
+    //             el.classList.add('accepted');
+    //             el.addEventListener('animationend', () => {
+    //                 el.classList.remove('accepted');
+    //             }, {once: true});
+    //         }
+    //         el.classList.remove('dragging');
+    //     });
+    // }
 
+    assignListeners(el) {
+        let dragging = false,
+            trackLength,
+            direction = el.dataset.direction,
+            rect;
+
+        // ── Throttle state ─────────────────────────────────────────────────────────
+        const maxRate = this.configuration.maxContinuousUpdatesPerSecond;
+        const interval = 1000 / maxRate;           // ms between allowed sends
+        let lastSent = 0;                          // timestamp of last send
+        let trailingTimer = null;                  // timer for trailing send
+        let trailingValue = null;                  // last value seen
+
+        // helper to actually send an event
+        const sendEvent = (value) => {
+            this.callbacks.event({
+                id: this.id,
+                event: 'slider_change',
+                data: {value}
+            });
+        };
+
+        // throttle + trailing
+        const maybeSend = (value) => {
+            const now = Date.now();
+            const since = now - lastSent;
+            if (since >= interval) {
+                // allowed to send immediately
+                sendEvent(value);
+                lastSent = now;
+            } else {
+                // schedule a trailing send
+                trailingValue = value;
+                if (!trailingTimer) {
+                    trailingTimer = setTimeout(() => {
+                        sendEvent(trailingValue);
+                        lastSent = Date.now();
+                        trailingTimer = null;
+                    }, interval - since);
+                }
+            }
+        };
+
+        // ── Raw pointer → value logic (unchanged) ────────────────────────────────────
         const updateFromPointer = e => {
             const min = parseFloat(el.dataset.min);
             const max = parseFloat(el.dataset.max);
@@ -1015,80 +1147,92 @@ export class SliderWidget extends GUI_Object {
             const valueType = el.dataset.valueType;
             const fill = el.querySelector('.sliderFill');
 
-            const pos = direction === 'vertical' ? (rect.bottom - e.clientY) : (e.clientX - rect.left);
+            // compute raw position → percentage
+            const pos = direction === 'vertical'
+                ? (rect.bottom - e.clientY)
+                : (e.clientX - rect.left);
             const rawPct = Math.max(0, Math.min(1, pos / trackLength));
             let raw = min + rawPct * (max - min);
 
-            // snapping
+            // snapping logic
             if (el.dataset.limitToTicks === 'true') {
                 const ticks = JSON.parse(el.dataset.ticks);
                 if (ticks.length) {
-                    raw = ticks.reduce((p, c) => Math.abs(c - raw) < Math.abs(p - raw) ? c : p, ticks[0]);
+                    raw = ticks.reduce(
+                        (p, c) => Math.abs(c - raw) < Math.abs(p - raw) ? c : p,
+                        ticks[0]
+                    );
                 }
             } else {
                 raw = Math.round(raw / inc) * inc;
-                if (valueType === 'int') raw = Math.round(raw); else raw = parseFloat(raw.toFixed(decimals));
+                if (valueType === 'int') raw = Math.round(raw);
+                else raw = parseFloat(raw.toFixed(decimals));
             }
 
+            // update DOM
             el.dataset.currentValue = raw;
-            el.querySelector('.sliderValue').textContent = valueType === 'int' ? raw.toFixed(0) : raw.toFixed(decimals);
+            el.querySelector('.sliderValue').textContent =
+                valueType === 'int' ? raw.toFixed(0) : raw.toFixed(decimals);
 
             const snappedPct = (raw - min) / (max - min);
-            if (direction === 'vertical') fill.style.height = (snappedPct * 100) + '%'; else fill.style.width = (snappedPct * 100) + '%';
+            if (direction === 'vertical') fill.style.height = (snappedPct * 100) + '%';
+            else fill.style.width = (snappedPct * 100) + '%';
 
             return raw;
         };
 
+        // ── Event handlers ──────────────────────────────────────────────────────────
         el.addEventListener('pointerdown', e => {
-            if (el.dataset.continuousUpdates === 'true') {
-                el.classList.add('dragging');
-            }
+            if (el.dataset.continuousUpdates === 'true') el.classList.add('dragging');
             e.preventDefault();
             rect = el.getBoundingClientRect();
             trackLength = direction === 'vertical' ? rect.height : rect.width;
             dragging = true;
             el.setPointerCapture(e.pointerId);
 
-            const newValue = updateFromPointer(e);
-            if (el.dataset.continuousUpdates === 'true') this.callbacks.event({
-                id: this.id, event: 'slider_change', data: {value: newValue}
-            });
+            const v = updateFromPointer(e);
+            if (el.dataset.continuousUpdates === 'true') maybeSend(v);
         });
 
         el.addEventListener('pointermove', e => {
             if (!dragging) return;
-            const newValue = updateFromPointer(e);
-            if (el.dataset.continuousUpdates === 'true') this.callbacks.event({
-                id: this.id, event: 'slider_change', data: {value: newValue}
-            });
+            const v = updateFromPointer(e);
+            if (el.dataset.continuousUpdates === 'true') maybeSend(v);
         });
 
         el.addEventListener('pointerup', e => {
             dragging = false;
             el.releasePointerCapture(e.pointerId);
-            const finalValue = parseFloat(el.dataset.currentValue);
-            this.callbacks.event({id: this.id, event: 'slider_change', data: {value: finalValue}});
 
+            // 1) always send the true final value
+            const finalValue = parseFloat(el.dataset.currentValue);
+            sendEvent(finalValue);
+
+            // 2) automaticReset (if configured)
             if (el.dataset.automaticReset != null) {
                 el.dataset.currentValue = el.dataset.automaticReset;
-                // b) Fire a second callback so backend sees the “reset to automaticReset” value:
-                this.callbacks.event({
-                    id: this.id,
-                    event: 'slider_change',
-                    data: {value: el.dataset.automaticReset},
-                });
+                sendEvent(el.dataset.automaticReset);
                 this.update({value: parseFloat(el.dataset.automaticReset)});
             }
 
+            // 3) “accepted” animation for non‐continuous
             if (el.dataset.continuousUpdates !== 'true') {
                 el.classList.add('accepted');
                 el.addEventListener('animationend', () => {
                     el.classList.remove('accepted');
                 }, {once: true});
             }
+
+            // 4) clear any pending trailing send
+            if (trailingTimer) {
+                clearTimeout(trailingTimer);
+                trailingTimer = null;
+            }
+
             el.classList.remove('dragging');
         });
     }
+
 
     setValue(value) {
         const el = this.element;
@@ -1144,7 +1288,7 @@ export class ClassicSliderWidget extends GUI_Object {
             backgroundColor: '#333',
             stemColor: '#888',
             handleColor: '#ccc',
-            textColor: '#fff',
+            text_color: '#fff',
             valueFontSize: 12,
             titleFontSize: 10,
             min_value: 0,
@@ -1153,6 +1297,7 @@ export class ClassicSliderWidget extends GUI_Object {
             increment: 1,
             direction: 'horizontal',    // 'horizontal' | 'vertical'
             continuousUpdates: false,
+            maxContinuousUpdatesPerSecond: 10,
             snapToTicks: false,
             ticks: [],                  // array of numeric tick positions
             automaticReset: null        // numeric value to reset to after release, or null
@@ -1190,12 +1335,12 @@ export class ClassicSliderWidget extends GUI_Object {
 
         // ── Colors & CSS variables ─────────────────────────────────────────────────────
         el.style.backgroundColor = getColor(c.backgroundColor);
-        el.style.color = getColor(c.textColor);
+        el.style.color = getColor(c.text_color);
         el.style.setProperty('--stem-color', getColor(c.stemColor));
         el.style.setProperty('--handle-color', getColor(c.handleColor));
 
         // ── Layout flags as data-attributes ─────────────────────────────────────────────
-        el.dataset.titlePosition = c.titlePosition;
+        el.dataset.titlePosition = c.title_position;
         el.dataset.valuePosition = c.valuePosition;
         el.dataset.direction = c.direction;
         el.dataset.continuousUpdates = String(c.continuousUpdates);
@@ -1318,23 +1463,180 @@ export class ClassicSliderWidget extends GUI_Object {
 
 
     // Attach pointer listeners to handle dragging, snapping, and events
+    // assignListeners(el) {
+    //     let dragging = false;
+    //     let trackLength;
+    //     let rect;
+    //     const dir = el.dataset.direction;
+    //
+    //     // The “track” region where pointerdown should start dragging
+    //     const trackEl = el.querySelector('.csSliderContainer');
+    //
+    //     // Compute a new raw value based on a pointer event
+    //     const updateFromPointer = (e) => {
+    //         const min = parseFloat(el.dataset.min);
+    //         const max = parseFloat(el.dataset.max);
+    //         const inc = parseFloat(el.dataset.increment);
+    //         const decimals = parseInt(el.dataset.decimals, 10);
+    //         let raw;
+    //
+    //         if (dir === 'vertical') {
+    //             const pos = Math.max(0, Math.min(rect.height, rect.bottom - e.clientY));
+    //             raw = min + (pos / trackLength) * (max - min);
+    //         } else {
+    //             const pos = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    //             raw = min + (pos / trackLength) * (max - min);
+    //         }
+    //
+    //         if (el.dataset.snapToTicks === 'true') {
+    //             const ticks = JSON.parse(el.dataset.ticks);
+    //             if (Array.isArray(ticks) && ticks.length) {
+    //                 raw = ticks.reduce((prev, curr) =>
+    //                         Math.abs(curr - raw) < Math.abs(prev - raw) ? curr : prev,
+    //                     ticks[0]
+    //                 );
+    //             }
+    //         } else {
+    //             raw = Math.round(raw / inc) * inc;
+    //             raw = parseFloat(raw.toFixed(decimals));
+    //         }
+    //
+    //         // Clamp to [min, max]
+    //         raw = Math.max(min, Math.min(max, raw));
+    //
+    //         // Update configuration.value so .configureElement will reflect it if called
+    //         this.configuration.value = raw;
+    //
+    //         // Update the fill, handle, and numeric display immediately
+    //         const fill = el.querySelector('.csFill');
+    //         const handle = el.querySelector('.csHandle');
+    //         const vSpan = el.querySelector('.csValue');
+    //         vSpan.textContent = Number(raw).toFixed(decimals);
+    //
+    //         const snappedPct = ((raw - min) / (max - min)) * 100;
+    //         if (dir === 'vertical') {
+    //             fill.style.height = `${snappedPct}%`;
+    //             handle.style.bottom = `${snappedPct}%`;
+    //         } else {
+    //             fill.style.width = `${snappedPct}%`;
+    //             handle.style.left = `${snappedPct}%`;
+    //         }
+    //
+    //         // Fire continuous update event if requested
+    //         if (el.dataset.continuousUpdates === 'true') {
+    //             this.callbacks.event({
+    //                 id: this.id,
+    //                 event: 'slider_change',
+    //                 data: {value: raw}
+    //             });
+    //         }
+    //
+    //         return raw;
+    //     };
+    //
+    //     // Start dragging when pointerdown occurs on the track
+    //     trackEl.addEventListener('pointerdown', (e) => {
+    //         e.preventDefault();
+    //         rect = trackEl.getBoundingClientRect();
+    //         trackLength = dir === 'vertical' ? rect.height : rect.width;
+    //         dragging = true;
+    //         el.setPointerCapture?.(e.pointerId);
+    //         el.classList.add('dragging');
+    //
+    //         const newValue = updateFromPointer(e);
+    //         // If continuousUpdates is true, we've already fired event inside updateFromPointer
+    //     });
+    //
+    //     // Continue updating as the pointer moves (anywhere over the widget)
+    //     el.addEventListener('pointermove', (e) => {
+    //         if (!dragging) return;
+    //         updateFromPointer(e);
+    //     });
+    //
+    //     // End dragging on pointerup
+    //     el.addEventListener('pointerup', (e) => {
+    //         if (!dragging) return;
+    //         dragging = false;
+    //         el.releasePointerCapture?.(e.pointerId);
+    //
+    //         // Final value after dragging
+    //         const finalValue = this.configuration.value;
+    //         this.callbacks.event({
+    //             id: this.id,
+    //             event: 'slider_change',
+    //             data: {value: finalValue}
+    //         });
+    //
+    //         // If automaticReset is set, reset to that value and fire a second callback
+    //         if (el.dataset.automaticReset != null) {
+    //             const resetValue = parseFloat(el.dataset.automaticReset);
+    //             this.configuration.value = resetValue;
+    //             this.configureElement(this.configuration);
+    //             this.callbacks.event({
+    //                 id: this.id,
+    //                 event: 'slider_change',
+    //                 data: {value: resetValue}
+    //             });
+    //         }
+    //
+    //         el.classList.remove('dragging');
+    //         if (el.dataset.continuousUpdates !== 'true') {
+    //             el.classList.add('accepted');
+    //             el.addEventListener(
+    //                 'animationend',
+    //                 () => el.classList.remove('accepted'),
+    //                 {once: true}
+    //             );
+    //         }
+    //     });
+    // }
     assignListeners(el) {
-        let dragging = false;
-        let trackLength;
-        let rect;
+        let dragging = false, trackLength, rect;
         const dir = el.dataset.direction;
-
-        // The “track” region where pointerdown should start dragging
         const trackEl = el.querySelector('.csSliderContainer');
 
-        // Compute a new raw value based on a pointer event
+        // ── Throttle state ─────────────────────────────────────────────────────────────
+        const maxRate = this.configuration.maxContinuousUpdatesPerSecond;
+        const interval = 1000 / maxRate;
+        let lastSent = 0;
+        let trailingTimer = null;
+        let trailingValue = null;
+
+        const sendEvent = (v) => {
+            this.callbacks.event({
+                id: this.id,
+                event: 'slider_change',
+                data: {value: v}
+            });
+        };
+
+        const maybeSend = (v) => {
+            const now = Date.now();
+            const since = now - lastSent;
+            if (since >= interval) {
+                sendEvent(v);
+                lastSent = now;
+            } else {
+                trailingValue = v;
+                if (!trailingTimer) {
+                    trailingTimer = setTimeout(() => {
+                        sendEvent(trailingValue);
+                        lastSent = Date.now();
+                        trailingTimer = null;
+                    }, interval - since);
+                }
+            }
+        };
+
+        // ── Compute new value & update UI (fill + handle + label) ──────────────────────
         const updateFromPointer = (e) => {
-            const min = parseFloat(el.dataset.min);
-            const max = parseFloat(el.dataset.max);
-            const inc = parseFloat(el.dataset.increment);
-            const decimals = parseInt(el.dataset.decimals, 10);
+            const min = +el.dataset.min;
+            const max = +el.dataset.max;
+            const inc = +el.dataset.increment;
+            const dec = +el.dataset.decimals;
             let raw;
 
+            // figure out pointer ×→percentage
             if (dir === 'vertical') {
                 const pos = Math.max(0, Math.min(rect.height, rect.bottom - e.clientY));
                 raw = min + (pos / trackLength) * (max - min);
@@ -1343,109 +1645,93 @@ export class ClassicSliderWidget extends GUI_Object {
                 raw = min + (pos / trackLength) * (max - min);
             }
 
+            // optionally snap to ticks or increment
             if (el.dataset.snapToTicks === 'true') {
                 const ticks = JSON.parse(el.dataset.ticks);
-                if (Array.isArray(ticks) && ticks.length) {
-                    raw = ticks.reduce((prev, curr) =>
-                            Math.abs(curr - raw) < Math.abs(prev - raw) ? curr : prev,
+                if (ticks.length) {
+                    raw = ticks.reduce((p, c) =>
+                            Math.abs(c - raw) < Math.abs(p - raw) ? c : p,
                         ticks[0]
                     );
                 }
             } else {
                 raw = Math.round(raw / inc) * inc;
-                raw = parseFloat(raw.toFixed(decimals));
+                raw = +raw.toFixed(dec);
             }
 
-            // Clamp to [min, max]
+            // clamp
             raw = Math.max(min, Math.min(max, raw));
-
-            // Update configuration.value so .configureElement will reflect it if called
             this.configuration.value = raw;
 
-            // Update the fill, handle, and numeric display immediately
+            // update fill, handle, and value label
+            const pct = ((raw - min) / (max - min)) * 100;
             const fill = el.querySelector('.csFill');
             const handle = el.querySelector('.csHandle');
-            const vSpan = el.querySelector('.csValue');
-            vSpan.textContent = Number(raw).toFixed(decimals);
-
-            const snappedPct = ((raw - min) / (max - min)) * 100;
             if (dir === 'vertical') {
-                fill.style.height = `${snappedPct}%`;
-                handle.style.bottom = `${snappedPct}%`;
+                fill.style.height = `${pct}%`;
+                handle.style.bottom = `${pct}%`;
             } else {
-                fill.style.width = `${snappedPct}%`;
-                handle.style.left = `${snappedPct}%`;
+                fill.style.width = `${pct}%`;
+                handle.style.left = `${pct}%`;
             }
-
-            // Fire continuous update event if requested
-            if (el.dataset.continuousUpdates === 'true') {
-                this.callbacks.event({
-                    id: this.id,
-                    event: 'slider_change',
-                    data: {value: raw}
-                });
-            }
+            el.querySelector('.csValue').textContent = raw.toFixed(dec);
 
             return raw;
         };
 
-        // Start dragging when pointerdown occurs on the track
+        // ── Handlers ───────────────────────────────────────────────────────────────────
         trackEl.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             rect = trackEl.getBoundingClientRect();
             trackLength = dir === 'vertical' ? rect.height : rect.width;
             dragging = true;
-            el.setPointerCapture?.(e.pointerId);
             el.classList.add('dragging');
+            el.setPointerCapture?.(e.pointerId);
 
-            const newValue = updateFromPointer(e);
-            // If continuousUpdates is true, we've already fired event inside updateFromPointer
+            const v = updateFromPointer(e);
+            if (el.dataset.continuousUpdates === 'true') maybeSend(v);
         });
 
-        // Continue updating as the pointer moves (anywhere over the widget)
         el.addEventListener('pointermove', (e) => {
             if (!dragging) return;
-            updateFromPointer(e);
+            const v = updateFromPointer(e);
+            if (el.dataset.continuousUpdates === 'true') maybeSend(v);
         });
 
-        // End dragging on pointerup
         el.addEventListener('pointerup', (e) => {
             if (!dragging) return;
             dragging = false;
             el.releasePointerCapture?.(e.pointerId);
 
-            // Final value after dragging
-            const finalValue = this.configuration.value;
-            this.callbacks.event({
-                id: this.id,
-                event: 'slider_change',
-                data: {value: finalValue}
-            });
+            // 1) always send the final value
+            const finalV = this.configuration.value;
+            sendEvent(finalV);
 
-            // If automaticReset is set, reset to that value and fire a second callback
+            // 2) automatic reset?
             if (el.dataset.automaticReset != null) {
-                const resetValue = parseFloat(el.dataset.automaticReset);
-                this.configuration.value = resetValue;
+                const rv = +el.dataset.automaticReset;
+                this.configuration.value = rv;
                 this.configureElement(this.configuration);
-                this.callbacks.event({
-                    id: this.id,
-                    event: 'slider_change',
-                    data: {value: resetValue}
-                });
+                sendEvent(rv);
+            }
+
+            // 3) “accepted” animation if not continuous
+            if (el.dataset.continuousUpdates !== 'true') {
+                el.classList.add('accepted');
+                el.addEventListener('animationend', () => {
+                    el.classList.remove('accepted');
+                }, {once: true});
+            }
+
+            // 4) clear any trailing timer
+            if (trailingTimer) {
+                clearTimeout(trailingTimer);
+                trailingTimer = null;
             }
 
             el.classList.remove('dragging');
-            if (el.dataset.continuousUpdates !== 'true') {
-                el.classList.add('accepted');
-                el.addEventListener(
-                    'animationend',
-                    () => el.classList.remove('accepted'),
-                    {once: true}
-                );
-            }
         });
     }
-
 }
 
 /* ============================================================================================================== */
@@ -1458,7 +1744,7 @@ export class RotaryDialWidget extends GUI_Object {
             visible: true,
             color: '#333',
             dialColor: '#3399FF',
-            textColor: '#fff',
+            text_color: '#fff',
             title: '',
             titlePosition: 'top',   // only 'top' or 'left'
             min: 0,
@@ -1467,13 +1753,14 @@ export class RotaryDialWidget extends GUI_Object {
             ticks: [],
             increment: 1,
             continuousUpdates: false,
+            maxContinuousUpdatesPerSecond: 10,
             limitToTicks: false,
             dialWidth: 5           // thickness of the dial arc
         };
 
         // Enforce only 'top' or 'left' for titlePosition
-        const pos = this.configuration.titlePosition === 'left' ? 'left' : 'top';
-        this.configuration = {...defaults, ...this.configuration, titlePosition: pos};
+        const pos = this.configuration.title_position === 'left' ? 'left' : 'top';
+        this.configuration = {...defaults, ...this.configuration, title_position: pos};
 
         // Create and configure the root element
         this.element = this._initializeElement();
@@ -1610,7 +1897,7 @@ export class RotaryDialWidget extends GUI_Object {
 
         // Base colors
         el.style.backgroundColor = getColor(c.color);
-        el.style.color = getColor(c.textColor);
+        el.style.color = getColor(c.text_color);
 
         // Numeric metadata
         const inc = +c.increment;
@@ -1625,7 +1912,7 @@ export class RotaryDialWidget extends GUI_Object {
         el.dataset.decimals = dec;
         el.dataset.continuousUpdates = c.continuousUpdates;
         el.dataset.limitToTicks = c.limitToTicks;
-        el.dataset.titlePosition = c.titlePosition;
+        el.dataset.titlePosition = c.title_position;
         el.dataset.dialWidth = c.dialWidth;
 
         // Displayed value (integer if increment is integer, else fixed decimals)
@@ -1658,8 +1945,7 @@ export class RotaryDialWidget extends GUI_Object {
 
         const inc = +el.dataset.increment;
         const dec = +el.dataset.decimals;
-        const disp = (inc % 1 === 0) ? parseInt(data.value, 10) : Number(data.value).toFixed(dec);
-        el.querySelector('.value').textContent = disp;
+        el.querySelector('.value').textContent = (inc % 1 === 0) ? parseInt(data.value, 10) : Number(data.value).toFixed(dec);
 
         this._drawDial(el);
     }
@@ -1699,8 +1985,91 @@ export class RotaryDialWidget extends GUI_Object {
 
 
     /* ============================================================================================================== */
+    // assignListeners(el) {
+    //     // Initial draw once the element is in the DOM and has its size
+    //     requestAnimationFrame(() => {
+    //         const canvas = el.querySelector('canvas');
+    //         const r = canvas.getBoundingClientRect();
+    //         const dpr = window.devicePixelRatio || 1;
+    //         canvas.width = r.width * dpr;
+    //         canvas.height = r.height * dpr;
+    //         canvas.getContext('2d').scale(dpr, dpr);
+    //         this._drawDial(el);
+    //     });
+    //
+    //     const canvas = el.querySelector('canvas');
+    //     const inc = +el.dataset.increment;
+    //     const cont = el.dataset.continuousUpdates === 'true';
+    //     let startX = null, startVal = null, moved = false;
+    //
+    //     const onDown = e => {
+    //         moved = false;
+    //         startX = e.clientX;
+    //         startVal = +el.dataset.value;
+    //         el.classList.add('dragging');
+    //         canvas.setPointerCapture(e.pointerId);
+    //     };
+    //
+    //     const onMove = e => {
+    //         if (startX == null) return;
+    //         moved = true;
+    //         const dx = e.clientX - startX;
+    //         const minVal = +el.dataset.min, maxVal = +el.dataset.max;
+    //         const ticks = JSON.parse(el.dataset.ticks);
+    //         const limit = el.dataset.limitToTicks === 'true';
+    //
+    //         let raw = startVal + (dx / 150) * (maxVal - minVal);
+    //         if (limit && ticks.length) {
+    //             raw = ticks.reduce((p, c) => Math.abs(c - raw) < Math.abs(p - raw) ? c : p, ticks[0]);
+    //         } else {
+    //             raw = Math.round(raw / inc) * inc;
+    //             raw = parseFloat(raw.toFixed(+el.dataset.decimals));
+    //         }
+    //         raw = Math.max(minVal, Math.min(maxVal, raw));
+    //
+    //         el.dataset.value = raw;
+    //         const disp = (inc % 1 === 0) ? raw : raw.toFixed(+el.dataset.decimals);
+    //         el.querySelector('.value').textContent = disp;
+    //         this._drawDial(el);
+    //
+    //         if (cont && raw !== el._last) {
+    //             this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: raw}});
+    //             el._last = raw;
+    //         }
+    //     };
+    //
+    //     const onUp = e => {
+    //         canvas.releasePointerCapture(e.pointerId);
+    //         startX = null;
+    //         const final = +el.dataset.value;
+    //         this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: final}});
+    //
+    //         if (!cont) {
+    //             el.classList.add('accepted');
+    //             el.addEventListener('animationend', () => el.classList.remove('accepted'), {once: true});
+    //         }
+    //         el.classList.remove('dragging');
+    //     };
+    //
+    //     canvas.addEventListener('pointerdown', onDown);
+    //     canvas.addEventListener('pointermove', onMove);
+    //     canvas.addEventListener('pointerup', onUp);
+    //     canvas.addEventListener('pointercancel', onUp);
+    //
+    //     // Click-to-set: only if no drag movement
+    //     canvas.addEventListener('click', e => {
+    //         if (moved) return;
+    //         const v = this._valueFromAngle(el, e);
+    //         el.dataset.value = v;
+    //         const dec = +el.dataset.decimals;
+    //         const disp = (inc % 1 === 0) ? v : v.toFixed(dec);
+    //         el.querySelector('.value').textContent = disp;
+    //         this._drawDial(el);
+    //         this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: v}});
+    //     });
+    // }
     assignListeners(el) {
-        // Initial draw once the element is in the DOM and has its size
+        // initial draw
         requestAnimationFrame(() => {
             const canvas = el.querySelector('canvas');
             const r = canvas.getBoundingClientRect();
@@ -1714,6 +2083,32 @@ export class RotaryDialWidget extends GUI_Object {
         const canvas = el.querySelector('canvas');
         const inc = +el.dataset.increment;
         const cont = el.dataset.continuousUpdates === 'true';
+
+        // Throttle state
+        const maxRate = this.configuration.maxContinuousUpdatesPerSecond;
+        const interval = 1000 / maxRate;
+        let lastSent = 0, trailingTimer = null, trailingValue = null;
+
+        const sendEvent = v => {
+            this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: v}});
+        };
+        const maybeSend = v => {
+            const now = Date.now(), since = now - lastSent;
+            if (since >= interval) {
+                sendEvent(v);
+                lastSent = now;
+            } else {
+                trailingValue = v;
+                if (!trailingTimer) {
+                    trailingTimer = setTimeout(() => {
+                        sendEvent(trailingValue);
+                        lastSent = Date.now();
+                        trailingTimer = null;
+                    }, interval - since);
+                }
+            }
+        };
+
         let startX = null, startVal = null, moved = false;
 
         const onDown = e => {
@@ -1737,26 +2132,30 @@ export class RotaryDialWidget extends GUI_Object {
                 raw = ticks.reduce((p, c) => Math.abs(c - raw) < Math.abs(p - raw) ? c : p, ticks[0]);
             } else {
                 raw = Math.round(raw / inc) * inc;
-                raw = parseFloat(raw.toFixed(+el.dataset.decimals));
+                raw = +raw.toFixed(+el.dataset.decimals);
             }
             raw = Math.max(minVal, Math.min(maxVal, raw));
 
             el.dataset.value = raw;
-            const disp = (inc % 1 === 0) ? raw : raw.toFixed(+el.dataset.decimals);
-            el.querySelector('.value').textContent = disp;
+            el.querySelector('.value').textContent = inc % 1 === 0 ? raw : raw.toFixed(+el.dataset.decimals);
             this._drawDial(el);
 
-            if (cont && raw !== el._last) {
-                this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: raw}});
-                el._last = raw;
-            }
+            if (cont) maybeSend(raw);
         };
 
         const onUp = e => {
             canvas.releasePointerCapture(e.pointerId);
             startX = null;
+
+            // final always
             const final = +el.dataset.value;
-            this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: final}});
+            sendEvent(final);
+
+            // clear trailing
+            if (trailingTimer) {
+                clearTimeout(trailingTimer);
+                trailingTimer = null;
+            }
 
             if (!cont) {
                 el.classList.add('accepted');
@@ -1770,19 +2169,15 @@ export class RotaryDialWidget extends GUI_Object {
         canvas.addEventListener('pointerup', onUp);
         canvas.addEventListener('pointercancel', onUp);
 
-        // Click-to-set: only if no drag movement
         canvas.addEventListener('click', e => {
             if (moved) return;
             const v = this._valueFromAngle(el, e);
             el.dataset.value = v;
-            const dec = +el.dataset.decimals;
-            const disp = (inc % 1 === 0) ? v : v.toFixed(dec);
-            el.querySelector('.value').textContent = disp;
+            el.querySelector('.value').textContent = inc % 1 === 0 ? v : v.toFixed(+el.dataset.decimals);
             this._drawDial(el);
-            this.callbacks.event({id: this.id, event: 'rotary_dial_change', data: {value: v}});
+            sendEvent(v);
         });
     }
-
 }
 
 /* ============================================================================================================== */
@@ -1793,7 +2188,7 @@ export class MultiSelectWidget extends GUI_Object {
         const defaults = {
             visible: true,
             color: "#333",        // or a single color; per-option colors can be specified in options[color]
-            textColor: "#fff",
+            text_color: "#fff",
             title: "",
             options: {},          // { valueKey: { label, color? }, … }
             value: null,          // the selected valueKey
@@ -1865,13 +2260,13 @@ export class MultiSelectWidget extends GUI_Object {
         }
 
         // ── Dataset flags for CSS layout or external styling ─────────────────────────────────────────────────────────
-        container.dataset.titlePosition = c.titlePosition;
+        container.dataset.titlePosition = c.title_position;
         container.dataset.lockable = c.lockable;
         container.dataset.locked = c.locked;
 
         // ── Colors ───────────────────────────────────────────────────────────────────────────────────────────────────
         container.style.backgroundColor = getColor(this._getCurrentColor());
-        container.style.color = getColor(c.textColor);
+        container.style.color = getColor(c.text_color);
 
         // ── Build inner HTML ─────────────────────────────────────────────────────────────────────────────────────────
         let html = "";
@@ -1900,11 +2295,7 @@ export class MultiSelectWidget extends GUI_Object {
             select.appendChild(o);
         });
 
-        if (c.locked) {
-            select.disabled = true;
-        } else {
-            select.disabled = false;
-        }
+        select.disabled = !!c.locked;
 
         // ── Stretch the <select> invisibly to capture clicks ──────────────────────────────────────────────────────────
         Object.assign(select.style, {
@@ -2070,9 +2461,9 @@ export class InputWidget extends GUI_Object {
         const defaults = {
             visible: true,
             color: 'transparent',
-            textColor: '#000',
+            text_color: '#000',
             inputFieldColor: '#fff',
-            inputFieldTextColor: '#000',
+            inputFieldtext_color: '#000',
             inputFieldFontSize: 11,
             inputFieldAlign: 'center',
             title: '',
@@ -2104,14 +2495,14 @@ export class InputWidget extends GUI_Object {
         const c = this.configuration;
         const el = this.element;
 
-        el.dataset.titlePosition = c.titlePosition;
+        el.dataset.titlePosition = c.title_position;
         el.style.display = c.visible ? '' : 'none';
 
         el.style.backgroundColor = getColor(c.color);
-        el.style.color = getColor(c.textColor);
+        el.style.color = getColor(c.text_color);
 
         el.style.setProperty('--ti-field-bg', getColor(c.inputFieldColor));
-        el.style.setProperty('--ti-field-color', getColor(c.inputFieldTextColor));
+        el.style.setProperty('--ti-field-color', getColor(c.inputFieldtext_color));
         const fontSizeVal = typeof c.inputFieldFontSize === 'number'
             ? `${c.inputFieldFontSize}pt`
             : c.inputFieldFontSize;
@@ -2176,11 +2567,11 @@ export class InputWidget extends GUI_Object {
         if (data.inputFieldColor !== undefined) {
             el.style.setProperty('--ti-field-bg', getColor(data.inputFieldColor));
         }
-        if (data.inputFieldTextColor !== undefined) {
-            el.style.setProperty('--ti-field-color', getColor(data.inputFieldTextColor));
+        if (data.inputFieldtext_color !== undefined) {
+            el.style.setProperty('--ti-field-color', getColor(data.inputFieldtext_color));
         }
-        if (data.textColor !== undefined) {
-            el.style.color = getColor(data.textColor);
+        if (data.text_color !== undefined) {
+            el.style.color = getColor(data.text_color);
         }
 
         if (data.inputFieldFontSize !== undefined) {
@@ -2193,8 +2584,8 @@ export class InputWidget extends GUI_Object {
             el.style.setProperty('--ti-input-text-align', this.configuration.inputFieldAlign);
         }
 
-        if (data.titlePosition !== undefined) {
-            el.dataset.titlePosition = this.configuration.titlePosition;
+        if (data.title_position !== undefined) {
+            el.dataset.titlePosition = this.configuration.title_position;
         }
 
         if (data.value !== undefined) {
@@ -2206,7 +2597,7 @@ export class InputWidget extends GUI_Object {
         if (
             data.inputFieldWidth !== undefined ||
             data.inputFieldPosition !== undefined ||
-            data.titlePosition !== undefined
+            data.title_position !== undefined
         ) {
             this.configureElement(this.configuration);
         }
@@ -2337,295 +2728,384 @@ export class InputWidget extends GUI_Object {
 }
 
 
-// ALL BELOW ARE UNFACTORED!
-
-// DigitalNumberWidget
-// =====================================================================================================================
 export class DigitalNumberWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'digital_number'});
-        const d = this.configuration;
+    constructor(id, config = {}) {
+        super(id, config);
         const defaults = {
             title: '',
             visible: true,
             color: '#333',
-            textColor: '#fff',
-            min: 0,
-            max: 100,
+            text_color: '#fff',
+            min_value: 0,
+            max_value: 100,
             value: 0,
             increment: 1,
-            titlePosition: 'top',     // 'top' or 'left'
-            valueColor: null,
-            showUnusedDigits: true
+            title_position: 'top', // 'top' or 'left'
+            value_color: null,
+            show_unused_digits: true
         };
-        this.configuration = {...defaults, ...d};
+        this.configuration = {...defaults, ...this.configuration};
+
+        // Create and configure the root element
+        this.element = document.createElement('div');
+        this.element.id = this.id;
+        this.element.classList.add('gridItem', 'digitalNumberWidget');
+
+        this.configureElement(this.configuration);
+        this.assignListeners(this.element);
+        this.setValue(this.configuration.value);
     }
 
-    /* ============================================================================================================== */
-    getElement() {
+    configureElement(config = {}) {
+        super.configureElement(config);
         const c = this.configuration;
-        const el = document.createElement('div');
-        el.id = this.id;
-        el.classList.add('gridItem', 'digitalNumberWidget');
-        el.dataset.titlePosition = c.titlePosition;
-        if (!c.visible) el.style.display = 'none';
-        el.style.backgroundColor = c.color;
-        el.style.color = c.textColor;
+        const el = this.element;
 
-        // compute decimals & maxLen (including sign if any)
+        // Visibility and basic styling
+        el.dataset.titlePosition = c.title_position;
+        el.style.display = c.visible ? '' : 'none';
+        el.style.backgroundColor = getColor(c.color);
+        el.style.color = getColor(c.text_color);
+
+        // Compute increments and lengths
         const inc = +c.increment;
         const decimals = Math.max(0, (inc.toString().split('.')[1] || '').length);
-        const minStr = Number(c.min).toFixed(decimals);
-        const maxStr = Number(c.max).toFixed(decimals);
+        const minStr = Number(c.min_value).toFixed(decimals);
+        const maxStr = Number(c.max_value).toFixed(decimals);
         const maxLen = Math.max(minStr.length, maxStr.length);
+        const numericMaxLen = c.min_value < 0 ? maxLen - 1 : maxLen;
 
-        // numeric width excludes a minus if min<0
-        const numericMaxLen = (c.min < 0) ? maxLen - 1 : maxLen;
-
-        // store metadata
+        // Store metadata
         el.dataset.increment = inc;
         el.dataset.decimals = decimals;
         el.dataset.maxLength = maxLen;
         el.dataset.numericMaxLength = numericMaxLen;
 
-        // base font‐size
+        // Determine base font size
         let baseFs = Math.max(12, 30 - 2 * maxLen);
-        if (c.titlePosition === 'left') baseFs += 4;
 
-        // format (with optional zero padding)
+        // if (c.title_position === 'left') baseFs += 4;
+
+        // Formatter for the numeric display
         const formatInner = raw => {
             const s = decimals === 0 ? parseInt(raw, 10).toString() : Number(raw).toFixed(decimals);
-            if (!c.showUnusedDigits) return s;
-            // split sign from digits
+            if (!c.show_unused_digits) return s;
             const sign = s[0] === '-' ? '-' : '';
             const digits = sign ? s.slice(1) : s;
             const pad = numericMaxLen - digits.length;
             const zeros = pad > 0 ? '0'.repeat(pad) : '';
-            return sign + `<span class="leadingZero">${zeros}</span>${digits}`;
+            return sign + `<span class=\"leadingZero\">${zeros}</span>${digits}`;
         };
 
+        // Build inner HTML
         const initialRaw = Math.round(c.value / inc) * inc;
         const inner = formatInner(initialRaw);
-
-        // valueColor or fallback
-        const vc = c.valueColor || c.textColor;
+        const vc = getColor(c.value_color || c.text_color);
 
         el.innerHTML = `
-      <span class="digitalNumberTitle">${c.title}</span>
+      <span class=\"digitalNumberTitle\">${c.title}</span>
       <span
-        class="digitalNumberValue"
-        style="
-          font-size:${baseFs}px;
-          width:${maxLen}ch;
-          color:${vc};
-        ">${inner}
+        class=\"digitalNumberValue\"
+        style=\"font-size:${baseFs}px; width:${maxLen}ch; color:${vc};\">
+        ${inner}
       </span>
     `;
-
-        this.element = el;
-        return el;
     }
 
-    /* ============================================================================================================== */
+    getElement() {
+        return this.element;
+    }
+
     update(data) {
         if (data.value == null) return;
+        this.setValue(data.value);
+    }
+
+    /**
+     * Discrete setter for direct backend calls
+     */
+    setValue(rawValue) {
+        const c = this.configuration;
         const el = this.element;
         const inc = +el.dataset.increment;
-        const dec = +el.dataset.decimals;
-        // const maxLen = +el.dataset.maxLength;
-        const numericMaxLen = +el.dataset.numericMaxLength;
-        const c = this.configuration;
+        const decimals = +el.dataset.decimals;
 
-        let raw = Math.round(data.value / inc) * inc;
-        const s = dec === 0 ? parseInt(String(raw), 10).toString() : Number(raw).toFixed(dec);
+        // Snap and clamp
+        let raw = Math.round(rawValue / inc) * inc;
+        // raw = Math.max(c.min, Math.min(c.max, raw));
 
+        // Format string
+        const s = decimals === 0 ? parseInt(raw, 10).toString() : Number(raw).toFixed(decimals);
         let html;
-        if (!c.showUnusedDigits) {
+        if (!c.show_unused_digits) {
             html = s;
         } else {
             const sign = s[0] === '-' ? '-' : '';
             const digits = sign ? s.slice(1) : s;
-            const pad = numericMaxLen - digits.length;
+            const pad = (+el.dataset.numericMaxLength) - digits.length;
             const zeros = pad > 0 ? '0'.repeat(pad) : '';
-            html = sign + `<span class="leadingZero">${zeros}</span>${digits}`;
+            html = sign + `<span class=\"leadingZero\">${zeros}</span>${digits}`;
         }
 
-        el.querySelector('.digitalNumberValue').innerHTML = html;
+        // Update state & DOM
+        this.configuration.value = raw;
+        const valueEl = el.querySelector('.digitalNumberValue');
+        if (valueEl) {
+            valueEl.innerHTML = html;
+        }
     }
 
-    /* ============================================================================================================== */
-    assignListeners() {
-        // display‐only
+    assignListeners(el) {
+        // display-only, no user interactions
     }
 }
 
 /* ============================================================================================================== */
-/* ============================================================================================================== */
-
+// ALL BELOW ARE UNREFACTORED!
 /* ============================================================================================================== */
 export class TextWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'text'});
-        const d = this.configuration;
+    constructor(id, config = {}) {
+        super(id, config);
+        const defaults = {
+            visible: true,
+            color: "transparent",
+            text_color: "#000",
+            title: "",
+            title_horizontal_alignment: "center", // 'left' | 'center' | 'right'
+            text: "",
+            font_size: 12,                         // px
+            font_family: "inherit",
+            vertical_alignment: "center",          // 'top' | 'center' | 'bottom'
+            horizontal_alignment: "center",        // 'left' | 'center' | 'right'
+            font_weight: "normal",
+            font_style: "normal",
+        };
+        this.configuration = {...defaults, ...this.configuration};
+
+        // -- build elements
+        this.element = document.createElement("div");
+        this.element.id = this.id;
+        this.element.classList.add("gridItem", "textWidget");
+
+        this.titleElement = document.createElement("div");
+        this.titleElement.classList.add("textTitle");
+        this.element.appendChild(this.titleElement);
+
+        this.contentElement = document.createElement("div");
+        this.contentElement.classList.add("textContent");
+        this.element.appendChild(this.contentElement);
+
+        this.configureElement(this.configuration);
+    }
+
+    configureElement() {
+        super.configureElement();
+        const c = this.configuration;
+        const el = this.element;
+
+        // ── Container (background + visibility + vertical align) ─────────────────────
+        el.style.display = c.visible ? "" : "none";
+        el.style.backgroundColor = getColor(c.color);
+        el.style.display = "flex";
+        el.style.flexDirection = "column";
+        el.style.justifyContent = {
+            top: "flex-start",
+            center: "center",
+            bottom: "flex-end",
+        }[c.vertical_alignment];
+        el.style.alignItems = "stretch";
+
+        // ── Title (always 12px bold via your CSS, but horizontal‐align via config) ────
+        if (c.title) {
+            this.titleElement.style.display = "block";
+            this.titleElement.textContent = c.title;
+            this.titleElement.style.textAlign = c.title_horizontal_alignment;
+        } else {
+            this.titleElement.style.display = "none";
+        }
+
+        // ── Content (all text styling from config, and width=100% so text-align works) ─
+        Object.assign(this.contentElement.style, {
+            color: getColor(c.text_color),
+            fontSize: `${c.font_size}pt`,
+            fontFamily: c.font_family,
+            fontWeight: c.font_weight,
+            fontStyle: c.font_style,
+            width: "100%",
+            textAlign: c.horizontal_alignment,
+        });
+        this.contentElement.innerHTML = c.text;
+    }
+
+    update(data) {
+        Object.assign(this.configuration, data);
+        this.configureElement();
+    }
+
+    setText(text) {
+        this.configuration.text = text;
+        this.contentElement.innerHTML = text;
+    }
+
+    assignListeners() {
+        // no interactive behavior
+    }
+
+    getElement() {
+        return this.element;
+    }
+}
+
+/* ============================================================================================================== */
+// export class StatusWidget extends GUI_Object {
+//     constructor(opts) {
+//         super({...opts, type: 'status'});
+//         const defaults = {
+//             visible: true, color: 'transparent', text_color: '#000', items: [],                   // [{ markerColor, name, nameColor, status, statusColor }, …]
+//             nameLength: null,            // number (ch) or null
+//             fontSize: '1em'              // new: base font size
+//         };
+//         this.configuration = {...defaults, ...this.configuration};
+//     }
+//
+//     getElement() {
+//         const c = this.configuration;
+//         const container = document.createElement('div');
+//         container.id = this.id;
+//         container.classList.add('gridItem', 'statusWidget');
+//         if (!c.visible) container.style.display = 'none';
+//         container.style.backgroundColor = c.color;
+//         container.style.color = c.text_color;
+//         container.style.fontSize = c.fontSize;      // apply fontSize
+//
+//         this._buildTable(container);
+//         this.element = container;
+//         return container;
+//     }
+//
+//     _buildTable(container) {
+//         const {items, nameLength} = this.configuration;
+//         container.innerHTML = '';
+//         const table = document.createElement('table');
+//         const tbody = document.createElement('tbody');
+//         table.appendChild(tbody);
+//
+//         if (items.length) {
+//             const rowHeight = 100 / items.length + '%';
+//             items.forEach(it => {
+//                 const tr = document.createElement('tr');
+//                 tr.style.height = rowHeight;
+//
+//                 const tdM = document.createElement('td');
+//                 const mark = document.createElement('div');
+//                 mark.classList.add('statusMarker');
+//                 mark.style.backgroundColor = it.markerColor || '#fff';
+//                 tdM.appendChild(mark);
+//
+//                 const tdN = document.createElement('td');
+//                 tdN.textContent = it.name;
+//                 if (it.nameColor) tdN.style.color = it.nameColor;
+//                 if (nameLength != null) tdN.style.width = `${nameLength}ch`;
+//
+//                 const tdS = document.createElement('td');
+//                 tdS.textContent = it.status;
+//                 if (it.statusColor) tdS.style.color = it.statusColor;
+//
+//                 tr.append(tdM, tdN, tdS);
+//                 tbody.appendChild(tr);
+//             });
+//         }
+//
+//         container.appendChild(table);
+//     }
+//
+//     update(data) {
+//         // merge global settings
+//         if (data.color) this.configuration.color = data.color;
+//         if (data.text_color) this.configuration.text_color = data.text_color;
+//         if (data.fontSize) this.configuration.fontSize = data.fontSize;
+//         if (data.nameLength !== undefined) this.configuration.nameLength = data.nameLength;
+//
+//         // item array or single‐item update
+//         if (data.items) {
+//             this.configuration.items = data.items;
+//         } else if (data.updatedItem) {
+//             const {index, ...fields} = data.updatedItem;
+//             Object.assign(this.configuration.items[index], fields);
+//         }
+//
+//         // restyle
+//         const el = this.element;
+//         el.style.backgroundColor = this.configuration.color;
+//         el.style.color = this.configuration.text_color;
+//         el.style.fontSize = this.configuration.fontSize;
+//
+//         // rebuild
+//         this._buildTable(el);
+//     }
+//
+//     assignListeners() {
+//         // no interactions
+//     }
+// }
+
+export class StatusWidget extends GUI_Object {
+    constructor(id, config = {}) {
+        super(id, config);
         const defaults = {
             visible: true,
             color: 'transparent',
             textColor: '#000',
-            title: '',
-            text: '',
-            fontSize: '1em',
-            fontFamily: 'inherit',
-            verticalAlignment: 'center',   // top | center | bottom
-            horizontalAlignment: 'center', // left | center | right
-            fontWeight: 'normal',
-            fontStyle: 'normal',
-        };
-        this.configuration = {...defaults, ...d};
-    }
-
-    /* ============================================================================================================== */
-    getElement() {
-        const c = this.configuration;
-        const el = document.createElement('div');
-        el.id = this.id;
-        el.classList.add('gridItem', 'textWidget');
-        if (!c.visible) el.style.display = 'none';
-
-        // container‐level styling
-        el.style.backgroundColor = c.color;
-        el.style.color = c.textColor;
-        el.style.fontSize = c.fontSize;
-        el.style.fontFamily = c.fontFamily;
-        el.style.fontWeight = c.fontWeight;
-        el.style.fontStyle = c.fontStyle;
-
-        // flex to align content
-        el.style.display = 'flex';
-        el.style.flexDirection = 'column';
-        // vertical
-        el.style.justifyContent = {
-            top: 'flex-start', center: 'center', bottom: 'flex-end'
-        }[c.verticalAlignment] || 'center';
-        // horizontal
-        el.style.alignItems = {
-            left: 'flex-start', center: 'center', right: 'flex-end'
-        }[c.horizontalAlignment] || 'center';
-
-        // build inner HTML (title and formatted text)
-        let html = '';
-        if (c.title) {
-            html += `<span class="textTitle">${c.title}</span>`;
-        }
-        html += `<div class="textContent">${c.text}</div>`;
-
-        el.innerHTML = html;
-        this.element = el;
-        return el;
-    }
-
-    /* ============================================================================================================== */
-    update(data) {
-        // merge in new properties
-        Object.assign(this.configuration, data);
-        const c = this.configuration;
-        const el = this.element;
-        if (!el) return;
-
-        // visibility
-        el.style.display = c.visible ? '' : 'none';
-        // styling
-        el.style.backgroundColor = c.color;
-        el.style.color = c.textColor;
-        el.style.fontSize = c.fontSize;
-        el.style.fontFamily = c.fontFamily;
-        el.style.fontWeight = c.fontWeight;
-        el.style.fontStyle = c.fontStyle;
-        el.style.justifyContent = {
-            top: 'flex-start', center: 'center', bottom: 'flex-end'
-        }[c.verticalAlignment] || 'center';
-        el.style.alignItems = {
-            left: 'flex-start', center: 'center', right: 'flex-end'
-        }[c.horizontalAlignment] || 'center';
-
-        // content
-        const titleEl = el.querySelector('.textTitle');
-        if (c.title) {
-            if (titleEl) titleEl.textContent = c.title; else {
-                const span = document.createElement('span');
-                span.className = 'textTitle';
-                span.textContent = c.title;
-                el.insertBefore(span, el.firstChild);
-            }
-        } else if (titleEl) {
-            titleEl.remove();
-        }
-
-        const contentEl = el.querySelector('.textContent');
-        contentEl.innerHTML = c.text;
-    }
-
-    /* ============================================================================================================== */
-    assignListeners() {
-        // no interactions
-    }
-}
-
-/* ============================================================================================================== */
-/* ============================================================================================================== */
-
-/* ============================================================================================================== */
-
-
-export class StatusWidget extends GUI_Object {
-    constructor(opts) {
-        super({...opts, type: 'status'});
-        const defaults = {
-            visible: true, color: 'transparent', textColor: '#000', items: [],                   // [{ markerColor, name, nameColor, status, statusColor }, …]
-            nameLength: null,            // number (ch) or null
-            fontSize: '1em'              // new: base font size
+            items: [],  // [{ markerColor, name, nameColor, status, statusColor }, …]
+            nameLength: null,
+            fontSize: '1em'
         };
         this.configuration = {...defaults, ...this.configuration};
+
+        this.element = document.createElement('div');
+        this.element.id = this.id;
+        this.element.classList.add('gridItem', 'statusWidget');
+
+        this.configureElement(this.configuration);
     }
 
-    getElement() {
+    configureElement(config = {}) {
+        super.configureElement(config);
         const c = this.configuration;
-        const container = document.createElement('div');
-        container.id = this.id;
-        container.classList.add('gridItem', 'statusWidget');
-        if (!c.visible) container.style.display = 'none';
-        container.style.backgroundColor = c.color;
-        container.style.color = c.textColor;
-        container.style.fontSize = c.fontSize;      // apply fontSize
+        const el = this.element;
 
-        this._buildTable(container);
-        this.element = container;
-        return container;
-    }
+        // Visibility & styling
+        el.style.display = c.visible ? '' : 'none';
+        el.style.backgroundColor = getColor(c.color);
+        el.style.color = getColor(c.textColor);
+        el.style.fontSize = c.font_size;
 
-    _buildTable(container) {
-        const {items, nameLength} = this.configuration;
-        container.innerHTML = '';
+        // Build table
+        el.innerHTML = '';
         const table = document.createElement('table');
         const tbody = document.createElement('tbody');
         table.appendChild(tbody);
 
-        if (items.length) {
-            const rowHeight = 100 / items.length + '%';
-            items.forEach(it => {
+        if (Array.isArray(c.items) && c.items.length) {
+            const rowHeight = 100 / c.items.length + '%';
+            c.items.forEach(it => {
                 const tr = document.createElement('tr');
                 tr.style.height = rowHeight;
 
+                // Marker
                 const tdM = document.createElement('td');
                 const mark = document.createElement('div');
                 mark.classList.add('statusMarker');
-                mark.style.backgroundColor = it.markerColor || '#fff';
+                if (it.markerColor) mark.style.backgroundColor = it.markerColor;
                 tdM.appendChild(mark);
 
+                // Name
                 const tdN = document.createElement('td');
                 tdN.textContent = it.name;
                 if (it.nameColor) tdN.style.color = it.nameColor;
-                if (nameLength != null) tdN.style.width = `${nameLength}ch`;
+                if (c.nameLength != null) tdN.style.width = `${c.nameLength}ch`;
 
+                // Status
                 const tdS = document.createElement('td');
                 tdS.textContent = it.status;
                 if (it.statusColor) tdS.style.color = it.statusColor;
@@ -2635,37 +3115,38 @@ export class StatusWidget extends GUI_Object {
             });
         }
 
-        container.appendChild(table);
+        el.appendChild(table);
     }
 
     update(data) {
-        // merge global settings
-        if (data.color) this.configuration.color = data.color;
-        if (data.textColor) this.configuration.textColor = data.textColor;
-        if (data.fontSize) this.configuration.fontSize = data.fontSize;
-        if (data.nameLength !== undefined) this.configuration.nameLength = data.nameLength;
+        this.configuration = {...this.configuration, ...data};
+        this.configureElement(this.configuration);
+    }
 
-        // item array or single‐item update
-        if (data.items) {
-            this.configuration.items = data.items;
-        } else if (data.updatedItem) {
-            const {index, ...fields} = data.updatedItem;
-            Object.assign(this.configuration.items[index], fields);
-        }
-
-        // restyle
-        const el = this.element;
-        el.style.backgroundColor = this.configuration.color;
-        el.style.color = this.configuration.textColor;
-        el.style.fontSize = this.configuration.fontSize;
-
-        // rebuild
-        this._buildTable(el);
+    /**
+     * Update a single status row. Only non-null args are applied.
+     */
+    setStatus(index, label, color, text) {
+        const items = this.configuration.items;
+        if (index < 0 || index >= items.length) return;
+        const it = items[index];
+        if (label != null) it.name = label;
+        if (color != null) it.statusColor = color;
+        if (text != null) it.status = text;
+        this.configureElement(this.configuration);
     }
 
     assignListeners() {
-        // no interactions
+        // No interactions
     }
+    onMessage(message) {
+        super.onMessage(message);
+    }
+
+    getElement() {
+        return this.element;
+    }
+
 }
 
 // === TABLE WIDGET ===================================================================
@@ -2674,8 +3155,8 @@ export class TableWidget extends GUI_Object {
         super({...opts, type: 'table'});
         const d = this.configuration;
         const defaults = {
-            columns: [],                // { id, name, width?, fontSize?, textColor?, columnColor?,
-                                        //   headerFontSize?, headerColor?, headerTextColor? }
+            columns: [],                // { id, name, width?, fontSize?, text_color?, columnColor?,
+                                        //   headerFontSize?, headerColor?, headertext_color? }
             showHeader: true, fit: true,                  // true = no scroll; false = vertical scroll
             lineWidth: 1,               // px; 0 = no lines
             lineColor: '#ccc', cellColor: 'transparent',   // default cell bg
@@ -2685,9 +3166,9 @@ export class TableWidget extends GUI_Object {
             fontSize: '1em',            // default cell font-size
             headerFontSize: '1em',      // default header font-size
             color: 'transparent',       // widget background
-            textColor: '#000',          // default cell text color
+            text_color: '#000',          // default cell text color
             headerColor: '#f5f5f5',     // default header bg
-            headerTextColor: '#000'     // default header text color
+            headertext_color: '#000'     // default header text color
         };
         this.configuration = {...defaults, ...d};
     }
@@ -2700,8 +3181,8 @@ export class TableWidget extends GUI_Object {
         // widget styling
         container.style.backgroundColor = c.color;
         container.style.overflowY = c.fit ? 'hidden' : 'auto';
-        container.style.fontSize = c.fontSize;
-        container.style.color = c.textColor;
+        container.style.fontSize = c.font_size;
+        container.style.color = c.text_color;
 
         const track = c.scrollbarTrackColor || c.color;
         const thumb = c.scrollbarThumbColor || shadeColor(c.color, -10);
@@ -2734,7 +3215,7 @@ export class TableWidget extends GUI_Object {
                 th.style.fontSize = col.headerFontSize || c.headerFontSize;
                 // header bg & text-color: column override or global
                 th.style.backgroundColor = col.headerColor || c.headerColor;
-                th.style.color = col.headerTextColor || c.headerTextColor;
+                th.style.color = col.headertext_color || c.headertext_color;
                 this._styleCellBorder(th);
                 tr.appendChild(th);
             });
@@ -2761,9 +3242,9 @@ export class TableWidget extends GUI_Object {
             // cell background: column override or global
             td.style.backgroundColor = col.columnColor || c.cellColor;
             // font-size: column override or global
-            td.style.fontSize = col.fontSize || c.fontSize;
+            td.style.fontSize = col.font_size || c.font_size;
             // text color: column override or global
-            td.style.color = col.textColor || c.textColor;
+            td.style.color = col.text_color || c.text_color;
             this._styleCellBorder(td);
             tr.appendChild(td);
         });

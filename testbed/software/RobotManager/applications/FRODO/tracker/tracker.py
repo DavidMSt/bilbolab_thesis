@@ -1,3 +1,4 @@
+import copy
 import time
 
 from applications.FRODO.tracker.assets import TrackedAsset, vision_robot_application_assets
@@ -47,10 +48,11 @@ class Tracker:
         Initializes the Tracker instance.
         :param assets: Dictionary of assets to be tracked, default is vision_robot_application_assets.
         """
-        self.assets = assets
-        self.optitrack = OptiTrack(server_address="192.168.8.248")  # Initialize OptiTrack with server address
 
-        self.optitrack.logger.switchLoggingLevel('INFO','DEBUG')
+        self.assets = assets
+        self.optitrack = OptiTrack(server_address="192.168.8.131")  # Initialize OptiTrack with server address
+
+        self.optitrack.logger.switchLoggingLevel('INFO', 'DEBUG')
         self.optitrack.logger.setLevel('DEBUG')
 
         self.tracked_assets = {}
@@ -139,6 +141,3 @@ if __name__ == '__main__':
     tracker = Tracker()
     tracker.init()
     tracker.start()
-
-    while True:
-        time.sleep(1)  # Keep the script running

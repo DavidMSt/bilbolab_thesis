@@ -1,5 +1,8 @@
 import random
+from typing import Union, Tuple
+
 import seaborn as sns
+import matplotlib.colors as mcolors
 
 
 BLACK = (0, 0, 0)
@@ -92,18 +95,19 @@ def random_color(len=3):
 #    You can of course override the size every time you call get_palette().
 
 _PREDEFINED_PALETTES = {
-    "muted":        sns.color_palette("muted"),        # ~8 colors
-    "pastel":       sns.color_palette("pastel"),       # ~8 colors
-    "dark":         sns.color_palette("dark"),         # ~8 colors
-    "bright":       sns.color_palette("bright"),       # ~8 colors
-    "colorblind":   sns.color_palette("colorblind"),   # ~8 colors
-    "deep":         sns.color_palette("deep"),         # ~8 colors
+    "muted": sns.color_palette("muted"),  # ~8 colors
+    "pastel": sns.color_palette("pastel"),  # ~8 colors
+    "dark": sns.color_palette("dark"),  # ~8 colors
+    "bright": sns.color_palette("bright"),  # ~8 colors
+    "colorblind": sns.color_palette("colorblind"),  # ~8 colors
+    "deep": sns.color_palette("deep"),  # ~8 colors
     # ... you can add more, e.g.:
     # "cubehelix":    sns.color_palette("cubehelix", 8),
     # "viridis":      sns.color_palette("viridis",   8),
     # "inferno":      sns.color_palette("inferno",   8),
     # "cividis":      sns.color_palette("cividis",   8),
 }
+
 
 def get_palette(name, n_colors=8):
     """
@@ -118,6 +122,7 @@ def get_palette(name, n_colors=8):
     # Seaborn will automatically cycle/ interpolate if you ask for > base size.
     return sns.color_palette(name, n_colors)
 
+
 def get_palette_hex(name, n_colors=8):
     """
     Same as get_palette(), but each color is converted to a hex string "#RRGGBB".
@@ -125,6 +130,7 @@ def get_palette_hex(name, n_colors=8):
     float_list = get_palette(name, n_colors)
     # rgb_to_hex expects a list [r,g,b] in floats 0..1
     return [rgb_to_hex(color) for color in float_list]
+
 
 def random_color_from_palette(name):
     """
@@ -135,6 +141,7 @@ def random_color_from_palette(name):
         raise KeyError(f"Palette '{name}' is not defined.")
     return random.choice(base)
 
+
 def random_color_from_palette_hex(name):
     """
     Return one random color from the named palette, as "#RRGGBB".
@@ -142,4 +149,29 @@ def random_color_from_palette_hex(name):
     c = random_color_from_palette(name)
     return rgb_to_hex(c)
 
-# ── END OF NEW ADDITIONS ─────────────────────────────────────────────────────
+
+def get_shaded_color(base_color: str | tuple[float, float, float] | list[float],
+                     total_steps: int,
+                     index: int) -> tuple:
+    """
+    Return an RGBA color with increasing alpha (transparency) based on index.
+
+    Args:
+        base_color (str | list | tuple): Base color (name, hex, or RGB [0-1]).
+        total_steps (int): Total number of curves.
+        index (int): Current index (0-based).
+
+    Returns:
+        tuple: RGBA color (r, g, b, a)
+    """
+    if isinstance(base_color, (list, tuple)):
+        rgb = tuple(base_color)
+    else:
+        rgb = mcolors.to_rgb(base_color)
+
+    if total_steps <= 1:
+        alpha = 1.0
+    else:
+        alpha = 0.2 + 0.8 * index / (total_steps - 1)  # from 0.2 to 1.0
+
+    return (*rgb, alpha)

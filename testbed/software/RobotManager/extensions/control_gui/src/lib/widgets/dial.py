@@ -35,7 +35,7 @@ class RotaryDialWidget(GUI_Object):
             'visible': True,
             'color': '#333',
             'dialColor': '#3399FF',
-            'textColor': '#fff',
+            'text_color': '#fff',
             'ticks': [],  # List[float]
             'continuousUpdates': False,
             'limitToTicks': False,
@@ -103,20 +103,11 @@ class RotaryDialWidget(GUI_Object):
         Return a dictionary of parameters needed by the front-end to render/update the rotary dial.
         """
         return {
-            'title': self.config['title'],
-            'titlePosition': self.config['titlePosition'],
-            'visible': self.config['visible'],
-            'color': self.config['color'],
-            'dialColor': self.config['dialColor'],
-            'textColor': self.config['textColor'],
             'min': self.min_value,
             'max': self.max_value,
             'value': self.value,
-            'ticks': self.config['ticks'],
             'increment': self.increment,
-            'continuousUpdates': self.config['continuousUpdates'],
-            'limitToTicks': self.config['limitToTicks'],
-            'dialWidth': self.config['dialWidth'],
+            **self.config
         }
 
     # ------------------------------------------------------------------------------------------------------------------

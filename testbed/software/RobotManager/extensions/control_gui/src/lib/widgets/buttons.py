@@ -34,7 +34,7 @@ class Button(GUI_Object):
         default_config = {
             'text': '',
             'color': [0.2, 0.2, 0.2],
-            'textColor': [1, 1, 1, 0.8],
+            'text_color': [1, 1, 1, 0.8],
             'fontSize': 12,
         }
 
@@ -50,7 +50,7 @@ class Button(GUI_Object):
     def getConfiguration(self) -> dict:
         config = {
             'type': self.type,
-            'id': self.uid,
+            'id': self.id,
             **self.config,
         }
 
@@ -63,19 +63,19 @@ class Button(GUI_Object):
     # ------------------------------------------------------------------------------------------------------------------
     def onMessage(self, message) -> Any:
         if message['event'] == 'click':
-            self.logger.debug(f"Button {self.uid} clicked")
+            self.logger.debug(f"Button {self.id} clicked")
             for callback in self.callbacks.click:
                 callback(button=self)
         elif message['event'] == 'doubleClick':
-            self.logger.debug(f"Button {self.uid} double clicked")
+            self.logger.debug(f"Button {self.id} double clicked")
             for callback in self.callbacks.doubleClick:
                 callback(button=self)
         elif message['event'] == 'longClick':
-            self.logger.debug(f"Button {self.uid} long clicked")
+            self.logger.debug(f"Button {self.id} long clicked")
             for callback in self.callbacks.longClick:
                 callback(button=self)
         elif message['event'] == 'rightClick':
-            self.logger.debug(f"Button {self.uid} right clicked")
+            self.logger.debug(f"Button {self.id} right clicked")
             for callback in self.callbacks.rightClick:
                 callback(button=self)
 
@@ -184,7 +184,7 @@ class MultiStateButton(GUI_Object):
     def getConfiguration(self) -> dict:
         configuration = {
             'type': self.type,
-            'id': self.uid,
+            'id': self.id,
             'states': self.states,
             'state': self.state,
             'state_index': self.state_index,

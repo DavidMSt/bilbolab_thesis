@@ -17,7 +17,8 @@ config_bilbo_normal = BILBO_ControlConfig(
     ),
     external_inputs=ExternalInputsConfig(
         balancing_input_gain={
-            'forward': 0.3,
+            'forward': 0.4,
+
             'turn': 0.15
         },
         speed_input_gain={
@@ -38,9 +39,9 @@ config_bilbo_normal = BILBO_ControlConfig(
         ),
         vic=VIC_Config(
             enabled=True,
-            ki=0.1,
+            ki=0.2,
             max_error=0.3,
-            v_limit=0.05
+            v_limit=0.1
         )
     ),
 )
@@ -188,4 +189,8 @@ def generate_default_config(model: str):
 
 
 if __name__ == '__main__':
-    generate_default_config('hhi')
+    generate_default_config('normal')
+
+
+
+

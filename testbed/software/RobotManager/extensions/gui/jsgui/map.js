@@ -1131,7 +1131,7 @@ export function createGridMap(mapContainer, canvas, options) {
         right: '5px',
         zIndex: '1000',
         padding: '4px 8px',
-        fontSize: '12px',
+        font_size: '12px',
         cursor: 'pointer',
         opacity: '0.8',
         userSelect: 'none',
@@ -1147,7 +1147,7 @@ export function createGridMap(mapContainer, canvas, options) {
         right: '5px',
         zIndex: '1000',
         padding: '4px 8px',
-        fontSize: '12px',
+        font_size: '12px',
         cursor: 'pointer',
         opacity: '0.8',
         userSelect: 'none',
@@ -1196,7 +1196,7 @@ export function createGridMap(mapContainer, canvas, options) {
         // backgroundColor: 'rgba(255, 255, 255, 0.7)',
         backgroundColor: 'rgba(65,220,129,0.31)',
         padding: '4px 30px',
-        fontSize: '12px',
+        font_size: '12px',
         display: 'none',
         zIndex: '1001',
         boxSizing: 'border-box',
@@ -1457,7 +1457,7 @@ export function createGridMap(mapContainer, canvas, options) {
             Object.assign(showAllBtn.style, {
                 marginLeft: 'auto',
                 padding: '2px 6px',
-                fontSize: '10px',
+                font_size: '10px',
                 cursor: 'pointer'
             });
             showAllBtn.addEventListener('click', e => {

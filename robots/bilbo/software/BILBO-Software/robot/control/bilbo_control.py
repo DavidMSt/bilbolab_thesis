@@ -406,8 +406,8 @@ class BILBO_Control:
         assert isinstance(right, float)
 
         if self.mode == BILBO_Control_Mode.BALANCING:
-            left = left + self.config.general.torque_offset[0]
-            right = right + self.config.general.torque_offset[1]
+            left = left + self.config.general.torque_offset['left']
+            right = right + self.config.general.torque_offset['right']
 
             self.external_input.balancing.u_left = left
             self.external_input.balancing.u_right = right

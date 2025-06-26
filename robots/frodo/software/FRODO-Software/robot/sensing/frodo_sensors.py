@@ -126,9 +126,8 @@ class FRODO_Sensors:
     # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
     def _dummy_uncertainty(tvec, psi):
-        norm = math.sqrt(tvec[0]**2 + tvec[1]**2)
-        return 2*norm, 2*psi
-
+        norm = math.sqrt(tvec[0] ** 2 + tvec[1] ** 2)
+        return 2 * norm, 2 * psi
 
     # ------------------------------------------------------------------------------------------------------------------
     def _arucoMeasurement_callback(self, measurements, *args, **kwargs):

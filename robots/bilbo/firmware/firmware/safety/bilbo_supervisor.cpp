@@ -136,8 +136,8 @@ void TWIPR_Supervisor::checkMotorSpeed() {
 	}
 
 	bilbo_drive_speed_t speed = this->config.drive->getSpeed();
-	if (abs(speed.left) > this->config.max_wheel_speed
-			|| abs(speed.right) > this->config.max_wheel_speed) {
+	if (std::fabs(speed.left) > this->config.max_wheel_speed
+			|| std::fabs(speed.right) > this->config.max_wheel_speed) {
 
 		// Stop the controller
 		this->config.control->stop();

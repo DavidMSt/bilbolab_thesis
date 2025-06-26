@@ -1,14 +1,21 @@
 import dataclasses
 import math
+import pickle
+
 import numpy as np
 
+from core.utils.colors import get_shaded_color
 # === CUSTOM PACKAGES ==================================================================================================
 from robots.bilbo.robot.bilbo_core import BILBO_Core
-from core.utils.data import generate_time_vector, generate_random_input
+from core.utils.data import generate_time_vector, generate_random_input, resample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_CONTROL_DT, MAX_STEPS_TRAJECTORY
 from core.utils.events import event_definition, ConditionEvent, waitForEvents
 from core.utils.plotting import UpdatablePlot
 from core.utils.sound.sound import speak, playSound
+from core.utils.ilc.ILC_DAMN_bib import noilc_self_para_v2, noilc_design, lift_vec2mat, \
+    plot_bilbo_ilc_progression
+
+from core.utils.ilc.ILC_DAMN_bib import reference as ilc_reference
 
 
 # ======================================================================================================================
@@ -42,7 +49,7 @@ class BILBO_Experiments:
 
     def __init__(self, core: BILBO_Core):
         self.core = core
-        self.id = id
+        self.id = core.id
         self.logger = self.core.logger
         self.device = self.core.device
 
@@ -186,6 +193,8 @@ class BILBO_Experiments:
         return trajectory
 
     # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------
     def startTrajectory(self):
         ...
 
@@ -207,3 +216,138 @@ class BILBO_Experiments:
             speak(f"{self.id}: Trajectory {message.data['trajectory_id']} finished")
 
             self.events.finished.set(resource=message.data, flags={'trajectory_id': message.data['trajectory_id']})
+
+    def runILC(self, num: int = 10):
+        U0_AMPLITUDE = 0.5
+        M0_AMPLITUDE = 0.01
+
+        speak(f"Start Iterative Learing control test")
+
+        reference = ilc_reference
+        N = len(reference)
+
+        dt_original = 0.02
+        t_vector_original = generate_time_vector(start=0, end=(N - 1) * dt_original, dt=dt_original)
+        t_vector_resample = generate_time_vector(start=0, end=(N - 1) * dt_original, dt=BILBO_CONTROL_DT)
+        reference = resample(t_vector_original, reference, t_vector_resample)
+        N = len(reference)
+
+        # IML design function
+        iml_self_para = lambda M: noilc_self_para_v2(M)
+        iml_design_func = lambda M: noilc_design(M, iml_self_para)
+
+        # ILC design function
+        ilc_self_para = lambda M: noilc_self_para_v2(M)
+        ilc_design_func = lambda M: noilc_design(M, ilc_self_para)
+
+        # Allocate return variables
+        e_norm_tracking = []
+        e_norm_prediction = []
+        uv = []
+        yv = []
+        mv = []
+        J = num
+
+        u = U0_AMPLITUDE * np.random.randn(N)
+        m = M0_AMPLITUDE * np.random.randn(N)
+
+
+
+        plot = UpdatablePlot(x_label='time', y_label='theta', xlim=[0, t_vector_resample[-1]])
+        plot.appendPlot(x=t_vector_resample, y=reference, label='Reference', color='black')
+
+        j = 0
+        # Iterate DILC
+        while j < J:
+            self.core.interface_events.resume.wait(timeout=None)
+            playSound('notification')
+            # Run trial / Simulate
+            speak(f"{self.id}: Start trajectory {j + 1} of {J}")
+
+            trajectory = self.generateTrajectory(inputs=u,
+                                                 name=f"Test Trajectory {j}",
+                                                 id=j+1,
+                                                 control_mode=BILBO_Control_Mode.BALANCING)
+
+            data = self.runTrajectory(trajectory=trajectory)
+
+            if data is None:
+                self.logger.error(f"Trajectory {j} failed, skipping ILC iteration")
+                continue
+
+            y = data['output']['lowlevel.estimation.state.theta']
+
+            # Save data
+            uv.append(u)
+            yv.append(y)
+            mv.append(m)
+
+            # IML
+            # Input lifting
+            U = lift_vec2mat(u)
+            # Prediction error
+            ep = y - U.dot(m)
+            # IML Design
+            Lm = iml_design_func(U)
+            # Model update
+            m = m + Lm.dot(ep)
+
+            # ILC
+            # Model lifting
+            M = lift_vec2mat(m)
+            # Tracking error
+            et = reference - y
+            # ILC Design
+            Lt = ilc_design_func(M)
+            # Input update
+            u = u + Lt.dot(et)
+
+            # Save errors
+            e_norm_tracking.append(np.linalg.norm(et))
+            e_norm_prediction.append(np.linalg.norm(ep))
+
+            result = waitForEvents(
+                events=[
+                    self.core.interface_events.resume,
+                    self.core.interface_events.revert
+                ]
+            )
+
+            if result == self.core.interface_events.resume:
+
+                playSound('notification')
+                speak(f"{self.id}: Trajectory {j + 1} saved")
+
+                # Plot results
+                plot.appendPlot(x=t_vector_resample, y=y, label=f"Trajectory {j + 1}",
+                                color=get_shaded_color(base_color='blue', total_steps=J, index=j))
+
+                j += 1
+
+            elif result == self.core.interface_events.revert:
+                ...
+                raise NotImplementedError("Revert functionality not implemented for ILC")
+                # plot.removePlot(last=True)
+                # speak(f"{self.id}: Trajectory {trajectory_id} deleted")
+            else:
+                raise Exception("Unknown event waiting result")
+
+        # datenauswertung
+        # plot_bilbo_ilc_progression(data, yv, e_norm_tracking,
+        #                            e_norm_prediction)  ### data durch tatsaechliche states ersetzen
+
+        speak(f"{self.id}: Finished ILC test")
+
+        data = {
+            'reference': reference,
+            'u': uv,
+            'y': yv,
+            'm': mv,
+            'e_norm_tracking': e_norm_tracking,
+            'e_norm_prediction': e_norm_prediction
+        }
+
+        with open("ilc_data.pkl", "wb") as f:
+            pickle.dump(data, f)
+
+        return 0

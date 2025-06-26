@@ -11,6 +11,7 @@
     --grid-rows: 18;
     --grid-cols: 50;
 
+
     --headbar-rows: 2;
     --headbar-cols: 25;
 
@@ -251,7 +252,7 @@ html, body {
     position: absolute;
     top: 2px;
     right: 2px;
-    font-size: 6pt;
+    font-size: 8pt;
 }
 
 /* ─── States ────────────────────────────────────────────────────────────── */
@@ -274,7 +275,7 @@ html, body {
     background: rgba(40, 40, 50, 1);
     border-radius: 5px;
     /*border: 1px solid rgba(255, 255, 255, 0.8);*/
-    /*filter: brightness(1.2);*/
+    filter: brightness(1.2);
 }
 
 /* 2px vertical separation between category items */
@@ -284,17 +285,33 @@ html, body {
     gap: 2px;
 }
 
-/* small “…” in lower-right when a category has children */
-.category-button .child-indicator {
-    position: absolute;
-    bottom: 4px;
-    right: 6px;
-    font-size: 20px;
-    color: rgba(200, 200, 200, 0.7);
-    pointer-events: none;
+.category-button.has-children .category-button__text {
+    position: relative;
+    padding-left: 0.8em;
 }
 
-/* remove or comment out your existing .category-item.with-line::before { … } */
+.category-button.has-children .category-button__text::before {
+    content: "▶"; /* triangle pointing right */
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%) rotate(0deg);
+    font-size: .6em;
+    opacity: .6;
+    transition: transform .2s ease, opacity .2s ease;
+}
+
+/* when *not* collapsed, point down */
+.category-button.has-children:not(.collapsed) .category-button__text::before {
+    transform: translateY(-50%) rotate(90deg); /* ▼ */
+    opacity: 1;
+}
+
+/* when collapsed, keep it pointing right */
+.category-button.has-children.collapsed .category-button__text::before {
+    transform: translateY(-50%) rotate(0deg);
+    opacity: .6;
+}
 
 /* new connector spans */
 .connector-line {

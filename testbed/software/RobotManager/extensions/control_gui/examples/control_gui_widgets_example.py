@@ -3,11 +3,13 @@ import time
 
 from core.utils.colors import random_color, random_color_from_palette
 from core.utils.time import delayed_execution
-from extensions.control_gui.src.lib.gui import GUI, ControlGUI_Category, ControlGUI_Page
+from extensions.control_gui.src.lib.gui import GUI, Category, Page
 from extensions.control_gui.src.lib.widgets.buttons import Button, MultiStateButton
+from extensions.control_gui.src.lib.widgets.number import DigitalNumberWidget
 from extensions.control_gui.src.lib.widgets.sliders import SliderWidget, ClassicSliderWidget
 from extensions.control_gui.src.lib.widgets.select import MultiSelectWidget
 from extensions.control_gui.src.lib.widgets.dial import RotaryDialWidget
+from extensions.control_gui.src.lib.widgets.text import TextWidget
 from extensions.control_gui.src.lib.widgets.text_input import InputWidget
 from core.utils.network.network import getHostIP
 
@@ -17,35 +19,35 @@ def main():
     app = GUI(id='gui', host=host, ws_port=8102, run_js=True)
 
     # First category
-    category1 = ControlGUI_Category(id='widgets',
-                                    name='Widgets',
-                                    icon='🤖',
-                                    )
+    category1 = Category(id='widgets',
+                         name='Widgets',
+                         icon='🤖',
+                         )
 
     app.addCategory(category1)
 
     # Make the pages
-    page_buttons = ControlGUI_Page(id='buttons',
-                                   name='Buttons',
-                                   )
+    page_buttons = Page(id='buttons',
+                        name='Buttons',
+                        )
 
-    page_inputs = ControlGUI_Page(id='inputs',
-                                  name='Inputs', )
+    page_inputs = Page(id='inputs',
+                       name='Inputs', )
 
-    page_data = ControlGUI_Page(id='data',
-                                name='Data', )
+    page_data = Page(id='data',
+                     name='Data', )
 
-    page_iframe = ControlGUI_Page(id='iframe',
-                                  name='IFrame', )
+    page_iframe = Page(id='iframe',
+                       name='IFrame', )
 
-    page_groups = ControlGUI_Page(id='groups',
-                                  name='Groups', )
+    page_groups = Page(id='groups',
+                       name='Groups', )
 
-    page_visualization = ControlGUI_Page(id='visualization',
-                                         name='Visualization', )
+    page_visualization = Page(id='visualization',
+                              name='Visualization', )
 
-    page_misc = ControlGUI_Page(id='misc',
-                                name='Misc', )
+    page_misc = Page(id='misc',
+                     name='Misc', )
 
     category1.addPage(page_inputs, position=1)
     category1.addPage(page_buttons, position=2)
@@ -55,18 +57,18 @@ def main():
     category1.addPage(page_visualization)
     category1.addPage(page_misc)
 
-    subcat1 = ControlGUI_Category(id='subcat1',
-                                  name='Sub 1', )
+    subcat1 = Category(id='subcat1',
+                       name='Sub 1', )
 
-    subcat1_page1 = ControlGUI_Page(id='subcat1_page1',
-                                    name='Page 1', )
+    subcat1_page1 = Page(id='subcat1_page1',
+                         name='Page 1', )
     subcat1.addPage(subcat1_page1)
     category1.addCategory(subcat1)
 
-    subcat2 = ControlGUI_Category(id='subcat2',
-                                  name='Sub 2', )
-    subcat2_page1 = ControlGUI_Page(id='subcat2_page1',
-                                    name='Page 2', )
+    subcat2 = Category(id='subcat2',
+                       name='Sub 2', )
+    subcat2_page1 = Page(id='subcat2_page1',
+                         name='Page 2', )
     subcat2.addPage(subcat2_page1)
 
     button22 = Button(id='button22', text='Button 22', config={})
@@ -77,10 +79,10 @@ def main():
 
     category1.addCategory(subcat2)
 
-    subcat11 = ControlGUI_Category(id='subcat11',
-                                   name='Sub 11', )
-    subcat11_page1 = ControlGUI_Page(id='subcat11_page1',
-                                     name='Page 1-1', )
+    subcat11 = Category(id='subcat11',
+                        name='Sub 11', )
+    subcat11_page1 = Page(id='subcat11_page1',
+                          name='Page 1-1', )
     subcat11.addPage(subcat11_page1)
     subcat1.addCategory(subcat11)
 
@@ -151,7 +153,7 @@ def main():
                                            value=50,
                                            increment=25,
                                            backgroundColor=random_color_from_palette('dark'),
-                                           titlePosition='left',
+                                           title_position='left',
                                            valuePosition='right')
     page_inputs.addObject(classic_slider_1, width=8, height=1, row=8)
 
@@ -189,7 +191,7 @@ def main():
                                  }
                              },
                              title='Multi-Select',
-                             titlePosition='left',
+                             title_position='left',
                              value='optionA')
 
     page_inputs.addObject(msw2, column=11, row=5, width=7, height=1)
@@ -207,7 +209,7 @@ def main():
                              min_value=0,
                              max_value=1,
                              increment=0.05,
-                             titlePosition='left',
+                             title_position='left',
                              value=0.5,
                              continuousUpdates=True,
                              dialColor=random_color_from_palette('pastel'),
@@ -221,7 +223,7 @@ def main():
 
     text_input_2 = InputWidget(widget_id='text_input_2',
                                title='Test:',
-                               titlePosition='left',
+                               title_position='left',
                                color=random_color_from_palette('dark'),
                                datatype='int',
                                value=13,
@@ -232,7 +234,7 @@ def main():
 
     text_input_3 = InputWidget(widget_id='text_input_3',
                                title='Input 1:',
-                               titlePosition='left',
+                               title_position='left',
                                inputFieldWidth="100px",
                                inputFieldPosition="right", )
 
@@ -240,7 +242,7 @@ def main():
 
     text_input_4 = InputWidget(widget_id='text_input_4',
                                title='Input 2:',
-                               titlePosition='left',
+                               title_position='left',
                                inputFieldWidth="100px",
                                inputFieldPosition="right",
                                color=random_color_from_palette('dark'), )
@@ -248,36 +250,45 @@ def main():
     page_inputs.addObject(text_input_4, row=11, column=27, width=8, height=1)
     text_input_4.setValue("HALLO")
 
-    category2 = ControlGUI_Category(id='cat2',
-                                    name='Category 2', )
+    # ==================================================================================================================
+    # Data Page
+    dnw1 = DigitalNumberWidget(widget_id='dnw1',
+                               title='Theta',
+                               value=10,
+                               min_value=-1000,
+                               max_value=1000,
+                               increment=0.01,
+                               color='transparent',
+                               text_color=random_color_from_palette('pastel'),
+                               value_color=[1, 1, 1]
+                               )
+
+    page_data.addObject(dnw1, width=5, height=1)
+
+    text_widget_1 = TextWidget(widget_id='text_widget_1',
+                               title='Text Widget',
+                               text="Hallo 1 \n13\nThis is a third line",
+                               horizontal_alignment='left',
+                               vertical_alignment='top',
+                               text_color=random_color_from_palette('pastel'),
+                               font_weight='bold',
+                               font_style='italic', )
+    page_data.addObject(text_widget_1, width=5, height=5)
+    # ==================================================================================================================
+    category2 = Category(id='cat2',
+                         name='Category 2', )
 
     app.addCategory(category2)
-
-    time.sleep(6)
-
-    category_test = ControlGUI_Category(id='test_cat', name='Test Category')
-
-    category2.addCategory(category_test)
-    page_test = ControlGUI_Page(id='test', name='Test')
-
-    category_test.addPage(page_test)
-    test_button = Button(id='test_button', text='Test', config={'color': [0.3, 0, 0]})
-    page_test.addObject(test_button, width=2, height=2)
-
-    page_test2 = ControlGUI_Page(id='test2', name='Test2')
-    category_test.addPage(page_test2)
-
-    time.sleep(4)
-    page_test.removeObject(test_button)
 
     # ==================================================================================================================
     i = 0
     while True:
         # new_button = Button(id=f'nbutton{i}', text=f'B {i}',
-        #                     config={'color': random_color_from_palette('pastel'), 'textColor': [0, 0, 0]})
+        #                     config={'color': random_color_from_palette('pastel'), 'text_color': [0, 0, 0]})
         # page_buttons.addObject(new_button, width=random.randint(1, 4), height=random.randint(1, 4))
+        dnw1.value = random.randint(-10000, 10000) / 100
         i += 1
-        time.sleep(1)
+        time.sleep(0.1)
 
 
 if __name__ == '__main__':

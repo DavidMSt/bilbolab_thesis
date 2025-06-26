@@ -21,7 +21,7 @@ from threading import Thread
 
 def trace(*args):
     ...
-    # print("".join(map(str, args)))
+    print("".join(map(str, args)))
 
 
 # Create structs for reading various object types to speed up parsing.

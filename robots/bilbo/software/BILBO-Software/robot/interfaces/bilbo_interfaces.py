@@ -43,7 +43,7 @@ class BILBO_Interfaces:
     input_source: InputSource
 
     _joystick: Joystick
-    _joystick_manager: JoystickManager
+    # _joystick_manager: JoystickManager
     _joystick_thread: threading.Thread
     _exit_joystick_task: bool
 
@@ -83,11 +83,14 @@ class BILBO_Interfaces:
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self):
+        self.logger.info('Stop Interfaces')
+        self._joystick_manager.exit()
+
         self._exit_joystick_task = True
         if self._joystick_thread is not None and self._joystick_thread.is_alive():
             self._joystick_thread.join()
-        # self._joystick_manager.exit()
-        self.logger.info('Stop Interfaces')
+
+
 
     # === PRIVATE METHODS ==============================================================================================
     def _onJoystickConnected(self, joystick, *args, **kwargs):

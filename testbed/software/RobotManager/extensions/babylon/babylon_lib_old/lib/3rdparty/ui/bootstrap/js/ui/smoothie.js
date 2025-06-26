@@ -830,7 +830,7 @@
 
     this.updateValueRange();
 
-    context.font = chartOptions.labels.fontSize + 'px ' + chartOptions.labels.fontFamily;
+    context.font = chartOptions.labels.font_size + 'px ' + chartOptions.labels.font_family;
 
     // Save the state of the canvas context, any transformations applied in this method
     // will get removed from the stack at the end of this method when .restore() is called.
@@ -1021,7 +1021,7 @@
           maxLabelPos = chartOptions.scrollBackwards ? 0 : dimensions.width - context.measureText(maxValueString).width - 2,
           minLabelPos = chartOptions.scrollBackwards ? 0 : dimensions.width - context.measureText(minValueString).width - 2;
       context.fillStyle = chartOptions.labels.fillStyle;
-      context.fillText(maxValueString, maxLabelPos, chartOptions.labels.fontSize);
+      context.fillText(maxValueString, maxLabelPos, chartOptions.labels.font_size);
       context.fillText(minValueString, minLabelPos, dimensions.height - 2);
     }
 
@@ -1081,7 +1081,7 @@
 
     // Display title.
     if (chartOptions.title.text !== '') {
-      context.font = chartOptions.title.fontSize + 'px ' + chartOptions.title.fontFamily;
+      context.font = chartOptions.title.font_size + 'px ' + chartOptions.title.font_family;
       var titleXPos = chartOptions.scrollBackwards ? dimensions.width - context.measureText(chartOptions.title.text).width - 2 : 2;
       if (chartOptions.title.verticalAlign == 'bottom') {
         context.textBaseline = 'bottom';

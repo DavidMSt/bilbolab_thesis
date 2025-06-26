@@ -9,7 +9,18 @@ def resetSTM32():
     board_config = getBoardConfig()
 
     if board_config['rev'] == 'rev3':
-        raise NotImplementedError("Not implemented for rev3")
+        RPI_GPIO_PIN = 17
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(RPI_GPIO_PIN, GPIO.OUT)
+
+        # Pulse the reset line: HIGH for 1s, then LOW for 1s
+        GPIO.output(RPI_GPIO_PIN, GPIO.HIGH)
+        time.sleep(1)
+        GPIO.output(RPI_GPIO_PIN, GPIO.LOW)
+        time.sleep(1)
+
+        # Clean up GPIO
+        GPIO.cleanup(RPI_GPIO_PIN)
 
     elif board_config['rev'] == 'rev4':
         sx = SX1508(reset=False)

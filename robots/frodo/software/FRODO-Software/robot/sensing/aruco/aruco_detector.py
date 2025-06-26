@@ -171,7 +171,6 @@ class ArucoDetector:
 
             if not first_run and self.loop_time > self.Ts:
                 ...
-                # logger.debug(f"Aruco Detector loop took longer than Ts: {self.loop_time:.2f} > {self.Ts:.2f}")
 
             if first_run:
                 first_run = False

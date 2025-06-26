@@ -488,7 +488,7 @@ float TWIPR_ControlManager::_updateVelocityIntegralController(float velocity){
 	}
 
 	if (this->control_config.vic_v_limit != 0){
-		if (abs(velocity) > this->control_config.vic_v_limit){
+		if (std::fabs(velocity) > this->control_config.vic_v_limit){
 			this->_error_velocity_integral = 0;
 			return 0;
 		}
@@ -519,7 +519,7 @@ float TWIPR_ControlManager::_updateTIC(float theta) {
 	}
 
 	if (this->control_config.tic_theta_limit != 0){
-		if (abs(theta) > this->control_config.tic_theta_limit){
+		if (std::fabs(theta) > this->control_config.tic_theta_limit){
 			this->_tic_integral = 0;
 			this->enableTIC(false);
 			return 0;

@@ -81,7 +81,7 @@ void TWIPR_SPI_Communication::start() {
     // Start the SPI slave.
     this->spi_slave.start();
     // Provide initial sample data for transmission.
-    this->startListeningForCommand();
+//    this->startListeningForCommand();
 //    this->provideSampleData();
 }
 

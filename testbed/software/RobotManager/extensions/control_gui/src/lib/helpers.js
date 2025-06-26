@@ -122,3 +122,26 @@ export function splitPath(path) {
     const remainder = parts.slice(1).join('/');
     return [first, remainder];
 }
+
+
+
+function normalizePath(path) {
+  return path
+    .split('/')                 // split into parts
+    .filter(Boolean)           // remove empty strings (from leading/trailing slashes)
+    .join('/');                // re-join normalized parts
+}
+
+export function isObject(parent, child) {
+  const normalizedParent = normalizePath(parent);
+  const normalizedChild = normalizePath(child);
+
+  // If child is shorter than parent, it can't be a subpath
+  if (normalizedChild.length < normalizedParent.length) return false;
+
+  // Same path
+  if (normalizedChild === normalizedParent) return true;
+
+  // Check if child starts with parent + a separating slash
+  return normalizedChild.startsWith(normalizedParent + '/');
+}

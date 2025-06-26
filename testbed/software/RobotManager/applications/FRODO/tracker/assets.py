@@ -128,6 +128,23 @@ class TrackedOrigin(TrackedAsset):
         self.tracking_valid = True
 
 
+class TrackedTWIPR(TrackedAsset):
+    position: np.ndarray
+    psi: float
+
+    def __init__(self, name):
+        self.name = name
+        self.tracking_valid = False
+        self.position = np.zeros(2)
+        self.psi = 0
+
+    def update(self, data: RigidBodySample):
+
+        self.position = data.position
+        self.psi = do_something(data.orientation)  # TODO do something
+
+
+
 # ======================================================================================================================
 vision_robot_application_assets = {
     'frodo1': TrackedVisionRobot('frodo1', TrackedVisionRobot_Definition(points=[1, 2, 3, 4, 5],

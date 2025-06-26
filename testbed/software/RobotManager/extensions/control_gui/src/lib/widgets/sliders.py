@@ -23,7 +23,7 @@ class SliderWidget(GUI_Object):
         default_config = {
             'title': None,
             'color': [0.7, 0.7, 0.7],
-            'textColor': [1, 1, 1],
+            'text_color': [1, 1, 1],
             'fontSize': 12,
             'direction': 'horizontal',
             'continuousUpdates': False,
@@ -86,7 +86,10 @@ class SliderWidget(GUI_Object):
 
         match message['event']:
             case 'slider_change':
-                self.value = float(message['data']['value'])
+                try:
+                    self.value = float(message['data']['value'])
+                except TypeError:
+                    self.logger.warning(f"Got invalid value: {message['data']['value']}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def init(self, *args, **kwargs):
@@ -150,7 +153,7 @@ class ClassicSliderWidget(GUI_Object):
             'backgroundColor': '#444',
             'stemColor': '#888',
             'handleColor': '#ccc',
-            'textColor': '#fff',
+            'text_color': '#fff',
             'direction': 'horizontal',  # 'horizontal' | 'vertical'
             'continuousUpdates': False,
             'snapToTicks': False,
@@ -212,23 +215,11 @@ class ClassicSliderWidget(GUI_Object):
         Return a dictionary of all parameters that the front-end needs to render/update this classic slider.
         """
         return {
-            'title': self.config['title'],
-            'titlePosition': self.config['titlePosition'],
-            'valuePosition': self.config['valuePosition'],
-            'visible': self.config['visible'],
-            'backgroundColor': self.config['backgroundColor'],
-            'stemColor': self.config['stemColor'],
-            'handleColor': self.config['handleColor'],
-            'textColor': self.config['textColor'],
             'min_value': self.min_value,
             'max_value': self.max_value,
             'value': self.value,
             'increment': self.increment,
-            'direction': self.config['direction'],
-            'continuousUpdates': self.config['continuousUpdates'],
-            'snapToTicks': self.config['snapToTicks'],
-            'ticks': self.config['ticks'],
-            'automaticResetValue': self.config['automaticResetValue'],
+            **self.config,
         }
 
     # ------------------------------------------------------------------------------------------------------------------

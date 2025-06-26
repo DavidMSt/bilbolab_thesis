@@ -124,3 +124,29 @@ def generate_random_input(t_vector, f_cutoff, sigma_I):
     start_idx = idx_candidates[0]
     return u[start_idx:start_idx + N]
 
+
+import numpy as np
+
+
+def resample(t, x, t_new):
+    """
+    Resamples the data x given original time vector t to new time vector t_new using linear interpolation.
+
+    Parameters:
+    - t (np.ndarray): Original time vector (1D).
+    - x (np.ndarray): Data values corresponding to t. Can be 1D or 2D (with time along axis 0).
+    - t_new (np.ndarray): New time vector to resample x onto.
+
+    Returns:
+    - x_new (np.ndarray): Resampled data corresponding to t_new.
+    """
+    t = np.asarray(t)
+    x = np.asarray(x)
+    t_new = np.asarray(t_new)
+
+    if x.ndim == 1:
+        x_new = np.interp(t_new, t, x)
+    else:
+        x_new = np.array([np.interp(t_new, t, x[:, i]) for i in range(x.shape[1])]).T
+
+    return x_new

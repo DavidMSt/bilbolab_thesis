@@ -17,7 +17,7 @@ import {
     TextWidget
 } from './objects.js'
 
-import {splitPath} from './helpers.js';
+import {splitPath, isObject, getColor} from './helpers.js';
 import {Websocket} from './websocket.js';
 
 const OBJECT_MAPPING = {
@@ -42,7 +42,7 @@ const DEBUG = true;
 
 const GUI_WS_DEFAULT_PORT = 8100;
 
-class ControlGUI_Page {
+class Page {
 
     /** @type {Object} */
     objects = {};
@@ -68,12 +68,14 @@ class ControlGUI_Page {
         this.id = id;
 
         const default_configuration = {
+            // rows: 16,
+            // columns: 40,
             rows: 18,
             columns: 50,
             fillEmptyCells: true,
             color: 'rgba(40,40,40,0.7)',
             backgroundColor: DEFAULT_BACKGROUND_COLOR,
-            textColor: 'rgba(255,255,255,0.7)',
+            text_color: 'rgba(255,255,255,0.7)',
             name: id,
         }
 
@@ -184,6 +186,7 @@ class ControlGUI_Page {
             }
         }
     }
+
     /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
     buildObjectsFromDefinition(objects) {
         for (const [id, config] of Object.entries(objects)) {
@@ -281,8 +284,8 @@ class ControlGUI_Page {
         let button = document.createElement('button');
         button.className = 'page_button';
         button.textContent = this.configuration.name;
-        // button.style.backgroundColor = this.configuration.color;
-        button.style.color = this.configuration.textColor;
+        button.style.backgroundColor = this.configuration.color;
+        button.style.color = getColor(this.configuration.text_color);
         button.classList.add('not-selected');
 
         return button;
@@ -367,15 +370,15 @@ class ControlGUI_Page {
 }
 
 /* ================================================================================================================== */
-class ControlGUI_Category {
+class Category {
 
-    /** @type {Object<string,ControlGUI_Page>} */
+    /** @type {Object<string,Page>} */
     pages = {};
 
-    /** @type {ControlGUI_Page|null} */
+    /** @type {Page|null} */
     page = null;
 
-    /** @type {Object<string,ControlGUI_Category>} */
+    /** @type {Object<string,Category>} */
     categories = {};
 
     /** @type {Object} */
@@ -413,10 +416,11 @@ class ControlGUI_Category {
             name: id,
             collapsed: false,
             color: 'rgba(40,40,40,0.7)',
-            textColor: 'rgba(255,255,255,0.7)',
+            text_color: 'rgba(255,255,255,0.7)',
             icon: null,
             top_icon: null,
             number_of_pages: +getComputedStyle(document.documentElement).getPropertyValue('--page_bar-cols'),
+            max_pages: +getComputedStyle(document.documentElement).getPropertyValue('--page_bar-cols'),
         };
 
         this.configuration = {...default_configuration, ...configuration};
@@ -454,14 +458,15 @@ class ControlGUI_Category {
     /**
      * Look up something by path, descending into sub-categories first, then pages.
      * @param {string} path
-     * @returns {ControlGUI_Category|ControlGUI_Page|null}
+     * @returns {Category|Page|null}
      */
     getObjectByPath(path) {
+        // console.log(`[Category ID: ${this.id}] getObjectByPath called with:`, path);
+        // console.log(this)
         const [firstSegment, remainder] = splitPath(path);
         if (!firstSegment) return null;
 
         const fullKey = `${this.id}/${firstSegment}`;
-
         // 1) Sub‐category?
         const subCat = this.categories[fullKey];
         if (subCat) {
@@ -478,7 +483,7 @@ class ControlGUI_Category {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     getGUI() {
-        if (this.parent instanceof ControlGUI_Category) {
+        if (this.parent instanceof Category) {
             return this.parent.getGUI();
         } else if (this.parent instanceof GUI) {
             return this.parent;
@@ -548,11 +553,13 @@ class ControlGUI_Category {
                 if (category) {
                     // category.content_grid.remove()
                     delete this.categories[category_id];
-
                     // Switch active category if it was this category
-                    if (category === this.getGUI().category) {
+
+                    if (isObject(category.id, this.getGUI().category.id)) {
                         this.getGUI().setCategory(this.id);
                     }
+
+
                     this.getGUI().renderCategoryTree();
                 }
         }
@@ -575,7 +582,7 @@ class ControlGUI_Category {
      * @param {{id:string, config:Object, objects:Object, position?:number}} page_definition
      */
     buildPageFromDefinition(page_definition) {
-        const new_page = new ControlGUI_Page(
+        const new_page = new Page(
             page_definition.id,
             page_definition.config,
             page_definition.objects
@@ -601,7 +608,7 @@ class ControlGUI_Category {
      * @param {{id:string, config:Object, pages:Object, categories:Object, position?:number}} cat_definition
      */
     buildCategoryFromDefinition(cat_definition) {
-        const new_category = new ControlGUI_Category(
+        const new_category = new Category(
             cat_definition.id,
             cat_definition.config,
             cat_definition.pages || {},
@@ -613,12 +620,12 @@ class ControlGUI_Category {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     _generateButton() {
-        const {name, icon, top_icon, textColor} = this.configuration;
+        const {name, icon, top_icon, text_color} = this.configuration;
 
         // 1) create the <button>
         const button = document.createElement('button');
         button.classList.add('category-button', 'not-selected');
-        button.style.color = textColor;
+        button.style.color = text_color;
 
         // 2) left-icon slot (fixed size, may remain empty)
         const iconSlot = document.createElement('span');
@@ -669,7 +676,7 @@ class ControlGUI_Category {
     /* -------------------------------------------------------------------------------------------------------------- */
     /**
      * Add a ControlGUI_Page to this category
-     * @param {ControlGUI_Page} page
+     * @param {Page} page
      * @param {number|null} position
      */
     addPage(page, position = null) {
@@ -735,7 +742,7 @@ class ControlGUI_Category {
     /* -------------------------------------------------------------------------------------------------------------- */
     /**
      * Add a ControlGUI_Category as a nested subcategory
-     * @param {ControlGUI_Category} category
+     * @param {Category} category
      * @param {number|null} position   – currently unused for UI
      */
     addCategory(category, position = null) {
@@ -755,9 +762,22 @@ class ControlGUI_Category {
      * (unchanged from before)
      */
     buildCategory(container, content_grid) {
-        console.log('Building category:', this.id);
+
+        const gui = this.getGUI();
+        // 1) collapse or show the entire page‐bar row
+        if (gui) {
+            gui.showPageBar(this.configuration.max_pages > 1);
+        }
+
+        // 2) populate (or clear) the page‐bar itself
         container.innerHTML = '';
-        container.appendChild(this.page_grid);
+        if (this.configuration.max_pages > 1) {
+            container.style.display = '';
+            container.appendChild(this.page_grid);
+        } else {
+            // we’ve already hidden the <nav>, but just in case:
+            container.style.display = 'none';
+        }
 
         this.content_grid = content_grid;
         this.content_grid.style.position = 'relative';
@@ -791,10 +811,10 @@ class ControlGUI_Category {
     /* -------------------------------------------------------------------------------------------------------------- */
     /**
      * Switch visible page (unchanged)
-     * @param {string|ControlGUI_Page} pageOrId
+     * @param {string|Page} pageOrId
      */
     setPage(pageOrId) {
-        const id = pageOrId instanceof ControlGUI_Page ? pageOrId.id : pageOrId;
+        const id = pageOrId instanceof Page ? pageOrId.id : pageOrId;
         const page = this.pages[id];
         if (!page) {
             console.warn(`Page "${id}" not found in category "${this.id}".`);
@@ -957,6 +977,30 @@ export class GUI {
         this.rootContainer.appendChild(footer);
     }
 
+    /**
+     * Show or hide the page‐bar row and
+     * collapse/restore the third grid‐row on #app.
+     * @param {boolean} show
+     */
+    showPageBar(show) {
+        if (show) {
+            // put the page_bar back…
+            this.page_bar.style.display = '';
+            // …and restore your default CSS template‐rows
+            this.rootContainer.style.gridTemplateRows = '';
+        } else {
+            // hide the page_bar completely
+            this.page_bar.style.display = 'none';
+            // collapse that row to zero and let content fill it
+            this.rootContainer.style.gridTemplateRows =
+                'var(--headbar-height) ' +
+                'var(--robot-status-bar-height) ' +
+                '0 ' +               // ← collapse the “pages” row
+                '1fr ' +             // ← content now starts here
+                'var(--bottom-height)';
+        }
+    }
+
     /* ===============================================================================================================*/
     /**
      * Toggle category-bar on/off.
@@ -982,34 +1026,29 @@ export class GUI {
 
     /* ===============================================================================================================*/
     getObjectByUID(uid) {
-        // e.g. uid = "gui::category1/page1/groupG/widgetX"
-        if (!uid) {
-            return null;
-        }
 
-        // Trim leading/trailing slashes → "/gui::category1/page1/groupG/widgetX"
         const trimmed = uid.replace(/^\/+|\/+$/g, '');
 
-        const [categorySegment, remainder] = splitPath(trimmed);
-        if (!categorySegment) {
+        const [gui_segment, category_remainder] = splitPath(trimmed);
+
+        if (!gui_segment || gui_segment !== this.id) {
+            console.warn(`UID "${uid}" does not match this GUI's ID "${this.id}".`);
             return null;
         }
-
-        // Rebuild the full‐UID key for the category:
-        //   "category1" → "/category1"
-        const categoryKey = `${categorySegment}`;
-        const category = this.categories[categoryKey];
-        if (!category) {
-            return null;
+        if (!category_remainder) {
+            return this;
         }
 
-        if (!remainder) {
-            // If the path was only "/category1", return the category object
-            return category;
+        const [categorySegment, remainder] = splitPath(category_remainder);
+        const fullKey = `${this.id}/${categorySegment}`;
+        // 1) Sub‐category?
+        const subCat = this.categories[fullKey];
+        if (subCat) {
+            if (!remainder) return subCat;
+            return subCat.getObjectByPath(remainder);
+        } else {
+            console.warn(`Category "${categorySegment}" not found in GUI.`);
         }
-
-        // Otherwise, delegate into that category
-        return category.getObjectByPath(remainder);
     }
 
     /* ===============================================================================================================*/
@@ -1096,11 +1135,12 @@ export class GUI {
     /**
      * Register a new top‐level category and rebuild the sidebar.
      *
-     * @param {ControlGUI_Category} category
+     * @param {Category} category
      * @param {number|null} position  — no longer used; kept for backward compatibility
      */
     addCategory(category, position = null) {
         // 1) Dedupe
+        category.parent = this;
         if (this.categories[category.id]) {
             console.warn(`Category "${category.id}" already exists.`);
             return;
@@ -1115,7 +1155,6 @@ export class GUI {
             this.setCategory(category.id);
         }
 
-        category.parent = this;
 
         // 4) Rebuild the nested sidebar list so it shows the new category
         this.renderCategoryTree();
@@ -1181,20 +1220,20 @@ export class GUI {
 
                 // 3) double-click toggles open/closed if it has children
                 if (Object.keys(cat.categories).length > 0) {
+
+                    cat.button.classList.add('has-children');
+
                     li.addEventListener('dblclick', e => {
                         e.stopPropagation();
                         cat.configuration.collapsed = !cat.configuration.collapsed;
                         this.renderCategoryTree();
                     });
-                    if (!cat.button.querySelector('.child-indicator')) {
-                        const ind = document.createElement('span');
-                        ind.className = 'child-indicator';
-                        ind.textContent = '…';
-                        cat.button.appendChild(ind);
-                    }
+
+                    cat.button.classList.toggle('collapsed', cat.configuration.collapsed);
+
                 } else {
-                    const old = cat.button.querySelector('.child-indicator');
-                    if (old) old.remove();
+                    cat.button.classList.remove('has-children');
+                    cat.button.classList.remove('collapsed');
                 }
 
                 // 4) style/select button
@@ -1321,14 +1360,15 @@ export class GUI {
             const config = msg.configuration;
             console.log('Configuration received: ', config);
 
+            this.id = config.id || 'gui';
             // TODO: Here we have to set some properties, such as show category bar or auto_hide
 
             if (config.categories) {
                 for (let id in config.categories) {
-                    console.log("Adding category: ", id);
+                    console.log("Adding category: ", config.categories[id].id);
                     console.log("Configuration:", config.categories[id].config)
                     console.log(config.categories[id])
-                    const category = new ControlGUI_Category(id,
+                    const category = new Category(config.categories[id].id,
                         config.categories[id].config,
                         config.categories[id].pages,
                         config.categories[id].categories,);

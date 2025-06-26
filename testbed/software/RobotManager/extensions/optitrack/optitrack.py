@@ -86,7 +86,6 @@ class OptiTrack:
         self.callbacks = OptiTrack_Callbacks()
         self.events = OptiTrack_Events()
 
-
     # === METHODS ======================================================================================================
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -94,7 +93,6 @@ class OptiTrack:
         ...
 
         # ------------------------------------------------------------------------------------------------------------------
-
 
     def start(self):
         try:
@@ -106,7 +104,6 @@ class OptiTrack:
 
         return True
         # === PRIVATE METHODS ==============================================================================================
-
 
     def _natnet_description_callback(self, data):
         # Rigid Bodies
@@ -160,7 +157,6 @@ class OptiTrack:
         self.events.description_received.set(self.rigid_bodies)
 
         # ------------------------------------------------------------------------------------------------------------------
-
 
     def _natnet_mocap_data_callback(self, data):
         if not self.description_received:
@@ -229,7 +225,6 @@ class OptiTrack:
 
         # ------------------------------------------------------------------------------------------------------------------
 
-
     def _extract_initial_mocap_information(self, data):
         for rigid_body_id, rigid_body_description in self.rigid_bodies.items():
             for marker_id, marker_description in rigid_body_description.markers.items():
@@ -238,7 +233,7 @@ class OptiTrack:
                     marker_description.size = marker_size
                 else:
                     self.logger.warning(f"Marker {marker_id} of rigid body \"{rigid_body_id}\" currently not visible. "
-                                   f"It's size will be inferred from the other markers.")
+                                        f"It's size will be inferred from the other markers.")
 
             # loop again through the markers and check the ones that have not been set yet
             for marker_id, marker_description in rigid_body_description.markers.items():
@@ -255,7 +250,6 @@ class OptiTrack:
 
         # ------------------------------------------------------------------------------------------------------------------
 
-
     @staticmethod
     def _encode_marker_label(asset_id, marker_index):
         """
@@ -271,7 +265,6 @@ class OptiTrack:
           int: The encoded marker id.
         """
         return (asset_id << 16) + marker_index
-
 
     @staticmethod
     def _decode_marker_label(marker_id):
@@ -293,7 +286,6 @@ class OptiTrack:
         asset_id = marker_id >> 16
         marker_index = marker_id & 0xFFFF  # 0xFFFF == 65535, gets the lower 16 bits
         return asset_id, marker_index
-
 
     @staticmethod
     def _calculate_rigid_body_marker(rigid_body_position, rigid_body_orientation, marker_offset):

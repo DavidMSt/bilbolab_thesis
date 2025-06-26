@@ -226,7 +226,7 @@ class CLI_GUI_Client:
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        delayed_execution(self.websocket.start, delay=1)
+        delayed_execution(self.websocket.connect, delay=1)
         self.app.run()
 
     # ------------------------------------------------------------------------------------------------------------------

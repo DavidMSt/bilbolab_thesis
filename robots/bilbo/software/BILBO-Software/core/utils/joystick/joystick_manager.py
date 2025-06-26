@@ -246,11 +246,12 @@ class JoystickManager:
         if self._process is not None:
             if self._process.is_alive():
                 try:
+                    logger.info("Closing joystick manager process")
                     self._process.terminate()
                     self._process.join()
                 except Exception as e:
-                    ...
 
+                    ...
         logger.info("Close joystick manager")
 
     # ------------------------------------------------------------------------------------------------------------------

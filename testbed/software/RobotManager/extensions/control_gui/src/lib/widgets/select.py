@@ -48,10 +48,10 @@ class MultiSelectWidget(GUI_Object):
             "lockable": False,
             "locked": False,
             "title": None,
-            "titlePosition": 'top',  # 'top' or 'left'
+            "title_position": 'top',  # 'top' or 'left'
             "titleStyle": 'bold',
             "color": [0.2, 0.2, 0.2],
-            "textColor": [1, 1, 1],
+            "text_color": [1, 1, 1],
             "visible": True,
         }
 

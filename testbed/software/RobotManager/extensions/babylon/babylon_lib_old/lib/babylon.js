@@ -223,7 +223,7 @@ class IMUScene extends Scene {
 
         this.ui = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("ui", true, this.scene);
         this.textbox = new BABYLON.GUI.TextBlock();
-        this.textbox.fontSize = 14;
+        this.textbox.font_size = 14;
         this.textbox.text = "";
         this.textbox.color = "white";
         this.textbox.paddingTop = 3;

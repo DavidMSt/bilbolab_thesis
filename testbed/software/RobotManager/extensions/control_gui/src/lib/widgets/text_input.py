@@ -54,10 +54,10 @@ class InputWidget(GUI_Object):
 
         default_config = {
             "title": None,  # defaults to widget_id if None
-            "titlePosition": "top",  # 'top' or 'left'
+            "title_position": "top",  # 'top' or 'left'
             "visible": True,
             "color": "transparent",
-            "textColor": [1, 1, 1],
+            "text_color": [1, 1, 1],
             "inputFieldColor": [1, 1, 1, 0.8],
             "inputFieldTextColor": [0, 0, 0],
             "inputFieldFontSize": 11,

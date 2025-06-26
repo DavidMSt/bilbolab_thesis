@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import abc
+import copy
 import math
 import random
 import time
+import uuid
 from abc import abstractmethod
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.colors import rgb_to_hex
+from core.utils.events import ConditionEvent
 from core.utils.exit import register_exit_callback
 from core.utils.files import relativeToFullPath
 from core.utils.js.vite import run_vite_app
@@ -17,8 +20,8 @@ from core.utils.websockets.websockets import WebsocketServer, WebsocketClient, W
 from extensions.control_gui.src.lib.plot.jsplot import JSPlotTimeSeries
 from extensions.control_gui.src.lib.plot.plot_widget import PlotWidget
 from extensions.control_gui.src.lib.widgets.buttons import Button
-from extensions.control_gui.src.lib.objects import GUI_Object_Group, GUI_Object
-from extensions.control_gui.src.lib.utilities import check_for_spaces, split_path, strip_id
+from extensions.control_gui.src.lib.objects import GUI_Object_Group, GUI_Object, GUI_Object_Instance
+from extensions.control_gui.src.lib.utilities import check_for_spaces, split_path, strip_id, addIdPrefix
 from extensions.control_gui.src.lib.map.map_widget import MapWidget
 
 # ======================================================================================================================
@@ -56,7 +59,7 @@ Messages from the Backend look like:
 
 
 # === CATEGORY =========================================================================================================
-class ControlGUI_Category_Headbar:
+class Category_Headbar:
     ...
 
     def __init__(self):
@@ -69,25 +72,25 @@ class ControlGUI_Category_Headbar:
 
 # ----------------------------------------------------------------------------------------------------------------------
 @callback_definition
-class ControlGUI_Category_Callbacks:
+class Category_Callbacks:
     update: CallbackContainer
     add: CallbackContainer
     remove: CallbackContainer
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-class ControlGUI_Category:
+class Category:
     id: str
-    pages: dict[str, ControlGUI_Page]
-    categories: dict[str, ControlGUI_Category]
+    pages: dict[str, Page]
+    categories: dict[str, Category]
 
     name: str
     icon: str
-    headbar: ControlGUI_Category_Headbar
+    headbar: Category_Headbar
 
     configuration: dict
 
-    parent: GUI | ControlGUI_Category | None
+    parent: GUI | Category | None
 
     # === INIT =========================================================================================================
     def __init__(self, id: str, name: str = None, **kwargs):
@@ -96,10 +99,10 @@ class ControlGUI_Category:
             raise ValueError(f"Category id '{id}' contains spaces")
         if '/' in id:
             raise ValueError(f"Category id '{id}' contains slashes")
-        if ":" in id:
-            raise ValueError(f"Category id '{id}' contains colons")
+        # if ":" in id:
+        #     raise ValueError(f"Category id '{id}' contains colons")
 
-        id = f"c_{id}"
+        id = f"{id}"
 
         default_config = {
             'color': None,
@@ -109,7 +112,6 @@ class ControlGUI_Category:
         }
 
         self.configuration = {**default_config, **kwargs}
-
         self.id = id
 
         self.name = name if name is not None else id
@@ -119,9 +121,8 @@ class ControlGUI_Category:
 
         self.parent = None
 
-        self.callbacks = ControlGUI_Category_Callbacks()
-
-        self.headbar = ControlGUI_Category_Headbar()
+        self.callbacks = Category_Callbacks()
+        self.headbar = Category_Headbar()
 
         self.logger = Logger(f"Category {self.id}", 'DEBUG')
 
@@ -129,8 +130,8 @@ class ControlGUI_Category:
     @property
     def uid(self):
         if isinstance(self.parent, GUI):
-            return f"{self.parent.id}::{self.id}"
-        elif isinstance(self.parent, ControlGUI_Category):
+            return f"{self.parent.id}/{self.id}"
+        elif isinstance(self.parent, Category):
             return f"{self.parent.uid}/{self.id}"
         else:
             return self.id
@@ -139,7 +140,7 @@ class ControlGUI_Category:
     def getGUI(self):
         if isinstance(self.parent, GUI):
             return self.parent
-        elif isinstance(self.parent, ControlGUI_Category):
+        elif isinstance(self.parent, Category):
             return self.parent.getGUI()
         else:
             return None
@@ -180,11 +181,11 @@ class ControlGUI_Category:
         gui = self.getGUI()
 
         if gui is not None:
-            return gui.getElementByUID(uid)
+            return gui.getObjectByUID(uid)
         return None
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addPage(self, page: ControlGUI_Page, position=None):
+    def addPage(self, page: Page, position=None):
 
         # Fist check if the position is valid if given
         if position is not None and position > self.configuration['max_pages']:
@@ -212,7 +213,7 @@ class ControlGUI_Category:
         return page
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removePage(self, page: ControlGUI_Page):
+    def removePage(self, page: Page):
         if page.id not in self.pages:
             raise ValueError(f"Page with id {page.id} does not exist")
         del self.pages[page.id]
@@ -229,7 +230,7 @@ class ControlGUI_Category:
         self.sendMessage(message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addCategory(self, category: ControlGUI_Category):
+    def addCategory(self, category: Category):
         if category.id in self.categories:
             raise ValueError(f"Category with id {category.id} already exists")
         category.parent = self
@@ -248,7 +249,7 @@ class ControlGUI_Category:
         self.sendMessage(message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeCategory(self, category: ControlGUI_Category):
+    def removeCategory(self, category: Category):
         if category.id not in self.categories:
             raise ValueError(f"Category with id {category.id} does not exist")
         del self.categories[category.id]
@@ -312,14 +313,14 @@ class ControlGUI_Category:
 
 # === PAGE =============================================================================================================
 @callback_definition
-class ControlGUI_Page_Callbacks:
+class Page_Callbacks:
     update: CallbackContainer
     add: CallbackContainer
     remove: CallbackContainer
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-class ControlGUI_Page:
+class Page:
     """
     Represents a page in the Control GUI that holds GUI_Object instances
     in a fixed grid layout. Tracks occupied cells and supports manual
@@ -327,7 +328,7 @@ class ControlGUI_Page:
     """
     id: str
     objects: dict[str, dict]
-    category: ControlGUI_Category | None
+    category: Category | None
     config: dict
 
     name: str
@@ -343,18 +344,17 @@ class ControlGUI_Page:
             raise ValueError(f"Page id '{id}' contains spaces")
         if '/' in id:
             raise ValueError(f"Category id '{id}' contains slashes")
-        if ":" in id:
-            raise ValueError(f"Category id '{id}' contains colons")
 
         default_config = {
             'color': None,
             'pageColor': [60, 60, 60, 1],
             'grid_size': (18, 50),  # (rows, columns)
+            'text_color': [1,1,1]
         }
 
         self.config = {**default_config, **kwargs}
 
-        self.id = f"p_{id}"
+        self.id = f"{id}"
         self.icon = icon
         self.name = name if name is not None else id
 
@@ -365,7 +365,7 @@ class ControlGUI_Page:
 
         self.objects = {}
         self.category = None
-        self.callbacks = ControlGUI_Page_Callbacks()
+        self.callbacks = Page_Callbacks()
         self.logger = Logger(f"Page {self.id}", 'DEBUG')
 
     @property
@@ -391,7 +391,7 @@ class ControlGUI_Page:
 
         # 4) search our objects (keyed by full uid, but match on obj.id)
         for full_uid, info in self.objects.items():
-            obj = info["object"]
+            obj = info["instance"]
             if obj.id == first_segment:
                 if not remainder:
                     return obj
@@ -407,7 +407,7 @@ class ControlGUI_Page:
         gui = self.getGUI()
 
         if gui is not None:
-            return gui.getElementByUID(uid)
+            return gui.getObjectByUID(uid)
         return None
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -422,14 +422,18 @@ class ControlGUI_Page:
         self.sendMessage(message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addObject(self, obj: GUI_Object, row=None, column=None, width=2, height=2) -> GUI_Object:
+    def addObject(self, obj: GUI_Object, row=None, column=None, width=2, height=2) -> GUI_Object_Instance:
         """
         Adds an object to the page at a given grid position.
         If the row or column is None, we automatically find the first available
         position for the object's size.
         """
-        if obj.uid in self.objects:
-            raise ValueError(f"Object with id {obj.uid} already exists on page {self.id}")
+
+        instance = obj.newInstance()
+
+        if instance.id in self.objects:
+            obj.removeInstance(instance)
+            raise ValueError(f"Object with id {obj.id} already exists on page {self.id}")
 
         # Determine placement
         if row is None or column is None:
@@ -441,56 +445,61 @@ class ControlGUI_Page:
         self._markSpace(row, column, width, height)
 
         # Store object placement
-        self.objects[obj.uid] = {
-            'object': obj,
+        self.objects[instance.id] = {
+            'instance': instance,
             'row': row,
             'column': column,
             'width': width,
             'height': height,
         }
-        obj.parent = self
-
-        # self.logger.debug(
-        #     f"Added object {obj.uid} to page {self.id} at ({row}, {column}) with size ({width}, {height})")
+        instance.parent = self
 
         message = {
             'type': 'add',
             'data': {
                 'type': 'object',
                 'parent': self.uid,
-                'id': obj.uid,
+                'id': instance.uid,
                 'config': {
                     'row': row,
                     'column': column,
                     'width': width,
                     'height': height,
-                    **obj.getPayload(),
+                    **instance.getPayload(),
                 }
             }
         }
 
         self.sendMessage(message)
 
-        return obj
+        return instance
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeObject(self, obj: GUI_Object):
-
+    def removeObject(self, obj: GUI_Object_Instance | GUI_Object):
         if obj.id not in self.objects:
-            raise ValueError(f"Object with id {obj.uid} does not exist on page {self.id}")
+            raise ValueError(f"Object with id {obj.id} does not exist on page {self.id}")
+
+        if isinstance(obj, GUI_Object_Instance):
+            instance = obj
+            instance.obj.removeInstance(instance)  # Remove the instance from the parent object
+        elif isinstance(obj, GUI_Object):
+            instance = self.objects[obj.id]['instance']
+            obj.removeInstance(instance)
+        else:
+            raise ValueError(f"Object {obj} is neither an instance nor a parent object")
 
         message = {
             'type': 'remove',
             'data': {
                 'type': 'object',
                 'parent': self.uid,
-                'id': obj.uid,
+                'id': instance.uid,
             }
         }
         self.sendMessage(message)
 
-        obj.parent = None
-        del self.objects[obj.uid]
+        instance.parent = None
+        del self.objects[instance.id]
 
     # ------------------------------------------------------------------------------------------------------------------
     def getGUI(self):
@@ -564,7 +573,7 @@ class ControlGUI_Page:
         # Build payload for each object
         objs = {}
         for uid, info in self.objects.items():
-            obj = info['object']
+            obj = info['instance']
             payload = obj.getPayload()
             payload.update({
                 'row': info['row'],
@@ -598,76 +607,104 @@ class ControlGUI_Page:
 
 # === CHILD GUI ========================================================================================================
 
+
+class Child_Category(Category):
+    child: Child
+
+    def __init__(self, id, name, child, **kwargs):
+        super(Child_Category, self).__init__(id, name, **kwargs)
+        self.child = child
+
+    def getPayload(self):
+        # ask the child GUI for its full GUI payload (includes export + categories)
+        gui_payload = self.child.requestPayloadForCategory(self.id)
+        if gui_payload is None:
+            self.child.gui.logger.warning(
+                f"Could not get payload for GUI {self.child.id}"
+            )
+            return super().getPayload()
+
+        # extract export subtree (should be a dict)
+        export_payload = gui_payload.get('export', {})
+        # extract all its other categories
+        gui_categories = gui_payload.get('categories', {})
+
+        # deepcopy so we don’t mutate the child’s own data
+        export_copy = copy.deepcopy(export_payload)
+        # merge in the child's categories under the export node
+        export_copy.setdefault('categories', {}).update(copy.deepcopy(gui_categories))
+
+        # # now prefix every id under the mount point
+        # prefix = self.child.path_in_gui.rstrip('/') + '/'
+        #
+        # def _adjust(node: dict):
+        #     # prefix this node’s id
+        #     if 'id' in node and isinstance(node['id'], str):
+        #         node['id'] = prefix + node['id'].lstrip('/')
+        #     # keep config.id in sync
+        #     cfg = node.get('config')
+        #     if isinstance(cfg, dict) and 'id' in cfg:
+        #         cfg['id'] = node['id']
+        #     # recurse into pages / categories / objects
+        #     for sub in node.get('pages', {}).values():
+        #         _adjust(sub)
+        #     for sub in node.get('categories', {}).values():
+        #         _adjust(sub)
+        #     for sub in node.get('objects', {}).values():
+        #         _adjust(sub)
+        #
+        # _adjust(export_copy)
+        return export_copy
+
+
 @callback_definition
-class ControlGUI_ChildGUI_Callbacks:
+class Child_Callbacks:
     connect: CallbackContainer
     disconnect: CallbackContainer
     message: CallbackContainer
 
 
-class ControlGUI_Child(abc.ABC):
-    id: str
-    address: str
-    port: int
+class Child:
+    gui: GUI
+    category: Child_Category | None
 
-    def __init__(self, id, address, port, category_path: str = ''):
-        self.id = id
+    id: str
+    name: str | None
+    path_in_gui: str
+    request_event: ConditionEvent
+
+    child_object_id: str | None
+
+    def __init__(self,
+                 address,
+                 port,
+                 parent_object_uid,
+                 name: str = None,
+                 client: WebsocketClient = None,
+                 gui: GUI = None,
+                 child_object_id=None,
+                 ):
+
         self.address = address
         self.port = port
-        self.category_path = category_path
-        self.callbacks = ControlGUI_ChildGUI_Callbacks()
+        self.name = name
 
-    @abstractmethod
-    def send(self, message):
-        ...
-
-    def _onConnect(self, *args, **kwargs):
-        self.callbacks.connect.call()
-
-    def _onDisconnect(self, *args, **kwargs):
-        print("Disconnected from child GUI")
-        self.callbacks.disconnect.call()
-
-    def _onMessage(self, message):
-        self.callbacks.message.call(message)
-
-
-class ChildGUI_ServerClient(ControlGUI_Child):
-
-    def __init__(self, id, address, port, client: WebsocketServerClient):
-        super().__init__(id, address, port)
-        self.client = client
-
-        self.client.callbacks.message.register(self._onMessage)
-        self.client.callbacks.disconnected.register(self._onDisconnect)
-
-    def send(self, message):
-        self.client.send(message)
-
-
-
-class Child_Category(ControlGUI_Category):
-
-    def __init__(self, ):
-
-class ChildGUI_WebsocketClient(ControlGUI_Child):
-    gui: GUI
-    category: ControlGUI_Category | None
-    path_in_gui: str
-
-    def __init__(self, id, address, port, category_path, client: WebsocketClient, gui: GUI):
-        super().__init__(id, address, port, category_path)
         self.client = client
         self.gui = gui
 
+        self.callbacks = Child_Callbacks()
+
+        self.client.events.message.on(self._onMessage)
         self.client.callbacks.connected.register(self._onConnect)
         self.client.callbacks.disconnected.register(self._onDisconnect)
-        self.client.callbacks.message.register(self._onMessage)
+        # self.client.callbacks.message.register(self._onMessage)
 
         self.client.connect()
 
         self.category = None
-        self.path_in_gui = category_path
+        self.path_in_gui = parent_object_uid
+
+        self.request_event = ConditionEvent(flags=[("request_id", str)])
 
     # ------------------------------------------------------------------------------------------------------------------
     def send(self, message):
@@ -675,7 +712,7 @@ class ChildGUI_WebsocketClient(ControlGUI_Child):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onConnect(self, *args, **kwargs):
-        super()._onConnect(*args, **kwargs)
+        self.callbacks.connect.call()
         message = {
             'type': 'handshake',
             'data': {
@@ -686,33 +723,183 @@ class ChildGUI_WebsocketClient(ControlGUI_Child):
         self.send(message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _onMessage(self, message):
-        super()._onMessage(message)
+    def _onDisconnect(self, *args, **kwargs):
+        self.gui.logger.warning(f"Child GUI {self.address}:{self.port} disconnected!")
 
+        # Remove the category
+        if self.category is not None:
+            self.gui.logger.debug(f"Removing category {self.category.uid} from GUI {self.gui.uid}")
+            parent = self.gui.getObjectByUID(self.path_in_gui)
+            parent.removeCategory(self.category)
+
+        self.callbacks.disconnect.call()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def requestPayloadForCategory(self, category_id):
+        # 1) clear any previous answer
+
+        # 2) send the request to the child GUI
+        request_id = str(uuid.uuid4())
+        message = {
+            'type': 'request',
+            'request_id': request_id,
+            'data': {
+                'type': 'category_payload',
+                'id': category_id,
+            }
+        }
+        self.send(message)
+
+        # 3) wait for the answer
+        success = self.request_event.wait(flags={'request_id': request_id}, timeout=5)
+        if not success:
+            self.gui.logger.warning(
+                f"Timeout waiting for payload for category {category_id} from child GUI {self.id}"
+            )
+            return None
+
+        payload = self.request_event.get_data()
+
+        # 4) now recursively prefix every 'id' (and matching config['id']) in the payload
+        prefix = self.path_in_gui.rstrip('/') + '/'
+
+        addIdPrefix(payload, prefix, ['id', 'parent'])
+
+        # def _adjust(node: dict):
+        #     # prefix node['id']
+        #     if 'id' in node and isinstance(node['id'], str):
+        #         node['id'] = prefix + node['id'].lstrip('/')
+        #
+        #     # keep config.id in sync
+        #     cfg = node.get('config')
+        #     if isinstance(cfg, dict) and 'id' in cfg:
+        #         cfg['id'] = node['id']
+        #
+        #     # dive into pages
+        #     for page in node.get('pages', {}).values():
+        #         _adjust(page)
+        #
+        #     # dive into sub‐categories
+        #     for cat in node.get('categories', {}).values():
+        #         _adjust(cat)
+        #
+        #     # dive into objects on pages
+        #     for obj in node.get('objects', {}).values():
+        #         _adjust(obj)
+        #
+        # _adjust(payload)
+        return payload
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _onMessage(self, message):
+        self.callbacks.message.call(message)
         match message['type']:
             case 'init':
                 self._handleInit(message)
+            case 'answer':
+                self._handleAnswer(message)
+            case 'update':
+                self._handleUpdate(message)
+            case 'widget_message':
+                self._handleWidgetMessage(message)
+            case 'add':
+                self._handleAdd(message)
+            case 'remove':
+                self._handleRemove(message)
             case _:
                 self.gui.logger.warning(f"Unhandled message from child GUI {self.id}: {message}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleInit(self, message):
-        self.gui.logger.debug(f"Handling init message from child GUI {self.id}")
+        # Extract the data from the message
+        data = message.get('data')
+
+        if not data:
+            self.gui.logger.warning(f"Init message from child GUI {self.address}:{self.port} has no data")
+            return
+
+        # Get the GUIs ID:
+        self.id = data.get('id')
+        if not self.id:
+            self.gui.logger.warning(f"Init message from child GUI {self.address}:{self.port} has no id")
+            return
+
+        # If the name is currently unset, use the ID:
+        if self.name is None:
+            self.name = self.id
+
+        # Now let's add a category for the child
+        self.category = Child_Category(id=self.id,
+                                       name=self.name,
+                                       child=self,
+                                       icon='🌐')
+
+        # Get the intended parent category
+        parent_object = self.gui.getObjectByUID(self.path_in_gui)
+        if parent_object is None:
+            self.gui.logger.warning(
+                f"Could not find parent category for child GUI {self.id} with path {self.path_in_gui}")
+            return
+
+        # Check if the parent is either a category or the gui itself
+        if not isinstance(parent_object, Category) and not isinstance(parent_object, GUI):
+            self.gui.logger.warning(f"Parent object for child GUI {self.id} is not a category or the gui itself")
+            return
+
+        # Add the child to the parent
+        parent_object.addCategory(self.category)
+        self.callbacks.connect.call()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleAnswer(self, message):
+        self.request_event.set(resource=message['data'], flags={'request_id': message['request_id']})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleUpdate(self, message):
+        message['id'] = self.path_in_gui + '/' + message['id']
+        message['data']['id'] = self.path_in_gui + '/' + message['data']['id']
+
+        self.gui.broadcast(message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleWidgetMessage(self, message):
+        # Forward the message to the parent GUI
+        message['id'] = self.path_in_gui + '/' + message['id']
+        self.gui.broadcast(message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleAdd(self, message):
+        self.gui.logger.important(f"Handling add message from child GUI {self.id}: {message}")
+
+        addIdPrefix(node=message,
+                    prefix=self.path_in_gui.rstrip('/') + '/',
+                    field_names=['id', 'parent'])
+
+        self.gui.logger.debug(f"Broadcasting add message: {message}")
+        self.gui.broadcast(message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleRemove(self, message):
+        addIdPrefix(node=message,
+                    prefix=self.path_in_gui.rstrip('/') + '/',
+                    field_names=['id', 'parent'])
+        self.gui.broadcast(message)
 
 
 # === PARENT ===========================================================================================================
 @callback_definition
-class ControlGUI_ParentGUI_Callbacks:
+class Parent_Callbacks:
     disconnect: CallbackContainer
     message: CallbackContainer
 
 
-class ControlGUI_Parent:
+class Parent:
 
-    def __init__(self, id, client: WebsocketServerClient):
+    def __init__(self, id, gui, client: WebsocketServerClient):
         self.id = id
+        self.gui = gui
         self.client = client
-        self.callbacks = ControlGUI_ParentGUI_Callbacks()
+        self.callbacks = Parent_Callbacks()
 
         self.client.callbacks.disconnected.register(self._onDisconnect)
         self.client.callbacks.message.register(self._onMessage)
@@ -721,11 +908,43 @@ class ControlGUI_Parent:
         self.client.send(message)
 
     def _onMessage(self, message):
-        print(f"Received message from parent GUI: {message}")
+
+        match message.get('type'):
+            case 'request':
+                self._handleRequest(message)
+
         self.callbacks.message.call(message)
 
     def _onDisconnect(self):
         self.callbacks.disconnect.call()
+
+    def _handleRequest(self, message):
+        self.gui.logger.debug(f"Handling request message from parent GUI {self.id}: {message}")
+
+        data = message.get('data')
+
+        if data:
+            match data.get('type'):
+                case 'category_payload':
+                    obj = self.gui.getObjectByUID(data.get('id'))
+                    if obj is None:
+                        self.gui.logger.warning(f"Could not find object with UID {data.get('id')} for request")
+                        return
+                    payload = obj.getPayload() if isinstance(obj, Category | GUI) else None
+
+                    if payload is None:
+                        self.gui.logger.warning(f"Object with UID {data.get('id')} is not a category or GUI")
+                        return
+
+                    response = {
+                        'type': 'answer',
+                        'request_id': message.get('request_id'),
+                        'data': payload,
+                    }
+                    self.send(response)
+
+                case _:
+                    self.gui.logger.warning(f"Unhandled request type {data.get('type')} in message {message}")
 
 
 # === GUI ==============================================================================================================
@@ -733,16 +952,19 @@ class GUI:
     id: str
     server: WebsocketServer
     client: WebsocketClient | None
-    categories: dict[str, ControlGUI_Category]
+    categories: dict[str, Category]
 
     frontends: list
-    child_guis: dict[str, ControlGUI_Child]
-    parent_guis: dict[str, ControlGUI_Parent]
+    child_guis: dict[str, Child]
+    parent_guis: dict[str, Parent]
+
+    export_category: Category
+    export_page: Page
 
     # === INIT =========================================================================================================
     def __init__(self, id, host, ws_port=8099, run_js: bool = False, js_app_port=8400, options=None):
 
-        self.id = id
+        self.id = self._prepareID(id)
         if options is None:
             options = {}
 
@@ -762,6 +984,8 @@ class GUI:
 
         self.categories = {}
 
+        self.export_category, self.export_page = self._prepareExportCategory()
+
         self.server = WebsocketServer(host=host, port=ws_port)
         self.server.callbacks.new_client.register(self._new_client_callback)
         self.server.callbacks.client_disconnected.register(self._client_disconnected_callback)
@@ -776,6 +1000,8 @@ class GUI:
         self.child_guis = {}
         self.parent_guis = {}
         self.server.start()
+
+        self.request_event = ConditionEvent(flags=[("request_id", str)])
 
         self.logger.info(f"Started GUI \"{self.id}\" on websocket {host}:{ws_port}")
 
@@ -795,6 +1021,7 @@ class GUI:
     # === METHODS ======================================================================================================
     def close(self):
         self.logger.info("Closing GUI")
+        self.server.stop()
         if self.js_process is not None:
             self.js_process.terminate()
 
@@ -809,20 +1036,39 @@ class GUI:
         self.logger.debug(f"Running JS app at http://{self.server.host}:{self.js_app_port}/")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addCategory(self, category: ControlGUI_Category):
+    def addCategory(self, category: Category):
         if category.id in self.categories:
             raise ValueError(f"Category with id {category.id} already exists")
         category.parent = self
-        self.categories[category.uid] = category
+        self.categories[category.id] = category
 
+        message = {
+            'type': 'add',
+            'data': {
+                'type': 'category',
+                'parent': self.uid,
+                'id': category.uid,
+                'config': category.getPayload(),
+            }
+        }
+        self.broadcast(message)
         return category
-        # TODO: Send an add message
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeCategory(self, category: ControlGUI_Category):
+    def removeCategory(self, category: Category | str):
+
+        if isinstance(category, str):
+            if category in self.categories:
+                category = self.categories[category]
+            else:
+                category = self.getObjectByUID(category)
+            if category is None or not isinstance(category, Category):
+                self.logger.warning(f"Category with id {category} does not exist")
+                return
+
         if category.id not in self.categories:
             raise ValueError(f"Category with id {category.id} does not exist")
-        del self.categories[category.uid]
+        del self.categories[category.id]
 
         message = {
             'type': 'remove',
@@ -851,71 +1097,44 @@ class GUI:
         self.sendToParents(message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def connectToParent(self, parent_address, parent_port):
-        """
-        Connects to a parent GUI.
-        """
-
-        raise NotImplementedError("This is currently not supported.")
-
-        # self.logger.debug(f"Connecting to parent GUI at {parent_address}:{parent_port}")
-        # # 1. Check if we are already connected to this parent. TODO
-        #
-        # # 2. Check if the parent is reachable
-        # result = pingAddress(parent_address, 5)
-        # if not result:
-        #     self.logger.warning(f"Parent at {parent_address} is not reachable")
-        #     return
-        # self.logger.debug(f"Parent at {parent_address} is reachable")
-        #
-        # # 3. Open up a websocket
-        # self.client = WebsocketClient(parent_address, parent_port)
-        # self.client.callbacks.connected.register(self._parent_client_connected)
-        # self.client.callbacks.disconnected.register(self._parent_client_disconnected)
-        # self.client.callbacks.message.register(self._parent_client_message)
-        # self.client.logger.switchLoggingLevel('INFO', 'DEBUG')
-        # self.client.connect()
+    def sendRequest(self, client, data):
+        request_id = str(uuid.uuid4())
+        message = {
+            'type': 'request',
+            'id': request_id,
+            'data': data
+        }
+        client.send(message)
+        return request_id
 
     # ------------------------------------------------------------------------------------------------------------------
-    # def _parent_client_connected(self, *args, **kwargs):
-    #     # self.logger.info(f"Connected to parent GUI at {self.client.address}:{self.client.port}")
-    #     self.logger.info(f"Connected to parent GUI at {self.client.address}:{self.client.port}")
-    #     # Send a handshake to the parent
-    #     message = {
-    #         'type': 'handshake',
-    #         'data': {
-    #             'client_type': 'child_gui',
-    #             'id': self.uid,
-    #             'payload': self.getPayload(),
-    #         }
-    #     }
-    #     self.client.send(message)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    # def _parent_client_disconnected(self, *args, **kwargs):
-    #     self.logger.info(f"Parent GUI disconnected")
-    #
-    # # ------------------------------------------------------------------------------------------------------------------
-    # def _parent_client_message(self, client, message):
-    #     ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def connectToChild(self, id, child_address, child_port, category_path: str = ''):
+    def addChildGUI(self,
+                    child_address,
+                    child_port,
+                    parent_object: Category | GUI | str = '',
+                    name: str = None,
+                    child_object_id=None):
 
         self.logger.debug(f"Connecting to child GUI at {child_address}:{child_port}")
 
-        child = ChildGUI_WebsocketClient(id=id,
-                                         address=child_address,
-                                         port=child_port,
-                                         client=WebsocketClient(child_address, child_port),
-                                         category_path=category_path,
-                                         gui=self)
+        if isinstance(parent_object, GUI | Category):
+            # If the parent is a GUI or Category, use its UID
+            parent_object = parent_object.uid
 
+        child = Child(name=name,
+                      address=child_address,
+                      port=child_port,
+                      client=WebsocketClient(child_address, child_port),
+                      parent_object_uid=parent_object,
+                      gui=self,
+                      child_object_id=child_object_id)
+
+        self.child_guis[f"{child_address}:{child_port}"] = child
         child.callbacks.connect.register(lambda *args, **kwargs:
                                          self.logger.info(f"Connected to child GUI at {child_address}:{child_port}"))
 
     # === PRIVATE METHODS ==============================================================================================
-    def getElementByUID(self, uid: str):
+    def getObjectByUID(self, uid: str):
         """
         Given a full UID, e.g.
            "myGui::category1/page1/button1"
@@ -932,8 +1151,19 @@ class GUI:
         trimmed = uid.lstrip("/")
 
         # 3) now trimmed is "categoryID[/rest]"
-        category_id, remainder = split_path(trimmed)
+        gui_id, remainder = split_path(trimmed)
+        if not gui_id or gui_id != self.id:
+            self.logger.warning(f"UID '{uid}' does not match this GUI's ID '{self.id}'")
+            return None
+
+        # If the remainder is empty, we are looking for the GUI itself
+        if not remainder:
+            return self
+        # 4) Split off the category ID
+        #    e.g. "category1/page1/button1" -> "category1",
+        category_id, remainder = split_path(remainder)
         if not category_id:
+            self.logger.warning(f"UID '{uid}' does not contain a valid category ID")
             return None
 
         # 4) categories are stored under key == "<gui_id>::<category_id>"
@@ -954,6 +1184,7 @@ class GUI:
             'id': self.uid,
             'name': self.options['name'],
             'options': self.options,
+            'export': self.export_category.getPayload(),
             'categories': {k: v.getPayload() for k, v in self.categories.items()}
         }
         return payload
@@ -970,10 +1201,13 @@ class GUI:
     # ------------------------------------------------------------------------------------------------------------------
     def _initializeParent(self, parent_client):
 
-        parent = ControlGUI_Parent(id='', client=parent_client)
+        parent = Parent(id='', gui=self, client=parent_client)
         self.parent_guis[parent_client] = parent
         message = {
             'type': 'init',
+            'data': {
+                'id': self.id,
+            },
             'configuration': self.getPayload(),
         }
         parent.send(message)
@@ -1001,8 +1235,11 @@ class GUI:
                 self._handleHandshakeMessage(client, message)
             case 'event':
                 self._handleEventMessage(message)
+            case 'request':
+                # These are handled by the parent objects, so no need to do something here
+                pass
             case _:
-                self.logger.debug(f"Unknown message type: {message['type']}")
+                self.logger.warning(f"Unknown message type: {message['type']}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleHandshakeMessage(self, client: WebsocketServerClient, message):
@@ -1030,18 +1267,97 @@ class GUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleEventMessage(self, message):
-
-        # Check if the message has an ID
-        if not message.get('id'):
+        """
+        Handle an 'event' from a frontend. If the event's id belongs to
+        a child GUI (i.e. starts with `<parent_mount>/<child.id>`), strip
+        off the parent and child prefixes, re-prepend the child.id, and
+        forward it; otherwise route it to a local element.
+        """
+        # 1) must have an id
+        msg_id = message.get('id')
+        if not msg_id:
             self.logger.warning(f"Event message received without id: {message}")
             return
 
-        # Check if the message belongs to us, or to a child
-        # TODO
+        # Check if the message is meant for a child GUI
+        child, child_obj_id = self._checkPathForChildGUI(msg_id)
 
-        # Try to find the element with the given ID
-        element = self.getElementByUID(message['id'])
-        if element is None:
-            self.logger.warning(f"Event message received for nonexistent element {message['id']}: {message}")
+        if child is not None:
+            # child GUI matched → forward the event to the child
+
+            # rebuild the event for the child
+            child_event = {
+                'type': 'event',
+                'event': message.get('event'),
+                'id': child_obj_id,
+                'data': message.get('data'),
+            }
+
+            self.logger.debug(
+                f"Forwarding event to child GUI {child.address}:{child.port}: {child_event}"
+            )
+            child.send(child_event)
             return
-        element.onMessage(message['data'])
+
+        # 3) no child matched → handle locally
+        element = self.getObjectByUID(msg_id)
+        if element is None:
+            self.logger.warning(f"Event for unknown element {msg_id}: {message}")
+            return
+        if isinstance(element, GUI_Object_Instance):
+            element.obj.onMessage(message.get('data'))
+        else:
+            element.onMessage(message.get('data'))
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _checkPathForChildGUI(self, path) -> (Child | None, str):
+        for child in self.child_guis.values():
+            parent_mount = child.path_in_gui.rstrip('/')  # e.g. ":myGui:/categoryX"
+            full_mount = f"{parent_mount}/{child.id}"  # e.g. ":myGui:/categoryX/childGuiID"
+
+            # Does the event target live at or under this full_mount?
+            if path == full_mount or path.startswith(full_mount + '/'):
+                # strip off the full_mount prefix
+                suffix = path[len(full_mount):]  # e.g. "" or "/page1/button1"
+                if suffix.startswith('/'):
+                    suffix = suffix[1:]  # e.g. "page1/button1"
+
+                # build the ID the child expects: always start with its own id
+                child_obj_id = child.id + (f"/{suffix}" if suffix else "")
+                return child, child_obj_id
+
+        # No child GUI matched
+        return None, ''
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _prepareID(gui_id: str) -> str:
+        """
+        Prepare an ID for use in the GUI by removing spaces and slashes.
+        """
+        if check_for_spaces(gui_id):
+            raise ValueError(f"ID '{gui_id}' contains spaces")
+        if '/' in gui_id:
+            raise ValueError(f"ID '{gui_id}' contains slashes")
+        if ':' in gui_id:
+            raise ValueError(f"ID '{gui_id}' contains colons")
+
+        gui_id = f":{gui_id}:"
+
+        return gui_id
+
+    def _prepareExportCategory(self):
+        category = Category(id=self.id,
+                            name=f"{self.id}_exp",
+                            icon='🌐',
+                            max_pages=1,
+                            top_icon='🌐'
+                            )
+
+        export_page = Page(id=f"{self.id}_exp_page1",
+                           name=f"{self.id}_exp_page1",
+                           )
+
+        category.addPage(export_page)
+
+        return category, export_page

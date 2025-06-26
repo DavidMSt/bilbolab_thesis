@@ -113,7 +113,7 @@ hardware_definition_normal_bilbo = {
         'type': 'normal'
     },
     'settings': {
-        'theta_offset': math.radians(0),
+        'theta_offset': math.radians(1),
     },
     'electronics': {
         'board_revision': 'v4',

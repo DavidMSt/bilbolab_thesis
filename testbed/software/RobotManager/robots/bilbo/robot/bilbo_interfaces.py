@@ -131,8 +131,6 @@ class BILBO_Interfaces:
         #         state_data = math.degrees(state_data)
         #     plot["plot"].push_data(state_data)
 
-
-
     # ------------------------------------------------------------------------------------------------------------------
     def _startJoystickThread(self):
         self.joystick_thread = threading.Thread(target=self._joystick_task, daemon=True)
@@ -354,7 +352,22 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                               default=0.1),
                                           ])
 
-        experiment_command_set = CommandSet(name='experiment', commands=[test_trajectory_command])
+        ilc_command = Command(name='ilc',
+                              allow_positionals=True,
+                              callback=self.experiments.runILC,
+                              execute_in_thread=True,
+                              arguments=[
+                                  CommandArgument(name='num',
+                                                  short_name='n',
+                                                  type=int,
+                                                  description='Number of ILC iterations',
+                                                  optional=False,
+                                                  ),
+                              ]
+                              )
+
+        experiment_command_set = CommandSet(name='experiment',
+                                            commands=[test_trajectory_command, ilc_command])
 
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
@@ -365,4 +378,3 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                            test_communication],
 
                          child_sets=[control_command_set, experiment_command_set])
-

@@ -61,6 +61,7 @@ void core_hardware_SPI_slave::start() {
 
 void core_hardware_SPI_slave::reset(){
 	HAL_SPI_Abort(this->config.hspi);
+	HAL_SPI_DMAStop(this->config.hspi);
 }
 
 /* ====================================================== */

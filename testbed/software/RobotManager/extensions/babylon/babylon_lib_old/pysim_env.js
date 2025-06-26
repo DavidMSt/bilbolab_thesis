@@ -39,7 +39,7 @@ class PysimScene extends Scene {
         // --- UI SETUP ---
         this.ui = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("ui", true, this.scene);
         this.textbox_time = new BABYLON.GUI.TextBlock();
-        this.textbox_time.fontSize = 20;
+        this.textbox_time.font_size = 20;
         this.textbox_time.text = "";
         this.textbox_time.color = "black";
         this.textbox_time.paddingTop = 3;
@@ -49,7 +49,7 @@ class PysimScene extends Scene {
         this.ui.addControl(this.textbox_time);
 
         this.textbox_status = new BABYLON.GUI.TextBlock();
-        this.textbox_status.fontSize = 40;
+        this.textbox_status.font_size = 40;
         this.textbox_status.text = "";
         this.textbox_status.color = "black";
         this.textbox_status.paddingTop = 3;
@@ -59,7 +59,7 @@ class PysimScene extends Scene {
         this.ui.addControl(this.textbox_status);
 
         this.textbox_title = new BABYLON.GUI.TextBlock();
-        this.textbox_title.fontSize = 40;
+        this.textbox_title.font_size = 40;
         this.textbox_title.text = "";
         this.textbox_title.color = "black";
         this.textbox_title.paddingTop = 3;

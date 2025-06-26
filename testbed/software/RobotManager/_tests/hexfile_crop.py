@@ -18,4 +18,4 @@ def cropHex(file, start=FLASH_START, end=FLASH_END):
 
 
 if __name__ == '__main__':
-    cropHex('/Users/lehmann/Desktop/twipr_firmware_hhi.hex')
+    cropHex('/Users/lehmann/Desktop/bilbo.hex')

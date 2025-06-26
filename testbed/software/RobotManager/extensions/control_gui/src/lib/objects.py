@@ -3,19 +3,44 @@ from __future__ import annotations
 import abc
 from typing import Any
 
+from core.utils.dict import replaceField
 from core.utils.logging_utils import Logger
 from extensions.control_gui.src.lib.utilities import check_for_spaces, split_path
 
+# ======================================================================================================================
+class GUI_Object_Instance:
+    id: str
+    obj: GUI_Object
+    parent: Any
+
+    def __init__(self, id: str, obj: GUI_Object):
+        self.id = id
+        self.obj = obj
+
+
+    def getPayload(self):
+        payload = self.obj.getPayload()
+        replaceField(payload, str, 'id', self.uid)
+        return payload
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @property
+    def uid(self):
+        uid = self.id
+        if self.parent is not None:
+            uid = f"{self.parent.uid}/{uid}"
+        return uid
 
 # ======================================================================================================================
 class GUI_Object(abc.ABC):
     id: str
-    uid: str
+    # uid: str
     type: str
-    parent: Any
+    # parent: Any
 
     config: dict
 
+    instances: list[GUI_Object_Instance]
     # ------------------------------------------------------------------------------------------------------------------
     def __init__(self, widget_id):
 
@@ -26,21 +51,44 @@ class GUI_Object(abc.ABC):
         if ":" in widget_id:
             raise ValueError(f"Category id '{widget_id}' contains colons")
 
-        self.parent = None
         self.id = widget_id
 
         self.logger = Logger(self.id, 'DEBUG')
 
+        self.instances = []
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def newInstance(self) -> GUI_Object_Instance:
+        instance = GUI_Object_Instance(self.id, self)
+        self.instances.append(instance)
+        return instance
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def removeInstance(self, instance):
+
+        if isinstance(instance, str):
+            instance_obj = next(i for i in self.instances if i.uid == instance)
+            if instance:
+                self.instances.remove(instance_obj)
+                return
+
+        elif isinstance(instance, GUI_Object_Instance):
+            if instance in self.instances:
+                self.instances.remove(instance)
+
     # ------------------------------------------------------------------------------------------------------------------
     def sendMessage(self, data):
-        message = {
-            'type': 'widget_message',
-            'id': self.uid,
-            'data': data
-        }
 
         gui = self.getGUI()
-        if gui is not None:
+        if gui is None:
+            return
+
+        for instance in self.instances:
+            message = {
+                'type': 'widget_message',
+                'id': instance.uid,
+                'data': data
+            }
             try:
                 gui.broadcast(message)
             except Exception as e:
@@ -60,14 +108,16 @@ class GUI_Object(abc.ABC):
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendUpdate(self, data):
-        message = {
-            'type': 'update',
-            'id': self.uid,
-            'data': data
-        }
-
         gui = self.getGUI()
-        if gui is not None:
+        if gui is None:
+            return
+
+        for instance in self.instances:
+            message = {
+                'type': 'update',
+                'id': instance.uid,
+                'data': data
+            }
             try:
                 gui.broadcast(message)
             except Exception as e:
@@ -75,8 +125,14 @@ class GUI_Object(abc.ABC):
 
     # ------------------------------------------------------------------------------------------------------------------
     def getGUI(self):
-        if self.parent:
-            return self.parent.getGUI()
+
+        if len(self.instances) == 0:
+            return None
+
+        instance = self.instances[0]
+        if instance.parent:
+            return instance.parent.getGUI()
+
         return None
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -108,19 +164,13 @@ class GUI_Object(abc.ABC):
     # ------------------------------------------------------------------------------------------------------------------
     def getPayload(self):
         payload = {
-            'id': self.uid,
+            'id': self.id,
             'type': self.type,
             'config': self.getConfiguration(),
         }
         return payload
 
-    # ------------------------------------------------------------------------------------------------------------------
-    @property
-    def uid(self):
-        uid = self.id
-        if self.parent is not None:
-            uid = f"{self.parent.uid}/{uid}"
-        return uid
+
 
 
 # ======================================================================================================================

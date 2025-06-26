@@ -28,6 +28,7 @@ import robot.lowlevel.stm32_addresses as stm32_addresses
 from core.utils.exit import register_exit_callback
 
 
+
 # === GLOBAL VARIABLES =================================================================================================
 
 setLoggerLevel('wifi', 'ERROR')
@@ -114,7 +115,7 @@ class BILBO:
         self.sensors = BILBO_Sensors(comm=self.communication)
         self.supervisor = TWIPR_Supervisor(comm=self.communication)
 
-        self.utilities = BILBO_Utilities(communication=self.communication)
+        self.utilities = BILBO_Utilities(core=self.core, communication=self.communication)
         self.experiment_handler = BILBO_ExperimentHandler(communication=self.communication,
                                                           utils=self.utilities,
                                                           control=self.control, )

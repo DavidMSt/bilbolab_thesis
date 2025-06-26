@@ -11,7 +11,6 @@ from numpy import nan, hstack
 
 from extensions.simulation.src import core as core
 from extensions.simulation.src.core import spaces as sp
-from extensions.simulation.src.objects.base_environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.simulation.src.utils import lib_control
 from extensions.simulation.src.utils.orientations import twiprToRotMat, twiprFromRotMat
 from extensions.simulation.src.utils.babylon import setBabylonSettings
@@ -344,6 +343,13 @@ class BILBO_2D_Nonlinear(core.dynamics.Dynamics):
     Nonlinear dynamics for BILBO based on a 2D model.
     Uses a linearization (BILBO_2D_Linear) for state feedback.
     """
+
+    def _output(self, state: sp.State):
+        pass
+
+    def init(self):
+        pass
+
     # Use the 7D state space from the 3D BILBO configuration.
     state_space = BILBO_3D_StateSpace_7D
     input_space = BILBO_2D_InputSpace
@@ -408,7 +414,7 @@ class BILBO_2D_Nonlinear(core.dynamics.Dynamics):
         state_dot[1] = (np.sin(theta) / V_1) * (-C_11 * g + C_12 * theta_dot ** 2) - (D_11 / V_1) * v + (
                 D_12 / V_1) * theta_dot + (B_1 / V_1) * u[0] - model.tau_x * v
         state_dot[2] = theta_dot
-        state_dot[3] = (np.sin(theta) / V_1) * (C_21 * g - C_22 * theta ** 2) + (D_21 / V_1) * v - (
+        state_dot[3] = (np.sin(theta) / V_1) * (C_21 * g - C_22 * theta_dot ** 2) + (D_21 / V_1) * v - (
                 D_22 / V_1) * theta_dot - (B_2 / V_1) * u[0] - model.tau_theta * theta_dot
         state = state + state_dot * self.Ts
         return state
@@ -552,16 +558,16 @@ class BILBO_3D_Linear_XY(core.dynamics.LinearDynamics):
         # Compute common terms from the original 3D linear model.
         C_21 = (model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * model.m_b * model.l
         V_1 = (model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * (
-                    model.I_y + model.m_b * model.l ** 2) - model.m_b ** 2 * model.l ** 2
+                model.I_y + model.m_b * model.l ** 2) - model.m_b ** 2 * model.l ** 2
         D_22 = ((
-                            model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * 2 * model.c_alpha + model.m_b * model.l * 2 * model.c_alpha / model.r_w)
+                        model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * 2 * model.c_alpha + model.m_b * model.l * 2 * model.c_alpha / model.r_w)
         D_21 = ((
-                            model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * 2 * model.c_alpha / model.r_w + model.m_b * model.l * 2 * model.c_alpha / model.r_w ** 2)
+                        model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * 2 * model.c_alpha / model.r_w + model.m_b * model.l * 2 * model.c_alpha / model.r_w ** 2)
         C_11 = model.m_b ** 2 * model.l ** 2
         D_12 = ((
-                            model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * 2 * model.c_alpha)
+                        model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * 2 * model.c_alpha)
         D_11 = ((
-                            model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w ** 2 - model.m_b * model.l * 2 * model.c_alpha / model.r_w)
+                        model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w ** 2 - model.m_b * model.l * 2 * model.c_alpha / model.r_w)
         D_33 = model.d_w / (2 * model.r_w ** 2) * model.c_alpha
         V_2 = model.I_z + 2 * model.I_w + (model.m_w + model.I_w / model.r_w ** 2) * model.d_w ** 2 / 2
 
@@ -835,7 +841,6 @@ class BILBO_DynamicAgent(BILBO_Agent, core.agents.DynamicAgent):
         # Combine a zero column with the computed gain matrix.
         self.state_ctrl_K = np.hstack((np.zeros((2, 1)), self.linear_dynamics.K))
 
-
         print(self.state_ctrl_K)
         if K is not None:
             self.state_ctrl_K = K
@@ -913,3 +918,8 @@ class BILBO_DynamicAgent(BILBO_Agent, core.agents.DynamicAgent):
         return np.column_stack((input / 2, input / 2))
 
 
+if __name__ == '__main__':
+    model = DEFAULT_BILBO_MODEL
+
+    x = BILBO_2D_Linear(model=model, Ts=0.02, poles=[0, -20, -2 + 2j, -2 - 2j])
+    print(x.K_disc)

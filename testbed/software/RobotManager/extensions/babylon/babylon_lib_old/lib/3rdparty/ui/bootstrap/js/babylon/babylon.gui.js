@@ -5572,7 +5572,7 @@ var Control = /** @class */ (function () {
             return;
         }
         if (this._style) {
-            this._font = this._style.fontStyle + " " + this._style.fontWeight + " " + this.fontSizeInPixels + "px " + this._style.fontFamily;
+            this._font = this._style.font_style + " " + this._style.font_weight + " " + this.fontSizeInPixels + "px " + this._style.font_family;
         }
         else {
             this._font = this._fontStyle + " " + this._fontWeight + " " + this.fontSizeInPixels + "px " + this._fontFamily;
@@ -9500,7 +9500,7 @@ var ScrollViewer = /** @class */ (function (_super) {
             _this._verticalBar = new _sliders_scrollBar__WEBPACK_IMPORTED_MODULE_5__["ScrollBar"]();
         }
         _this._window = new _scrollViewerWindow__WEBPACK_IMPORTED_MODULE_4__["_ScrollViewerWindow"]("scrollViewer_window");
-        _this._window.horizontalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
+        _this._window.horizontal_alignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
         _this._window.verticalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].VERTICAL_ALIGNMENT_TOP;
         _this._grid.addColumnDefinition(1);
         _this._grid.addColumnDefinition(0, true);
@@ -9509,13 +9509,13 @@ var ScrollViewer = /** @class */ (function (_super) {
         _super.prototype.addControl.call(_this, _this._grid);
         _this._grid.addControl(_this._window, 0, 0);
         _this._verticalBarSpace = new _rectangle__WEBPACK_IMPORTED_MODULE_1__["Rectangle"]();
-        _this._verticalBarSpace.horizontalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
+        _this._verticalBarSpace.horizontal_alignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
         _this._verticalBarSpace.verticalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].VERTICAL_ALIGNMENT_TOP;
         _this._verticalBarSpace.thickness = 1;
         _this._grid.addControl(_this._verticalBarSpace, 0, 1);
         _this._addBar(_this._verticalBar, _this._verticalBarSpace, true, Math.PI);
         _this._horizontalBarSpace = new _rectangle__WEBPACK_IMPORTED_MODULE_1__["Rectangle"]();
-        _this._horizontalBarSpace.horizontalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
+        _this._horizontalBarSpace.horizontal_alignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
         _this._horizontalBarSpace.verticalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].VERTICAL_ALIGNMENT_TOP;
         _this._horizontalBarSpace.thickness = 1;
         _this._grid.addControl(_this._horizontalBarSpace, 1, 0);
@@ -10379,7 +10379,7 @@ var _ScrollViewerWindow = /** @class */ (function (_super) {
             if (!child.isVisible || child.notRenderable) {
                 continue;
             }
-            if (child.horizontalAlignment === _control__WEBPACK_IMPORTED_MODULE_4__["Control"].HORIZONTAL_ALIGNMENT_CENTER) {
+            if (child.horizontal_alignment === _control__WEBPACK_IMPORTED_MODULE_4__["Control"].HORIZONTAL_ALIGNMENT_CENTER) {
                 child._offsetLeft(this._currentMeasure.left - child._currentMeasure.left);
             }
             if (child.verticalAlignment === _control__WEBPACK_IMPORTED_MODULE_4__["Control"].VERTICAL_ALIGNMENT_CENTER) {
@@ -10456,7 +10456,7 @@ var SelectorGroup = /** @class */ (function () {
         this._groupPanel = new _stackPanel__WEBPACK_IMPORTED_MODULE_2__["StackPanel"]();
         this._selectors = new Array();
         this._groupPanel.verticalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].VERTICAL_ALIGNMENT_TOP;
-        this._groupPanel.horizontalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
+        this._groupPanel.horizontal_alignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
         this._groupHeader = this._addGroupHeader(name);
     }
     Object.defineProperty(SelectorGroup.prototype, "groupPanel", {
@@ -10746,7 +10746,7 @@ var SelectionPanel = /** @class */ (function (_super) {
         _this.thickness = 2;
         _this._panel = new _stackPanel__WEBPACK_IMPORTED_MODULE_2__["StackPanel"]();
         _this._panel.verticalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].VERTICAL_ALIGNMENT_TOP;
-        _this._panel.horizontalAlignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
+        _this._panel.horizontal_alignment = _control__WEBPACK_IMPORTED_MODULE_3__["Control"].HORIZONTAL_ALIGNMENT_LEFT;
         _this._panel.top = 5;
         _this._panel.left = 5;
         _this._panel.width = 0.95;
@@ -15737,7 +15737,7 @@ var HolographicButton = /** @class */ (function (_super) {
                 this._tooltipTextBlock = new _2D_controls_textBlock__WEBPACK_IMPORTED_MODULE_6__["TextBlock"]();
                 this._tooltipTextBlock.scaleY = 3;
                 this._tooltipTextBlock.color = "white";
-                this._tooltipTextBlock.fontSize = 130;
+                this._tooltipTextBlock.font_size = 130;
                 this._tooltipTexture.addControl(this._tooltipTextBlock);
                 // Add hover action to tooltip
                 this._tooltipFade = new babylonjs_Materials_standardMaterial__WEBPACK_IMPORTED_MODULE_2__["FadeInOutBehavior"]();

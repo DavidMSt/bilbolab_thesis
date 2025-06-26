@@ -19,6 +19,7 @@ export default defineConfig({
     },
     server: {
         host: true,  // 👈 This allows external access (e.g. via IP)
-        port: 9200
+        port: 9200,
+        allowedHosts: ['.local', 'dale']
     }
 });

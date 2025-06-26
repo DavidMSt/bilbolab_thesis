@@ -84,6 +84,8 @@ class Startup:
         self.LED_PIN = self.hardware['electronics']['buttons']['primary']['led']['pin']
         self.BUTTON_PIN = self.hardware['electronics']['buttons']['primary']['pin']
 
+        print(self.BUTTON_PIN)
+
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
         GPIO.setup(self.LED_PIN, GPIO.OUT)
