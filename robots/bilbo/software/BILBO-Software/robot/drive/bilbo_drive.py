@@ -36,7 +36,7 @@ class BILBO_Drive:
         self.left = TWIPR_Drive_Data()
         self.right = TWIPR_Drive_Data()
 
-        self._comm.callbacks.rx_stm32_sample.register(self._onSample)
+        # self._comm.callbacks.rx_stm32_sample.register(self._onSample)
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> TWIPR_Drive_Sample:

@@ -1,5 +1,6 @@
 from math import isclose
 import numpy as np
+from matplotlib import pyplot as plt
 from scipy.signal import butter, filtfilt
 
 
@@ -55,6 +56,21 @@ def generate_time_vector(start, end, dt):
     # Calculate the number of points needed. Adding 1 ensures the endpoint is included.
     num_points = int((end - start) / dt) + 1
     return np.linspace(start, end, num_points)
+
+
+def generate_time_vector_by_length(num_samples, dt, start=0.0):
+    """
+    Generate a time vector given the number of samples and sample interval.
+
+    Parameters:
+        num_samples (int): Number of time samples.
+        dt (float): Sampling interval.
+        start (float, optional): Starting time (default = 0.0).
+
+    Returns:
+        numpy.ndarray: Time vector of length num_samples.
+    """
+    return start + np.arange(num_samples) * dt
 
 
 def generate_random_input(t_vector, f_cutoff, sigma_I):
@@ -150,3 +166,43 @@ def resample(t, x, t_new):
         x_new = np.array([np.interp(t_new, t, x[:, i]) for i in range(x.shape[1])]).T
 
     return x_new
+
+
+# ======================================================================================================================
+# ----------------------------------------------------------------------------------------------------------------------
+def plot_frequency_spectrum(signal: np.ndarray, Ts: float, num_dominant: int = 5):
+    steps = len(signal)
+    freqs = rfftfreq(steps, Ts)
+    fft_magnitude = np.abs(rfft(signal))
+    fft_magnitude[0] = 0.0  # Remove DC
+
+    # Find peaks
+    peak_indices, _ = find_peaks(fft_magnitude, height=np.max(fft_magnitude) * 0.05)
+    if len(peak_indices) == 0:
+        print("No dominant frequencies found.")
+        return
+
+    # Sort by magnitude and get top N
+    sorted_indices = peak_indices[np.argsort(fft_magnitude[peak_indices])[::-1]]
+    top_indices = sorted_indices[:num_dominant]
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(freqs, fft_magnitude, label="FFT Magnitude")
+    plt.scatter(freqs[top_indices], fft_magnitude[top_indices], color='red', zorder=5, label="Dominant Frequencies")
+
+    for idx in top_indices:
+        plt.annotate(f"{freqs[idx]:.2f} Hz", (freqs[idx], fft_magnitude[idx]), textcoords="offset points",
+                     xytext=(0, 10), ha='center')
+
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Amplitude")
+    plt.title("Frequency Spectrum with Dominant Frequencies")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+def clamp(value, low, high):
+    return limit(value, high, low)

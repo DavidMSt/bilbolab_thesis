@@ -47,9 +47,9 @@ def example_representations():
             if isinstance(position, list):
                 position = np.asarray(position)
 
-            self.bounding_objects['sphere1'].update(position)
+            self.bounding_objects['sphere1'].updateConfig(position)
             position_sphere_2 = position + orientation @ self.offset
-            self.bounding_objects['sphere2'].update(position_sphere_2)
+            self.bounding_objects['sphere2'].updateConfig(position_sphere_2)
 
         def _calcProximitySphere(self):
             pass

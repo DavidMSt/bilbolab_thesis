@@ -1,79 +1,93 @@
+from typing import Union
+
 from core.communication.wifi.data_link import CommandArgument
+from core.utils.callbacks import Callback
+from hardware.control_board import RobotControl_Board
 from robot.bilbo_core import BILBO_Core
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.hardware import get_hardware_definition
-from core.utils.events import event_definition, ConditionEvent
+from robot.hardware import readHardwareDefinition
+from core.utils.events import event_definition, Event
 from core.utils.sound.sound import SoundSystem
 
 
 @event_definition
 class BILBO_Utilities_Events:
-    resume: ConditionEvent
+    resume: Event
 
 
 # ======================================================================================================================
 class BILBO_Utilities:
-    sound_system: SoundSystem
+    sound_system: Union[SoundSystem, None]
     core: BILBO_Core
 
-    def __init__(self, core: BILBO_Core, communication: BILBO_Communication):
-        hardware_definition = get_hardware_definition()
+    board: RobotControl_Board
 
-        if hardware_definition['electronics']['sound']['active']:
-            self.sound_system = SoundSystem(hardware_definition['electronics']['sound']['gain'] * 0.2)
+    def __init__(self, core: BILBO_Core, board: RobotControl_Board, communication: BILBO_Communication):
+        hardware_definition = readHardwareDefinition()
+
+        self.core = core
+        self.board = board
+
+        if hardware_definition.electronics.sound.active:
+            self.sound_system = SoundSystem(hardware_definition.electronics.sound.gain * 0.2)
         else:
             self.sound_system = None
 
         self.communication = communication
         self.events = BILBO_Utilities_Events()
 
-        self.communication.wifi.addCommand(
+        self.communication.wifi.callbacks.connected.register(self.board.setStatusLed, inputs={'state': True},
+                                                             discard_inputs=True)
+        self.communication.wifi.callbacks.disconnected.register(self.board.setStatusLed, inputs={'state': False},
+                                                                discard_inputs=True)
+
+        self.communication.wifi.newCommand(
             identifier='speak',
-            callback=self.speak,
+            function=self.speak,
             arguments=['message'],
             description='Speak the given message'
         )
 
-        self.communication.wifi.addCommand(
-            identifier='resume',
-            callback=self.resume,
-            arguments=[CommandArgument(
-                name='data',
-                type='any',
-                optional=True,
-                default=None,
-                description='Data to resume with (optional)'
-            )],
-            description='Resume the robot'
-        )
+        self.communication.wifi.newCommand(identifier='rgbled',
+                                           function=self.setLEDs,
+                                           arguments=['red', 'green', 'blue'],
+                                           description='')
 
-        self.communication.wifi.addCommand(
-            identifier='repeat',
-            callback=self.repeat,
-            arguments=[CommandArgument(
-                name='data',
-                type='any',
-                optional=True,
-                default=None,
-                description='Data to repeat with (optional)'
-            )],
-            description='Repeat the last action'
-        )
+        self.communication.wifi.newCommand(identifier='beep',
+                                           function=self.beep,
+                                           description='',
+                                           arguments=[
+                                               CommandArgument(name='frequency',
+                                                               type=str,
+                                                               optional=True,
+                                                               default='medium',
+                                                               description='Frequency of the beep. Can be "low", "medium", "high" or a number in Hz'),
+                                               CommandArgument(name='time_ms',
+                                                               type=int,
+                                                               optional=True,
+                                                               default=500,
+                                                               description='Duration of the beep in ms'),
+                                               CommandArgument(name='repeats',
+                                                               type=int,
+                                                               optional=True,
+                                                               default=1,
+                                                               description='Number of repeats')
+                                           ])
 
-        self.communication.wifi.addCommand(
-            identifier='abort',
-            callback=self.abort,
-            arguments=[CommandArgument(
-                name='data',
-                type='any',
-                optional=True,
-                default=None,
-                description='Data to abort with (optional)'
-            )],
-            description='Abort the current action'
-        )
+        # Add some utility speech output
+        self.core.events.joystick_connected.on(callback=Callback(self.speak,
+                                                                 inputs={'message': 'Joystick connected'},
+                                                                 discard_inputs=True),
+                                               input_data=False,
+                                               )
 
-    # ------------------------------------------------------------------------------------------------------------------
+        self.core.events.joystick_disconnected.on(callback=Callback(self.speak,
+                                                                    inputs={'message': 'Joystick disconnected'},
+                                                                    discard_inputs=True),
+                                                  input_data=False, )
+
+        # ------------------------------------------------------------------------------------------------------------------
+
     def init(self):
         ...
 
@@ -89,25 +103,21 @@ class BILBO_Utilities:
         self.sound_system.play(tone)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def speak(self, message, on_host=True):
-        # if self.sound_system is None:
-        #     if on_host:
-        #         self.communication.wifi.sendEvent(event='speak',
-        #                                           data={
-        #                                               'message': message,
-        #                                           })
-        # self.sound_system.speak(message)
-        self.communication.wifi.sendEvent(event='speak',
-                                          data={
-                                              'message': message,
-                                          })
+    def setLEDs(self, red, green, blue):
+        self.board.setRGBLEDExtern([red, green, blue])
 
     # ------------------------------------------------------------------------------------------------------------------
-    def resume(self, data=None):
-        self.core.setResumeEvent(data)
+    def beep(self, frequency, time_ms, repeats):
+        self.board.beep(frequency, time_ms, repeats)
 
-    def repeat(self, data=None):
-        self.core.setRepeatEvent(data)
+    # ------------------------------------------------------------------------------------------------------------------
+    def speak(self, message, on_host=True):
+        if self.sound_system is None:
+            if on_host:
+                self.communication.wifi.sendEvent(event='speak',
+                                                  data={
+                                                      'message': message,
 
-    def abort(self, data=None):
-        self.core.setAbortEvent(data)
+                                                  })
+        else:
+            self.sound_system.speak(message)

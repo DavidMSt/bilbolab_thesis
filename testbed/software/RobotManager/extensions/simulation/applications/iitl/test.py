@@ -1,12 +1,11 @@
-import numpy as np
 from matplotlib import pyplot as plt
 
 from extensions.simulation.applications.iitl.bilbo_iitl import generate_learning_set
-from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent
+from extensions.simulation._archive.bilbo import BILBO_DynamicAgent
 from extensions.simulation.utils.data import fun_sample_random_input, generate_time_vector
 
 
-def test_input_generation():
+def input_generation():
     t_vector = generate_time_vector(0, 10, 0.1)
     print(t_vector)
     f_cutoff = 1  # cutoff frequency in Hz
@@ -25,7 +24,7 @@ def test_input_generation():
     plt.show()
 
 
-def test_generation_of_learning_set():
+def generation_of_learning_set():
     agent = BILBO_DynamicAgent(agent_id='source')
 
     data = generate_learning_set(agent, 10, 1000, 0.01)
@@ -33,4 +32,4 @@ def test_generation_of_learning_set():
 
 
 if __name__ == '__main__':
-    test_generation_of_learning_set()
+    generation_of_learning_set()

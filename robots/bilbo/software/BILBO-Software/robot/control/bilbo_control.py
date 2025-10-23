@@ -1,4 +1,6 @@
+from core.utils.dataclass_utils import from_dict, asdict_optimized
 from core.utils.dict_utils import format_floats
+from robot.bilbo_core import BILBO_Core
 from robot.communication.serial.bilbo_serial_messages import BILBO_Control_Event_Message
 from robot.control.bilbo_control_config import load_config
 # Importing low-level sample class from STM32 interface
@@ -9,7 +11,7 @@ from core.utils.callbacks import callback_definition, CallbackContainer
 from robot.communication.bilbo_communication import BILBO_Communication
 import robot.lowlevel.stm32_addresses as addresses
 from robot.lowlevel.stm32_control import *
-from core.utils.events import ConditionEvent, event_definition
+from core.utils.events import Event, event_definition, EventFlag
 from core.utils.logging_utils import Logger
 from robot.control.bilbo_control_data import *
 from robot.control.bilbo_control_data import *
@@ -19,7 +21,7 @@ from core.utils.delayed_executor import delayed_execution
 # import robot.control.config as control_config
 
 # === Logger ===========================================================================================================
-logger = Logger('control')
+logger = Logger('CONTROL')
 logger.setLevel('INFO')
 
 
@@ -44,10 +46,12 @@ class BILBO_Control_Callbacks:
 
 @event_definition
 class BILBO_Control_Events:
-    mode_change: ConditionEvent = ConditionEvent(flags=[('mode', BILBO_Control_Mode)])
-    configuration_change: ConditionEvent
-    error: ConditionEvent
-    status_change: ConditionEvent = ConditionEvent(flags=[('status', str)])
+    mode_change: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
+    configuration_change: Event
+    error: Event
+    status_change: Event = Event(flags=EventFlag('status', str))
+    vic_change: Event
+    tic_change: Event
 
 
 # === BILBO Control ====================================================================================================
@@ -72,6 +76,8 @@ class BILBO_Control:
     # Control configuration (loaded from control_config)
     config: BILBO_ControlConfig
 
+    ll_config: BILBO_LL_ControlConfig
+
     # External and manual control inputs
     external_input: BILBO_Control_Input
     enable_external_input: bool
@@ -87,7 +93,7 @@ class BILBO_Control:
     # _updateTimer: IntervalTimer = IntervalTimer(0.1)
 
     # === INIT =========================================================================================================
-    def __init__(self, comm: BILBO_Communication):
+    def __init__(self, core: BILBO_Core, comm: BILBO_Communication):
         """
         Initialize the BILBO_Control instance.
 
@@ -116,37 +122,36 @@ class BILBO_Control:
 
         # Initialize callback container for high-level events
         self.callbacks = BILBO_Control_Callbacks()
-
         self.events = BILBO_Control_Events()
 
         # Register commands to the WI-FI module for remote control
-        self._comm.wifi.addCommand(identifier='setControlMode',
-                                   callback=self.setMode,
+        self._comm.wifi.newCommand(identifier='setControlMode',
+                                   function=self.setMode,
                                    arguments=['mode'],
                                    description='Sets the control mode')
 
-        self._comm.wifi.addCommand(identifier='setNormalizedBalancingInput',
-                                   callback=self.setNormalizedBalancingInput,
+        self._comm.wifi.newCommand(identifier='setNormalizedBalancingInput',
+                                   function=self.setNormalizedBalancingInput,
                                    arguments=['forward', 'turn'],
                                    description='Sets the Input')
 
-        self._comm.wifi.addCommand(identifier='setSpeed',
-                                   callback=self.setSpeed,
+        self._comm.wifi.newCommand(identifier='setSpeed',
+                                   function=self.setSpeed,
                                    arguments=['v', 'psi_dot'],
                                    description='Sets the Speed')
 
-        self._comm.wifi.addCommand(identifier='setPIDForward',
-                                   callback=self.setVelocityControlPID_Forward,
+        self._comm.wifi.newCommand(identifier='setPIDForward',
+                                   function=self.setVelocityControlPID_Forward,
                                    arguments=['P', 'I', 'D'],
                                    description='Sets the PID Control Values for the Forward Velocity')
 
-        self._comm.wifi.addCommand(identifier='setPIDTurn',
-                                   callback=self.setVelocityControlPID_Turn,
+        self._comm.wifi.newCommand(identifier='setPIDTurn',
+                                   function=self.setVelocityControlPID_Turn,
                                    arguments=['P', 'I', 'D'],
                                    description='Sets the PID Control Values for the Turn Velocity')
 
-        self._comm.wifi.addCommand(identifier='enableTIC',
-                                   callback=self.enableTIC,
+        self._comm.wifi.newCommand(identifier='enableTIC',
+                                   function=self.enableTIC,
                                    arguments=['enable'],
                                    description='Enabled Theta Integral Control')
 
@@ -250,7 +255,7 @@ class BILBO_Control:
         raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setMode(self, mode: (int, BILBO_Control_Mode)):
+    def setMode(self, mode: int | BILBO_Control_Mode):
         """
         Set the current control mode.
 
@@ -325,7 +330,7 @@ class BILBO_Control:
         delayed_execution(self.setMode, 0.5, mode=BILBO_Control_Mode.OFF)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setNormalizedBalancingInput(self, forward: (int, float), turn: (int, float), force=False):
+    def setNormalizedBalancingInput(self, forward: int | float, turn: int | float, force=False):
         """
         Set the balancing input based on normalized forward and turn values.
 
@@ -358,8 +363,9 @@ class BILBO_Control:
         else:
             # If not in balancing mode, no action is taken
             ...
+
     # ------------------------------------------------------------------------------------------------------------------
-    def setNormalizedSpeedInput(self, forward: (int, float), turn: (int, float)):
+    def setNormalizedSpeedInput(self, forward: int | float, turn: int | float):
         """
         Set the velocity input based on normalized forward and turn values.
 
@@ -492,7 +498,7 @@ class BILBO_Control:
         raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setMaxWheelSpeed(self, speed: (int, float)):
+    def setMaxWheelSpeed(self, speed: int | float):
         """
         Set the maximum wheel speed.
 
@@ -512,7 +518,6 @@ class BILBO_Control:
             input_type=ctypes.c_bool,
             output_type=ctypes.c_bool
         )
-
 
         if success:
             logger.info(f"Set velocity integral control to {enable}")
@@ -563,6 +568,8 @@ class BILBO_Control:
         sample = {
             'status': self.status,
             'mode': self.mode,
+            'tic_enabled': self.config.balancing_control.tic.enabled,
+            'vic_enabled': self.config.balancing_control.vic.enabled,
             'configuration': self.config.name if self.config else '',
             'input': {}
         }
@@ -580,6 +587,30 @@ class BILBO_Control:
         self._lowlevel_control_sample = sample
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _updateControlConfigFromLL(self, ll_control_config: BILBO_LL_ControlConfig) -> BILBO_ControlConfig:
+        control_config = self.config
+
+        control_config.balancing_control.K = ll_control_config.K
+        control_config.speed_control.v.Kp = ll_control_config.forward_p
+        control_config.speed_control.v.Ki = ll_control_config.forward_i
+        control_config.speed_control.v.Kd = ll_control_config.forward_d
+        control_config.speed_control.psidot.Kp = ll_control_config.turn_p
+        control_config.speed_control.psidot.Ki = ll_control_config.turn_i
+        control_config.speed_control.psidot.Kd = ll_control_config.turn_d
+        control_config.balancing_control.vic.enabled = ll_control_config.vic_enabled
+        control_config.balancing_control.vic.max_error = ll_control_config.vic_max_error
+        control_config.balancing_control.vic.v_limit = ll_control_config.vic_v_limit
+        control_config.balancing_control.vic.ki = ll_control_config.vic_ki
+        control_config.balancing_control.tic.enabled = ll_control_config.tic_enabled
+        control_config.balancing_control.tic.ki = ll_control_config.tic_ki
+        control_config.balancing_control.tic.max_error = ll_control_config.tic_max_error
+        control_config.balancing_control.tic.theta_limit = ll_control_config.tic_theta_limit
+
+        self.config = control_config
+
+        return control_config
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _ll_mode_change_callback(self, mode_ll: BILBO_Control_Mode_LL, *args, **kwargs) -> None:
         mode = None
         if mode_ll == BILBO_Control_Mode_LL.OFF:
@@ -590,32 +621,79 @@ class BILBO_Control:
             mode = BILBO_Control_Mode.BALANCING
         elif mode_ll == BILBO_Control_Mode_LL.VELOCITY:
             mode = BILBO_Control_Mode.VELOCITY
-
+        else:
+            raise Exception("Unknown low-level mode")
         self.mode = mode
 
         self.callbacks.mode_change.call(mode, forced_change=False)
-        self.events.mode_change.set(resource=mode, flags={'mode': mode})
+        self.events.mode_change.set(data=mode, flags={'mode': mode})
 
         # Send Event to Host
-
         self._comm.wifi.sendEvent(event='control',
                                   data={
                                       'event': 'mode_change',
                                       'mode': mode,
+                                      'config': asdict_optimized(self.config),
                                   })
 
     # ------------------------------------------------------------------------------------------------------------------
     def _ll_configuration_change_callback(self, configuration: dict):
-        logger.info(f"Received configuration change: {format_floats(configuration, 2)}")
+
+        try:
+            control_config_ll = from_dict(BILBO_LL_ControlConfig, configuration)
+        except Exception as e:
+            logger.warning(f"Failed to parse low-level configuration: {e}")
+            return
+
+        self._updateControlConfigFromLL(control_config_ll)
 
         self.callbacks.configuration_change.call(configuration)
-        self.events.configuration_change.set(resource=configuration)
-
+        self.events.configuration_change.set(data=configuration)
         self._comm.wifi.sendEvent(event='control',
                                   data={
                                       'event': 'configuration_change',
+                                      'configuration': asdict_optimized(self.config),
+                                  })
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _ll_vic_change_callback(self, configuration: dict):
+
+        try:
+            control_config_ll = from_dict(BILBO_LL_ControlConfig, configuration)
+        except Exception as e:
+            logger.warning(f"Failed to parse low-level configuration: {e}")
+            return
+
+        self._updateControlConfigFromLL(control_config_ll)
+
+        self._comm.wifi.sendEvent(event='control',
+                                  data={
+                                      'event': 'vic_change',
+                                      'vic_enabled': self.config.balancing_control.vic.enabled,
+                                      'configuration': asdict_optimized(self.config),
+                                  })
+
+        logger.info(f"VIC enabled: {self.config.balancing_control.vic.enabled}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _ll_tic_change_callback(self, configuration: dict):
+
+        try:
+            control_config_ll = from_dict(BILBO_LL_ControlConfig, configuration)
+        except Exception as e:
+            logger.warning(f"Failed to parse low-level configuration: {e}")
+            return
+
+        self._updateControlConfigFromLL(control_config_ll)
+
+        self._comm.wifi.sendEvent(event='control',
+                                  data={
+                                      'event': 'tic_change',
+                                      'tic_enabled': self.config.balancing_control.tic.enabled,
                                       'configuration': configuration,
                                   })
+
+        logger.info(f"TIC enabled: {self.config.balancing_control.tic.enabled}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _setControlConfig(self, config: BILBO_ControlConfig, verify: bool = False):
@@ -722,7 +800,7 @@ class BILBO_Control:
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _setMaxWheelSpeed_LL(self, speed: (int, float)):
+    def _setMaxWheelSpeed_LL(self, speed: int | float):
         """
         Set the maximum wheel speed in the low-level module.
 
@@ -911,7 +989,7 @@ class BILBO_Control:
             error_message = f"Received invalid status: {sample.control.status}. Possible mismatch of" \
                             f"lowlevel firmware and python module."
             logger.error(error_message)
-            error_handler(severity='error',message=error_message)
+            error_handler(severity='error', message=error_message)
             return
 
         if status_ll is not self.status_ll:
@@ -1003,3 +1081,7 @@ class BILBO_Control:
             self._ll_mode_change_callback(BILBO_Control_Mode_LL(message.data['mode']))
         elif event == BILBO_Control_Event_Type.CONFIGURATION_CHANGED:
             self._ll_configuration_change_callback(message.data['config'])
+        elif event == BILBO_Control_Event_Type.VIC_CHANGED:
+            self._ll_vic_change_callback(message.data['config'])
+        elif event == BILBO_Control_Event_Type.TIC_CHANGED:
+            self._ll_tic_change_callback(message.data['config'])

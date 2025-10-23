@@ -2,7 +2,7 @@
 #include "modbus_rtu.h"
 
 static const osThreadAttr_t drive_task_attributes = { .name = "drive",
-		.stack_size = 1800 * 4, .priority = (osPriority_t) osPriorityNormal, };
+		.stack_size = 2000 * 4, .priority = (osPriority_t) osPriorityNormal, };
 
 osSemaphoreId_t speed_semaphore;
 osSemaphoreId_t voltage_semaphore;
@@ -152,6 +152,7 @@ void BILBO_Drive::task() {
 	}
 #endif
 #ifdef BILBO_DRIVE_SIMPLEXMOTION_CAN
+	osDelay(100);
 	while (true) {
 		current_tick = osKernelGetTickCount();
 
@@ -167,6 +168,7 @@ void BILBO_Drive::task() {
 					this->_voltage = motor_left_voltage;
 					osSemaphoreRelease(voltage_semaphore);
 				} else {
+					nop();
 					// TODO
 				}
 				continue;

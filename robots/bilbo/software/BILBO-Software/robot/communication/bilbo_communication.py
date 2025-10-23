@@ -1,12 +1,14 @@
 # === OWN PACKAGES =====================================================================================================
+from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.exit import register_exit_callback
 from hardware.control_board import RobotControl_Board
+from robot.bilbo_core import BILBO_Core
 from robot.communication.serial.bilbo_comm_serial import BILBO_Serial_Communication
 from robot.communication.spi.twipr_comm_spi import BILBO_SPI_Interface
-from robot.communication.wifi.twipr_comm_wifi import BILBO_WIFI_Interface
-from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import ConditionEvent, event_definition
+from robot.communication.wifi.bilbo_wifi import BILBO_WIFI_Interface
+from core.utils.events import Event, event_definition
 from core.utils.logging_utils import Logger, enable_redirection, setLoggerLevel, disable_redirection
+from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 
 # ======================================================================================================================
 handler = None
@@ -24,8 +26,8 @@ class BILBO_Communication_Callbacks:
 # ======================================================================================================================
 @event_definition
 class BILBO_Communication_Events:
-    rx_stm32_sample: ConditionEvent
-    stm32_tick: ConditionEvent
+    rx_stm32_sample: Event = Event(data_type=BILBO_LL_Sample, copy_data_on_set=False)
+    stm32_tick: Event
 
 
 # ======================================================================================================================
@@ -39,14 +41,15 @@ class BILBO_Communication:
     events: BILBO_Communication_Events
     callbacks: BILBO_Communication_Callbacks
 
-    def __init__(self, board: RobotControl_Board):
+    def __init__(self, board: RobotControl_Board, core: BILBO_Core):
         self.board = board
+        self.core = core
 
-        self.wifi = BILBO_WIFI_Interface(interface=self.board.wifi_interface)
+        self.wifi = BILBO_WIFI_Interface(core=self.core)
+
         self.serial = BILBO_Serial_Communication(interface=self.board.serial_interface)
         self.spi = BILBO_SPI_Interface(interface=self.board.spi_interface,
-                                       sample_notification_pin=self.board.board_config['pins']['new_samples_interrupt'][
-                                           'pin'])
+                                       sample_notification_pin=self.board.board_config.definitions.pins.new_samples_interrupt.pin)
 
         self.callbacks = BILBO_Communication_Callbacks()
         self.events = BILBO_Communication_Events()
@@ -71,6 +74,7 @@ class BILBO_Communication:
     def start(self):
         self.spi.start()
         self.serial.start()
+        self.wifi.start()
 
         global handler
         handler = self

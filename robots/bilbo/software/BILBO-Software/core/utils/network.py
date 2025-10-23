@@ -5,7 +5,110 @@ import os
 import subprocess
 import sys
 import platform
+import psutil
 
+
+def getAllPrivateIPs():
+    """
+    Retrieves private IP addresses grouped by common subnet origins:
+    - '192.*' (Local Wi-Fi/LAN),
+    - '169.*' (USB or self-assigned),
+    - '172.*' (Often WSL or Docker),
+    - '10.*' (Common in enterprise/virtual setups).
+
+    :return: A dictionary with keys: 'local_ips', 'usb_ips', 'wsl_ips', 'enterprise_ips',
+             each containing a list of corresponding IP addresses.
+    """
+    ip_groups = {
+        "local_ips": [],
+        "usb_ips": [],
+        "wsl_ips": [],
+        "enterprise_ips": []
+    }
+
+    try:
+        for iface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    if ip.startswith("192."):
+                        ip_groups["local_ips"].append(ip)
+                    elif ip.startswith("169."):
+                        ip_groups["usb_ips"].append(ip)
+                    elif ip.startswith("172."):
+                        ip_groups["wsl_ips"].append(ip)
+                    elif ip.startswith("10."):
+                        ip_groups["enterprise_ips"].append(ip)
+    except Exception as e:
+        print(f"Error retrieving IPs: {e}")
+
+    return ip_groups
+
+
+def getHostIP(priorities=None, interactive=False):
+    """
+    Selects a single host IP according to an optional priority list.
+
+    :param priorities: List of priority categories, e.g. ['local','usb','wsl','enterprise'], or None.
+    :param interactive: If True, and more than one candidate is found in the selected pool,
+                        prompt the user to choose; otherwise pick the first match.
+    :return: A single IP string or None.
+    """
+    # Validate priorities
+    valid = {'local', 'usb', 'wsl', 'enterprise'}
+    if priorities is not None:
+        if not all(p in valid for p in priorities):
+            raise ValueError(f"Invalid priority; expected subset of {valid}, got {priorities}")
+
+    ip_data = getAllPrivateIPs()
+
+    # Map shorthand to ip_data keys
+    group_map = {
+        'local': 'local_ips',
+        'usb': 'usb_ips',
+        'wsl': 'wsl_ips',
+        'enterprise': 'enterprise_ips'
+    }
+
+    # Build the pool of candidate IPs
+    if priorities:
+        # Respect the order of priorities
+        for p in priorities:
+            candidates = ip_data.get(group_map[p], [])
+            if candidates:
+                chosen_group = candidates
+                break
+        else:
+            # None of the priority groups had any IPs
+            return None
+    else:
+        # No priorities → all IPs
+        chosen_group = (
+                ip_data.get('local_ips', []) +
+                ip_data.get('usb_ips', []) +
+                ip_data.get('wsl_ips', []) +
+                ip_data.get('enterprise_ips', [])
+        )
+        if not chosen_group:
+            return None
+
+    # If only one, return it immediately
+    if len(chosen_group) == 1 or not interactive:
+        return chosen_group[0]
+
+    # Otherwise, ask the user to choose among chosen_group
+    print("Multiple matching IPs found:")
+    for i, ip in enumerate(chosen_group, 1):
+        print(f"  {i}) {ip}")
+
+    while True:
+        try:
+            sel = int(input(f"Select an IP [1–{len(chosen_group)}]: "))
+            if 1 <= sel <= len(chosen_group):
+                return chosen_group[sel - 1]
+        except ValueError:
+            pass
+        print("Invalid selection; please enter a number.")
 
 def splitServerAddress(address: str):
     server_address = None
@@ -297,3 +400,84 @@ def getNetworkInformation():
         "local_ip": local_ip,
         "usb_ip": usb_ips
     }
+
+
+# === GET SIGNAL STRENGTH ===============================================================================================
+def getSignalStrength(interface: str):
+    """
+    Return Wi-Fi signal strength for the given interface.
+
+    Tries multiple backends depending on OS:
+      - Linux: `iw dev <iface> link` (preferred), then `iwconfig <iface>`
+      - macOS: `airport -I`
+      - Windows: `netsh wlan show interfaces`
+
+    Args:
+        interface (str): Wireless interface name, e.g. 'wlan0' on Linux or 'Wi-Fi' on Windows.
+                         On macOS the system utility doesn't take an interface argument, so it's ignored.
+
+    Returns:
+        dict: {
+            'dbm': Optional[int], # RSSI in dBm (negative number, e.g. -45). None if unavailable.
+            'percent': Optional[int], # Signal as 0..100. None if unavailable.
+            'source': str # Which method produced the reading.
+        }
+        If no reading could be obtained, returns {'dbm': None, 'percent': None, 'source': 'unavailable'}.
+    """
+    import subprocess, re, shutil, os, platform
+    system = platform.system().lower()
+
+    def _run(cmd):
+        try:
+            return subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode(errors="ignore")
+        except Exception:
+            return ""
+
+    # --- Linux (iw / iwconfig / nmcli as last resort for percent) ---
+    if system == "linux":
+        # Prefer `iw` if present (modern).
+        iw_path = shutil.which("iw") or ("/sbin/iw" if os.path.exists("/sbin/iw") else None)
+        if iw_path:
+            out = _run([iw_path, "dev", interface, "link"])
+            # Example line: "signal: -45 dBm"
+            m = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
+            if m:
+                dbm = int(m.group(1))
+                # Map dBm to a rough percentage (typical heuristic: -30dBm≈100, -90dBm≈0)
+                pct = max(0, min(100, int((dbm + 90) * (100 / 60))))  # linear between -90 and -30
+                return {'dbm': dbm, 'percent': pct, 'source': 'iw'}
+
+        # Fallback: `iwconfig`
+        iwc_path = shutil.which("iwconfig") or ("/sbin/iwconfig" if os.path.exists("/sbin/iwconfig") else None)
+        if iwc_path:
+            out = _run([iwc_path, interface])
+            # Look for "Signal level=-45 dBm" or "Signal level=-45/100"
+            m_dbm = re.search(r"Signal level[=\s:]*(-?\d+)\s*dBm", out, re.IGNORECASE)
+            m_frac = re.search(r"Link Quality[=\s:]*([0-9]+)/([0-9]+)", out, re.IGNORECASE)
+            dbm = int(m_dbm.group(1)) if m_dbm else None
+            pct = None
+            if m_frac:
+                num, den = int(m_frac.group(1)), int(m_frac.group(2))
+                if den > 0:
+                    pct = max(0, min(100, int(round(100 * num / den))))
+            if dbm is not None and pct is None:
+                pct = max(0, min(100, int((dbm + 90) * (100 / 60))))
+            if dbm is not None or pct is not None:
+                return {'dbm': dbm, 'percent': pct, 'source': 'iwconfig'}
+
+        # Last resort on Linux: `nmcli` (gives percent for visible networks)
+        nmcli = shutil.which("nmcli")
+        if nmcli:
+            # This shows the currently connected network marked with '*'
+            out = _run([nmcli, "-t", "-f", "IN-USE,DEVICE,SIGNAL", "dev", "wifi"])
+            # Lines like: "*:wlan0:80"
+            for line in out.splitlines():
+                parts = line.strip().split(":")
+                if len(parts) >= 3:
+                    inuse, dev, signal = parts[0], parts[1], parts[2]
+                    if dev == interface and inuse == "*":
+                        try:
+                            pct = int(signal)
+                            return {'dbm': None, 'percent': max(0, min(100, pct)), 'source': 'nmcli'}
+                        except ValueError:
+                            pass

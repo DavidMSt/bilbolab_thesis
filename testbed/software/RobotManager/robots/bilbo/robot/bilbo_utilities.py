@@ -24,11 +24,11 @@ class BILBO_Utilities:
     # ------------------------------------------------------------------------------------------------------------------
     def test(self, input, timeout=1):
         try:
-            data = self.core.device.function(function='test',
-                                             data={'input': input},
-                                             return_type=dict,
-                                             request_response=True,
-                                             timeout=timeout)
+            data = self.core.device.executeFunction(function_name='test',
+                                                    arguments={'input': input},
+                                                    return_type=dict,
+                                                    request_response=True,
+                                                    timeout=timeout)
         except TimeoutError:
             data = None
         return data
@@ -92,7 +92,7 @@ class BILBO_Utilities:
                     break
 
     # ------------------------------------------------------------------------------------------------------------------
-    def test_response_time(self, iterations=10, print_response_time=False):
+    def test_response_time(self, iterations=10, *args, **kwargs):
         """
         Measures the response time of the Frodo robot's test method over multiple iterations.
 
@@ -114,11 +114,11 @@ class BILBO_Utilities:
 
         if data is None:
             self.core.logger.warning("Initial write timed out")
-            return  # Exit the function if initial test fails
+            return  # Exit the function if the initial test fails
 
         for i in range(iterations):
             start = time.perf_counter()  # Record start time
-            data = self.test("HALLO", timeout=1)  # Send test message
+            data = self.test("HALLO3", timeout=1)  # Send the test message
 
             if data is None:
                 timeouts += 1  # Increment timeout counter
@@ -127,10 +127,7 @@ class BILBO_Utilities:
                 response_times[i] = time.perf_counter() - start  # Calculate response time
 
             # Log response time or timeout occurrence
-            if print_response_time and data is not None:
-                self.core.logger.info(f"{i + 1}/{iterations} Response time: {(response_times[i] * 1000):.2f} ms")
-            else:
-                self.core.logger.warning(f"{i + 1}/{iterations} Timeout")
+            self.core.logger.info(f"{i + 1}/{iterations} Response time: {(response_times[i] * 1000):.2f} ms")
 
             time.sleep(0.25)  # Delay before next test iteration
 

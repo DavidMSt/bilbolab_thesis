@@ -1,6 +1,6 @@
 from typing import Union
 
-from core.communication.protocol import Protocol, Message
+from core.communication.wifi.udp.protocols.protocol import Protocol, Message
 from core.utils.network.network import ipv4_to_bytes
 
 

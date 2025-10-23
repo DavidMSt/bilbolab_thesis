@@ -3,7 +3,7 @@ import time
 from copy import copy
 
 from core.utils.callbacks import Callback, CallbackContainer
-from core.utils.events import ConditionEvent
+from core.utils.events import Event
 
 
 class ThreadWorker:
@@ -11,7 +11,7 @@ class ThreadWorker:
     completion_function: CallbackContainer
     error_function: CallbackContainer
 
-    event: ConditionEvent
+    event: Event
     success: bool = False
     running: bool = False
 
@@ -27,7 +27,7 @@ class ThreadWorker:
         if error_function is not None:
             self.error_function.register(error_function)
 
-        self.event = ConditionEvent()
+        self.event = Event()
         self.success = False
         self.running = False
         self._thread = None
@@ -55,20 +55,20 @@ class ThreadWorker:
             self.error_function.call(e)
 
         self.running = False
-        self.event.set(resource=self.data)
+        self.event.set(data=self.data)
 
 
 # === WorkerPool =======================================================================================================
 class WorkerPool:
     workers: list[ThreadWorker]
     # listeners: list[EventListener]
-    event: ConditionEvent
+    event: Event
     completion_function: Callback
     error_function: Callback
-    run_time: (float, None) = None
-    _start_time: (float, None) = None
+    run_time: float | None = None
+    _start_time: float | None = None
     running: bool = False
-    errors: list[(Exception, None)] = []
+    errors: list[Exception | None] = []
 
     def __init__(self, workers: list[ThreadWorker], completion_function: Callback = None,
                  error_function: Callback = None):
@@ -76,8 +76,8 @@ class WorkerPool:
 
         self.workers = workers
         self.worker_finished = []
-        self.event = ConditionEvent()
-        self.start_event = ConditionEvent()
+        self.event = Event()
+        self.start_event = Event()
         self.completion_function = completion_function
         self.error_function = error_function
         self.running = False
@@ -113,6 +113,7 @@ class WorkerPool:
         # self.event.release()
 
     def wait(self, timeout=1):
+        raise NotImplementedError
         if self.event.wait_for(lambda: all(self.worker_finished), timeout=timeout):
             # self.data = [
             #     worker.get_data() if finished else None

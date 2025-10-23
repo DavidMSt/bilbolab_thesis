@@ -7,22 +7,25 @@ import pickle
 import control
 import matplotlib.pyplot as plt
 import numpy as np
+from control import ss
 from numpy import nan, hstack
 
+from core.utils.states import State, listToStateList, vectorToStateList
 from extensions.simulation.src import core as core
 from extensions.simulation.src.core import spaces as sp
+from extensions.simulation.src.core.agents import Agent
+from extensions.simulation.src.core.dynamics import LinearDynamics
+from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
+from extensions.simulation.src.core.scheduling import ScheduledObject
 from extensions.simulation.src.utils import lib_control
 from extensions.simulation.src.utils.orientations import twiprToRotMat, twiprFromRotMat
-from extensions.simulation.src.utils.babylon import setBabylonSettings
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 
 DEFAULT_SAMPLE_TIME = 0.01
 
 
 @dataclasses.dataclass
 class BilboModel:
-    """
-    Dataclass for the two-wheeled (BILBO) robot model parameters.
-    """
     m_b: float
     m_w: float
     l: float
@@ -38,8 +41,23 @@ class BilboModel:
     max_pitch: float
 
 
-# Default model parameters (formerly TWIPR_Michael_Model)
 DEFAULT_BILBO_MODEL = BilboModel(
+    m_b=1.2,
+    m_w=0.4,
+    l=0.026,
+    d_w=0.22,
+    I_w=2e-4,
+    I_y=0.005,
+    I_x=0.02,
+    I_z=0.03,
+    c_alpha=4.6302e-4,
+    r_w=0.06,
+    tau_theta=0.4,
+    tau_x=0.4,
+    max_pitch=np.deg2rad(105)
+)
+
+BILBO_MICHAEL_MODEL = BilboModel(
     m_b=2.5,
     m_w=0.636,
     l=0.026,
@@ -50,8 +68,8 @@ DEFAULT_BILBO_MODEL = BilboModel(
     I_z=0.03,
     c_alpha=4.6302e-4,
     r_w=0.055,
-    tau_theta=1,
-    tau_x=1,
+    tau_theta=0.0,
+    tau_x=0.0,
     max_pitch=np.deg2rad(105)
 )
 
@@ -72,225 +90,110 @@ BILBO_SMALL = BilboModel(
     max_pitch=np.deg2rad(105)
 )
 
+BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES = [0, -10, -5 + 3j, -5 - 3j, 0, -15]
 
-class Space3D_BILBO(core.spaces.Space):
-    """
-    3D space for BILBO.
-    Consists of a 2D position vector and two scalar angles.
-    """
-    dimensions = [
-        core.spaces.VectorDimension(name='pos', base_type=core.spaces.PositionVector2D),
-        core.spaces.ScalarDimension(name='theta', limits=[-math.pi, math.pi], wrapping=True),
-        core.spaces.ScalarDimension(name='psi', limits=[0, 2 * math.pi], wrapping=True)
-    ]
+BILBO_2D_POLES = [0, -10, -5 + 3j, -5 - 3j]
 
-    def _add(self, state1, state2, new_state):
-        raise Exception("Addition not allowed in Space3D_BILBO")
+BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS = np.array([[1, nan, nan, nan, 0, nan],
+                                                          [nan, 1, nan, nan, nan, nan],
+                                                          [nan, nan, 1, 1, nan, 0],
+                                                          [nan, nan, nan, nan, nan, nan],
+                                                          [0, nan, nan, nan, 1, 1],
+                                                          [nan, 0, 0, 0, nan, nan]])
 
 
-class Mapping_BILBO_2_3D(core.spaces.SpaceMapping):
-    """
-    Mapping from Space3D_BILBO to the standard 3D space.
-    """
-    space_to = core.spaces.Space3D
-    space_from = Space3D_BILBO
-
-    def _map(self, state):
-        out = {
-            'pos': [state['pos']['x'], state['pos']['y'], 0],
-            'ori': twiprToRotMat(state['theta'].value, state['psi'].value)
-        }
-        return out
+# ======================================================================================================================
+# === BILBO 2D =========================================================================================================
+@dataclasses.dataclass
+class BILBO_2D_State(State):
+    s: float
+    v: float
+    theta: float
+    theta_dot: float
 
 
-class Mapping_3D_2_BILBO(core.spaces.SpaceMapping):
-    """
-    Mapping from the standard 3D space to Space3D_BILBO.
-    """
-    space_from = core.spaces.Space3D
-    space_to = Space3D_BILBO
-
-    def _map(self, state):
-        angles = twiprFromRotMat(state['ori'].value)
-        out = {
-            'pos': [state['pos']['x'], state['pos']['y']],
-            'theta': angles[1],
-            'psi': angles[0]
-        }
-        return out
+@dataclasses.dataclass
+class BILBO_2D_Input(State):
+    M: float
 
 
-# Register mappings
-Space3D_BILBO.mappings = [Mapping_3D_2_BILBO(), Mapping_BILBO_2_3D()]
-core.spaces.Space3D.mappings.append(Mapping_3D_2_BILBO())
+class BILBO_Dynamics_2D_Linear:
+    system: control.StateSpace = None
 
+    x0: BILBO_2D_State = BILBO_2D_State(s=0, v=0, theta=0, theta_dot=0)
+    state: BILBO_2D_State = None
+    K: np.ndarray = None
 
-class BILBO_PhysicalObject(core.physics.PhysicalBody):
-    """
-    Physical representation for BILBO.
-    """
+    # === INIT =========================================================================================================
+    def __init__(self, model: BilboModel, Ts=DEFAULT_SAMPLE_TIME, x0=None):
+        if x0 is not None:
+            self.x0 = x0
 
-    def __init__(self, height: float = 0.174, width: float = 0.126, depth: float = 0.064,
-                 wheel_diameter: float = 0.13, l_w: float = 0.056, *args, **kwargs):
-        super().__init__()
-        self.height = height
-        self.width = width
-        self.depth = depth
-        self.wheel_diameter = wheel_diameter
-        self.l_w = l_w
-        self.bounding_objects = {
-            'body': core.physics.CuboidPrimitive(
-                size=[self.depth, self.width, self.height],
-                position=[0, 0, 0],
-                orientation=np.eye(3)
-            )
-        }
-        self.proximity_sphere.radius = self._getProximitySphereRadius()
-
-    def update(self, config, *args, **kwargs):
-        v_t = [config['pos']['x'], config['pos']['y'], self.wheel_diameter / 2]
-        v_m = [0, 0, self.height / 2 - self.l_w]
-        # Multiply vector v_m by orientation (assumed to be a matrix)
-        v_m_e = config['ori'] * v_m
-        new_position = v_t + v_m_e
-        self.bounding_objects['body'].update(new_position, config['ori'].value)
-        self._calcProximitySphere()
-
-    def _calcProximitySphere(self):
-        self.proximity_sphere.radius = self._getProximitySphereRadius()
-        self.proximity_sphere.update(position=self.bounding_objects['body'].position)
-
-    def _getProximitySphereRadius(self):
-        return (self.height / 2) * 1.1
-
-
-# Define several state and input spaces for BILBO.
-class BILBO_2D_InputSpace(core.spaces.Space):
-    dimensions = [core.spaces.ScalarDimension(name='M')]
-
-
-class BILBO_2D_StateSpace_4D(core.spaces.Space):
-    dimensions = [
-        core.spaces.ScalarDimension(name='s'),
-        core.spaces.ScalarDimension(name='v'),
-        core.spaces.ScalarDimension(name='theta'),
-        core.spaces.ScalarDimension(name='theta_dot')
-    ]
-
-
-class BILBO_2D_StateSpace_5D(core.spaces.Space):
-    dimensions = [
-        core.spaces.ScalarDimension(name='x'),
-        core.spaces.ScalarDimension(name='y'),
-        core.spaces.ScalarDimension(name='v'),
-        core.spaces.ScalarDimension(name='theta'),
-        core.spaces.ScalarDimension(name='theta_dot')
-    ]
-
-
-class BILBO_3D_InputSpace(core.spaces.Space):
-    dimensions = [
-        core.spaces.ScalarDimension(name='M_L'),
-        core.spaces.ScalarDimension(name='M_R')
-    ]
-
-
-class BILBO_3D_VelocityInputSpace(core.spaces.Space):
-    dimensions = [
-        core.spaces.ScalarDimension(name='v'),
-        core.spaces.ScalarDimension(name='psi_dot')
-    ]
-
-
-class BILBO_3D_StateSpace_6D(core.spaces.Space):
-    dimensions = [
-        core.spaces.ScalarDimension(name='s'),
-        core.spaces.ScalarDimension(name='v'),
-        core.spaces.ScalarDimension(name='theta'),
-        core.spaces.ScalarDimension(name='theta_dot'),
-        core.spaces.ScalarDimension(name='psi'),
-        core.spaces.ScalarDimension(name='psi_dot')
-    ]
-
-
-class BILBO_3D_StateSpace_7D(core.spaces.Space):
-    dimensions = [
-        core.spaces.ScalarDimension(name='x'),
-        core.spaces.ScalarDimension(name='y'),
-        core.spaces.ScalarDimension(name='v'),
-        core.spaces.ScalarDimension(name='theta', wrapping=False),
-        core.spaces.ScalarDimension(name='theta_dot'),
-        core.spaces.ScalarDimension(name='psi'),
-        core.spaces.ScalarDimension(name='psi_dot')
-    ]
-
-
-class Mapping_BILBO_SS_2_CF(core.spaces.SpaceMapping):
-    """
-    Mapping from BILBO state space (7D) to configuration space (Space3D_BILBO).
-    """
-    space_from = BILBO_3D_StateSpace_7D
-    space_to = Space3D_BILBO
-
-    def _map(self, state):
-        out = {
-            'pos': [state['x'], state['y']],
-            'theta': state['theta'],
-            'psi': state['psi']
-        }
-        return out
-
-
-class Mapping_CF_2_BILBO_SS(core.spaces.SpaceMapping):
-    """
-    Mapping from configuration space (Space3D_BILBO) to BILBO state space (7D).
-    """
-    space_from = Space3D_BILBO
-    space_to = BILBO_3D_StateSpace_7D
-
-    def _map(self, state):
-        out = {
-            'x': state['pos']['x'],
-            'y': state['pos']['y'],
-            'theta': state['theta'],
-            'psi': state['psi']
-        }
-        return out
-
-
-BILBO_3D_StateSpace_7D.mappings = [Mapping_BILBO_SS_2_CF(), Mapping_CF_2_BILBO_SS()]
-
-
-# -----------------------------------------------------------------------------
-# BILBO DYNAMICS: LINEAR & NONLINEAR MODELS
-# -----------------------------------------------------------------------------
-class BILBO_2D_Linear:
-    """
-    Linearized dynamics for the BILBO robot (2D model).
-    Converts a continuous-time model to discrete time and computes state-feedback gains.
-    """
-
-    def __init__(self, model: BilboModel, Ts, poles=None):
-        self.Ts = Ts
         self.model = model
-        self.n = 4  # number of states
-        self.p = 1
-        self.q = 1
-        self.K_cont = np.zeros((1, self.n))
-        self.K_disc = np.zeros((1, self.n))
-        # Compute continuous-time model matrices.
-        self.A, self.B, self.C, self.D = self.linear_model()
-        self.sys_cont = control.StateSpace(self.A, self.B, self.C, self.D, remove_useless_states=False)
-        # Discretize the continuous model.
-        self.sys_disc = control.c2d(self.sys_cont, self.Ts)
-        self.A_d = np.asarray(self.sys_disc.A)
-        self.B_d = np.asarray(self.sys_disc.B)
-        self.C_d = np.asarray(self.sys_disc.C)
-        self.D_d = np.asarray(self.sys_disc.D)
-        if poles is not None:
-            self.set_poles(poles)
+        self.Ts = Ts
 
-    def linear_model(self):
+        self.state = BILBO_2D_State.as_state(self.x0)
+
+        A, B, C, D = self._getLinearModel()
+        system_continuous = control.StateSpace(A, B, C, D, remove_useless_states=False)
+        self.system = control.c2d(system_continuous, Ts)
+
+    # === METHODS ======================================================================================================
+    def polePlacement(self, poles: list[float] | np.ndarray, apply_poles_to_system: bool = True) -> np.ndarray:
+        poles = np.asarray(poles)
+
+        K_discrete = np.asarray(control.place(self.system.A, self.system.B, np.exp(poles * self.Ts)))
+
+        if apply_poles_to_system:
+            self.system = control.StateSpace((self.system.A - self.system.B @ K_discrete), self.system.B,
+                                             self.system.C, self.system.D, self.Ts, remove_useless_states=False)
+
+            self.K = K_discrete
+
+        return K_discrete
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def setState(self, state: BILBO_2D_State | np.ndarray | list):
+        self.state = BILBO_2D_State.as_state(state)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def simulate(self, input: list[BILBO_2D_Input],
+                 reset: bool = True,
+                 x0: BILBO_2D_State = None,
+                 include_zero_step: bool = True) -> list[BILBO_2D_State]:
+
+        input = listToStateList(input, BILBO_2D_Input)
+        state_list = []
+
+        if x0 is not None:
+            self.state = BILBO_2D_State.as_state(x0)
+        elif reset:
+            self.state = copy.deepcopy(self.x0)
+
+        if include_zero_step:
+            state_list.append(self.state)
+
+        for inp_i in input:
+            self.step(inp_i)
+            state_list.append(self.state)
+
+        return state_list
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def step(self, input: BILBO_2D_Input):
+        self.state = self._dynamics(self.state, input)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset(self):
+        self.state = copy.deepcopy(self.x0)
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _dynamics(self, state: BILBO_2D_State, input: BILBO_2D_Input) -> BILBO_2D_State:
+        new_state = self.system.A @ state.asarray() + self.system.B @ input.asarray()
+        return BILBO_2D_State.fromarray(new_state)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _getLinearModel(self):
         g = 9.81
         model = self.model
         C_21 = (model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * model.m_b * model.l
@@ -326,56 +229,89 @@ class BILBO_2D_Linear:
         D = 0
         return A, B, C, D
 
-    def set_poles(self, poles):
-        poles = np.asarray(poles)
-        self.K_cont = np.asarray(control.place(self.A, self.B, poles))
-        self.K_disc = np.asarray(control.place(self.A_d, self.B_d, np.exp(poles * self.Ts)))
-        self.A_hat = self.A - self.B @ self.K_cont
-        self.sys_cont = control.StateSpace(self.A_hat, self.B, self.C, self.D, remove_useless_states=False)
-        self.A_hat_d = self.A_d - self.B_d @ self.K_disc
-        self.sys_disc = control.StateSpace(self.A_hat_d, self.B_d, self.C_d, self.D_d, self.Ts,
-                                           remove_useless_states=False)
-        return self.K_disc
 
+# ======================================================================================================================
+class BILBO_Dynamics_2D:
+    x0: BILBO_2D_State = BILBO_2D_State(s=0, v=0, theta=0, theta_dot=0)
 
-class BILBO_2D_Nonlinear(core.dynamics.Dynamics):
-    """
-    Nonlinear dynamics for BILBO based on a 2D model.
-    Uses a linearization (BILBO_2D_Linear) for state feedback.
-    """
+    K: np.ndarray = None
+    state: BILBO_2D_State = None
 
-    def _output(self, state: sp.State):
-        pass
+    model: BilboModel
+    Ts: float
 
-    def init(self):
-        pass
+    # === INIT =========================================================================================================
+    def __init__(self, model: BilboModel, Ts=DEFAULT_SAMPLE_TIME, x0: BILBO_2D_State = None):
+        if x0 is not None:
+            self.x0 = x0
 
-    # Use the 7D state space from the 3D BILBO configuration.
-    state_space = BILBO_3D_StateSpace_7D
-    input_space = BILBO_2D_InputSpace
-    output_space = BILBO_3D_StateSpace_7D
-
-    def __init__(self, model: BilboModel, Ts, poles=None, nominal_model=None):
         self.model = model
-        if nominal_model is None:
-            self.linear_dynamics = BILBO_2D_Linear(model=model, Ts=Ts, poles=poles)
-        else:
-            self.linear_dynamics = BILBO_2D_Linear(model=nominal_model, Ts=Ts, poles=poles)
-        self.q = 1
-        self.p = 1
-        self.n = 4
-        # Use the 4D state space for the linearization (e.g., BILBO_2D_StateSpace_4D)
-        super().__init__(Ts=Ts, state_space=BILBO_2D_StateSpace_4D, input_space=BILBO_2D_InputSpace)
-        self.K = self.linear_dynamics.K
+        self.Ts = Ts
 
-    def _dynamics(self, state, input):
+        self.state = BILBO_2D_State.as_state(self.x0)
+
+    # === METHODS ======================================================================================================
+    def setState(self, state: BILBO_2D_State | np.ndarray | list):
+        self.state = BILBO_2D_State.as_state(state)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def step(self, input: BILBO_2D_Input):
+        self.state = self._dynamics(self.state, input)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def setStateFeedbackControl(self, K: np.ndarray):
+        self.K = K
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def simulate(self, input: list[BILBO_2D_Input] | np.ndarray,
+                 reset: bool = True,
+                 x0: BILBO_2D_State = None,
+                 include_zero_step: bool = True) -> list[BILBO_2D_State]:
+
+        if isinstance(input, list):
+            input = listToStateList(input, BILBO_2D_Input)
+        elif isinstance(input, np.ndarray):
+            input = vectorToStateList(input, BILBO_2D_Input)
+        else:
+            raise TypeError('input must be a list or a numpy array')
+        state_list = []
+
+        if x0 is not None:
+            self.state = BILBO_2D_State.as_state(x0)
+        elif reset:
+            self.state = copy.deepcopy(self.x0)
+
+        if include_zero_step:
+            state_list.append(self.state)
+
+        for inp_i in input:
+            self.step(inp_i)
+            state_list.append(self.state)
+
+        return state_list
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def polePlacement(self, poles, apply_poles_to_system: bool = True):
+        # For pole placement, we need to make a linear system first
+        linear_dynamics = BILBO_Dynamics_2D_Linear(self.model, self.Ts)
+        K = linear_dynamics.polePlacement(poles, apply_poles_to_system=False)
+
+        if apply_poles_to_system:
+            self.setStateFeedbackControl(K)
+        return K
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _dynamics(self, state: BILBO_2D_State, input: BILBO_2D_Input) -> BILBO_2D_State:
         g = 9.81
-        s = state[0]
-        v = state[1]
-        theta = state[2]
-        theta_dot = state[3]
-        # Compute control deviation
-        u = input - self.K @ state
+        s = state.s
+        v = state.v
+        theta = state.theta
+        theta_dot = state.theta_dot
+
+        if self.K is not None:
+            u = input.asarray() - self.K @ state.asarray()
+        else:
+            u = input.asarray()
 
         model = self.model
         C_12 = (model.I_y + model.m_b * model.l ** 2) * model.m_b * model.l
@@ -390,7 +326,8 @@ class BILBO_2D_Nonlinear(core.dynamics.Dynamics):
                        model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * 2 * model.c_alpha / model.r_w + model.m_b * model.l * np.cos(
             theta) * 2 * model.c_alpha / model.r_w ** 2
         C_11 = model.m_b ** 2 * model.l ** 2 * np.cos(theta)
-        D_12 = (model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * np.cos(
+        D_12 = (
+                       model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * np.cos(
             theta) * 2 * model.c_alpha
         D_11 = (
                        model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w ** 2 - 2 * model.m_b * model.l * np.cos(
@@ -409,48 +346,98 @@ class BILBO_2D_Nonlinear(core.dynamics.Dynamics):
         C_23 = (model.m_b ** 2 * model.l ** 2 + (model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * (
                 model.I_z - model.I_x - model.m_b * model.l ** 2)) * np.cos(theta)
 
-        state_dot = np.zeros(self.n)
+        state_dot = np.zeros(len(state.asarray()))
         state_dot[0] = v
         state_dot[1] = (np.sin(theta) / V_1) * (-C_11 * g + C_12 * theta_dot ** 2) - (D_11 / V_1) * v + (
                 D_12 / V_1) * theta_dot + (B_1 / V_1) * u[0] - model.tau_x * v
         state_dot[2] = theta_dot
         state_dot[3] = (np.sin(theta) / V_1) * (C_21 * g - C_22 * theta_dot ** 2) + (D_21 / V_1) * v - (
                 D_22 / V_1) * theta_dot - (B_2 / V_1) * u[0] - model.tau_theta * theta_dot
-        state = state + state_dot * self.Ts
-        return state
-
-    def _output_function(self, state):
-        return state['theta']
+        state_new = state.asarray() + state_dot * self.Ts
+        return BILBO_2D_State.fromarray(state_new)
 
 
-class BILBO_3D_Linear(core.dynamics.LinearDynamics):
-    """
-    Linear dynamics for BILBO in 3D.
-    Computes a discrete-time state-feedback controller.
-    """
-    state_space = BILBO_3D_StateSpace_6D()
-    input_space = BILBO_3D_InputSpace()
-    output_space = BILBO_3D_StateSpace_6D()
+# ======================================================================================================================
+# === BILBO 3D =========================================================================================================
+@dataclasses.dataclass
+class BILBO_3D_State_reduced(State):
+    s: float
+    v: float
+    theta: float
+    theta_dot: float
+    psi: float
+    psi_dot: float
 
-    def __init__(self, model: BilboModel, Ts, poles=None, ev=None):
+
+@dataclasses.dataclass
+class BILBO_3D_State(State):
+    x: float
+    y: float
+    v: float
+    theta: float
+    theta_dot: float
+    psi: float
+    psi_dot: float
+
+
+@dataclasses.dataclass
+class BILBO_3D_Input(State):
+    M_L: float
+    M_R: float
+
+
+# === BILBO DYNAMICS 3D LINEAR REDUCED =================================================================================
+class BILBO_Dynamics_3D_Linear_reduced:
+    x0: BILBO_3D_State_reduced = BILBO_3D_State_reduced(s=0, v=0, theta=0, theta_dot=0, psi=0, psi_dot=0)
+    state: BILBO_3D_State_reduced = None
+    K: np.ndarray = None
+
+    system: control.StateSpace
+
+    # === INIT =========================================================================================================
+    def __init__(self, model: BilboModel, Ts=DEFAULT_SAMPLE_TIME, x0=None):
+        if x0 is not None:
+            self.x0 = x0
+
         self.model = model
         self.Ts = Ts
-        A_cont, B_cont, C_cont, D_cont = self._linear_model()
-        self.sys_cont = control.StateSpace(A_cont, B_cont, C_cont, D_cont, remove_useless_states=False)
-        self.sys_disc = control.c2d(self.sys_cont, Ts)
-        self.A = self.sys_disc.A
-        self.B = self.sys_disc.B
-        self.C = self.sys_disc.C
-        self.D = self.sys_disc.D
-        super().__init__(Ts=Ts)
-        if poles is not None and ev is None:
-            self.K = self.set_poles(poles)
-        elif poles is not None and ev is not None:
-            self.K = self.set_eigenstructure(poles, ev)
-        else:
-            self.K = np.zeros((self.p, self.n))
 
-    def _linear_model(self):
+        self.state = BILBO_3D_State_reduced.as_state(self.x0)
+
+        [A, B, C, D] = self._linearModelContinuous()
+        self._system_continuous_uncontrolled = control.ss(A, B, C, D)
+        self.system = control.c2d(self._system_continuous_uncontrolled, Ts)
+
+    # === METHODS ======================================================================================================
+    def eigenstructureAssignment(self, poles: list | np.ndarray = None,
+                                 eigenvectors: list | np.ndarray = None,
+                                 apply_poles_to_system: bool = True):
+
+        if poles is None:
+            poles = BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES
+
+        if eigenvectors is None:
+            eigenvectors = BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
+
+        poles = np.asarray(poles)
+
+        # K = lib_control.eigenstructure_assignment(self._system_continuous_uncontrolled.A,
+        #                                           self._system_continuous_uncontrolled.B,
+        #                                           np.exp(poles * self.Ts), eigenvectors)
+
+        K = lib_control.eigenstructure_assignment(self._system_continuous_uncontrolled.A,
+                                                  self._system_continuous_uncontrolled.B,
+                                                  poles, eigenvectors)
+
+        if apply_poles_to_system:
+            self.system = control.StateSpace((self.system.A - self.system.B @ K), self.system.B,
+                                             self.system.C, self.system.D, self.Ts, remove_useless_states=False)
+
+            self.K = K
+        return K
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _linearModelContinuous(self):
         g = 9.81
         model = self.model
         C_21 = (model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * model.m_b * model.l
@@ -465,7 +452,7 @@ class BILBO_3D_Linear(core.dynamics.LinearDynamics):
                        model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * 2 * model.c_alpha
         D_11 = (
                        model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w ** 2 - model.m_b * model.l * 2 * model.c_alpha / model.r_w
-        D_33 = model.d_w / (2 * model.r_w ** 2) * model.c_alpha
+        D_33 = model.d_w ** 2 / (2 * model.r_w ** 2) * model.c_alpha
         V_2 = model.I_z + 2 * model.I_w + (model.m_w + model.I_w / model.r_w ** 2) * model.d_w ** 2 / 2
         A = np.array([
             [0, 1, 0, 0, 0, 0],
@@ -490,68 +477,87 @@ class BILBO_3D_Linear(core.dynamics.LinearDynamics):
         D = [0, 0]
         return A, B, C, D
 
-    def set_poles(self, poles):
-        poles = np.asarray(poles)
-        self.K = np.asarray(control.place(self.A, self.B, np.exp(poles * self.Ts)))
-        A_hat = self.A - self.B @ self.K
-        self.A = A_hat
-        self.sys = control.StateSpace(self.A, self.B, self.C, self.D, self.Ts, remove_useless_states=False)
-        if hasattr(self, 'sys_cont') and self.sys_cont is not None:
-            K = np.asarray(control.place(self.sys_cont.A, self.sys_cont.B, poles))
-            self.sys_cont = control.StateSpace((self.sys_cont.A - self.sys_cont.B @ K), self.sys_cont.B,
-                                               self.sys_cont.C, self.sys_cont.D, remove_useless_states=False)
-        return self.K
 
-    def set_eigenstructure(self, poles, ev, set=True):
-        poles = np.asarray(poles)
-        K = lib_control.eigenstructure_assignment(self.A, self.B, np.exp(poles * self.Ts), ev)
-        if set:
-            self.K = K
-            A_hat = self.A - self.B @ self.K
-            self.A = A_hat
-            self.sys = control.StateSpace(self.A, self.B, self.C, self.D, self.Ts, remove_useless_states=False)
-        return K
+# === BILBO DYNAMICS 3D LINEAR =========================================================================================
+class BILBO_Dynamics_3D_Linear:
+    x0: BILBO_3D_State = BILBO_3D_State(x=0, y=0, v=0, theta=0, theta_dot=0, psi=0, psi_dot=0)
+    state: BILBO_3D_State = None
+    K: np.ndarray = None
 
+    # === INIT =========================================================================================================
+    def __init__(self, model: BilboModel, Ts=DEFAULT_SAMPLE_TIME, x0=None):
+        if x0 is not None:
+            self.x0 = x0
 
-class BILBO_3D_Linear_XY(core.dynamics.LinearDynamics):
-    """
-    Linear dynamics for BILBO in 3D with a 7D state:
-      [x, y, v, theta, theta_dot, psi, psi_dot]
-
-    The first two states are the Cartesian coordinates obtained from the kinematics
-    x_dot = v*cos(psi) and y_dot = v*sin(psi). These equations are linearized about an
-    operating point (v0, psi0) – by default psi0 = 0 and v0 = 0.
-
-    The remaining states (v, theta, theta_dot, psi, psi_dot) follow the same linearized
-    dynamics as in the original 3D model (which used s instead of x,y).
-
-    A discrete-time state-feedback controller is computed from the continuous linear model.
-    """
-    state_space = BILBO_3D_StateSpace_7D()
-    input_space = BILBO_3D_InputSpace()
-    output_space = BILBO_3D_StateSpace_7D()
-
-    def __init__(self, model: BilboModel, Ts, poles=None, ev=None, v0=0, psi0=0):
         self.model = model
         self.Ts = Ts
-        self.v0 = v0  # Operating point forward velocity (for kinematics linearization)
-        self.psi0 = psi0  # Operating point heading
-        A_cont, B_cont, C_cont, D_cont = self._linear_model()
-        self.sys_cont = control.StateSpace(A_cont, B_cont, C_cont, D_cont, remove_useless_states=False)
-        self.sys_disc = control.c2d(self.sys_cont, Ts)
-        self.A = np.asarray(self.sys_disc.A)
-        self.B = np.asarray(self.sys_disc.B)
-        self.C = np.asarray(self.sys_disc.C)
-        self.D = np.asarray(self.sys_disc.D)
-        super().__init__(Ts=Ts)
-        # Design state-feedback gains if poles are provided.
-        if poles is not None and ev is None:
-            self.K = self.set_poles(poles)
-        elif poles is not None and ev is not None:
-            self.K = self.set_eigenstructure(poles, ev)
-        else:
-            self.K = np.zeros((self.p, self.n))
+        self.state = BILBO_3D_State.as_state(self.x0)
 
+        A, B, C, D = self._linear_model()
+        system_continuous_uncontrolled = control.ss(A, B, C, D)
+        self.system = control.c2d(system_continuous_uncontrolled, Ts)
+
+    # === METHODS ======================================================================================================
+    def eigenstructureAssignment(self, poles: list | np.ndarray, eigenvectors: list | np.ndarray,
+                                 apply_poles_to_system: bool = True):
+
+        if not len(poles) == 6:
+            raise ValueError(
+                "The number of poles must be 6, "
+                "since we use the reduced dynamics to calculate the eigenstructure assignment.")
+
+        # Make the reduced dynamics system
+        reduced_dynamics = BILBO_Dynamics_3D_Linear_reduced(self.model, Ts=self.Ts)
+        K = reduced_dynamics.eigenstructureAssignment(poles, eigenvectors, apply_poles_to_system=apply_poles_to_system)
+        K = np.hstack((np.zeros((2, 1)), K))
+
+        if apply_poles_to_system:
+            self.K = K
+            self.system = control.StateSpace((self.system.A - self.system.B @ K), self.system.B,
+                                             self.system.C, self.system.D, self.Ts, remove_useless_states=False)
+        return K
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def setState(self, state: BILBO_3D_State | np.ndarray | list):
+        self.state = BILBO_3D_State.as_state(state)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def simulate(self, input: list[BILBO_3D_Input],
+                 reset: bool = True,
+                 x0: BILBO_3D_State = None,
+                 include_zero_step: bool = True) -> list[BILBO_3D_State]:
+
+        input = listToStateList(input, BILBO_3D_Input)
+        state_list = []
+
+        if x0 is not None:
+            self.state = BILBO_3D_State.as_state(x0)
+        elif reset:
+            self.state = copy.deepcopy(self.x0)
+
+        if include_zero_step:
+            state_list.append(self.state)
+
+        for inp_i in input:
+            self.step(inp_i)
+            state_list.append(self.state)
+
+        return state_list
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def step(self, input: BILBO_3D_Input):
+        self.state = self._dynamics(self.state, input)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset(self):
+        self.state = copy.deepcopy(self.x0)
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _dynamics(self, state: BILBO_3D_State, input: BILBO_3D_Input):
+        new_state = self.system.A @ state.asarray() + self.system.B @ input.asarray()
+        return BILBO_3D_State.fromarray(new_state)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _linear_model(self):
         g = 9.81
         model = self.model
@@ -568,22 +574,22 @@ class BILBO_3D_Linear_XY(core.dynamics.LinearDynamics):
                         model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * 2 * model.c_alpha)
         D_11 = ((
                         model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w ** 2 - model.m_b * model.l * 2 * model.c_alpha / model.r_w)
-        D_33 = model.d_w / (2 * model.r_w ** 2) * model.c_alpha
+        D_33 = model.d_w ** 2 / (2 * model.r_w ** 2) * model.c_alpha
         V_2 = model.I_z + 2 * model.I_w + (model.m_w + model.I_w / model.r_w ** 2) * model.d_w ** 2 / 2
 
         # Linearize the kinematic equations about (v0, psi0).
-        cos_psi0 = np.cos(self.psi0)
-        sin_psi0 = np.sin(self.psi0)
+        cos_psi0 = np.cos(self.x0.psi)
+        sin_psi0 = np.sin(self.x0.psi)
 
         # Construct A matrix with state ordering: [x, y, v, theta, theta_dot, psi, psi_dot]
         A = np.zeros((7, 7))
         # Kinematics for x and y:
         # x_dot = v*cos(psi) ≈ cos(psi0)*delta_v - v0*sin(psi0)*delta_psi
         A[0, 2] = cos_psi0
-        A[0, 5] = -self.v0 * sin_psi0
+        A[0, 5] = -self.x0.v * sin_psi0
         # y_dot = v*sin(psi) ≈ sin(psi0)*delta_v + v0*cos(psi0)*delta_psi
         A[1, 2] = sin_psi0
-        A[1, 5] = self.v0 * cos_psi0
+        A[1, 5] = self.x0.v * cos_psi0
 
         # The remaining dynamics are taken from the original model.
         # v dynamics (originally row 1 for state 'v'):
@@ -621,67 +627,80 @@ class BILBO_3D_Linear_XY(core.dynamics.LinearDynamics):
 
         return A, B, C, D
 
-    def set_poles(self, poles):
-        poles = np.asarray(poles)
-        # Compute the discrete-time desired poles (using the exponential mapping).
-        self.K = np.asarray(control.place(self.A, self.B, np.exp(poles * self.Ts)))
-        A_hat = self.A - self.B @ self.K
-        self.A = A_hat
-        self.sys = control.StateSpace(self.A, self.B, self.C, self.D, self.Ts, remove_useless_states=False)
-        if hasattr(self, 'sys_cont') and self.sys_cont is not None:
-            K = np.asarray(control.place(self.sys_cont.A, self.sys_cont.B, poles))
-            self.sys_cont = control.StateSpace((self.sys_cont.A - self.sys_cont.B @ K),
-                                               self.sys_cont.B,
-                                               self.sys_cont.C,
-                                               self.sys_cont.D,
-                                               remove_useless_states=False)
-        return self.K
 
-    def set_eigenstructure(self, poles, ev, set=True):
-        poles = np.asarray(poles)
-        K = lib_control.eigenstructure_assignment(self.A, self.B, np.exp(poles * self.Ts), ev)
-        if set:
+class BILBO_Dynamics_3D:
+    x0: BILBO_3D_State = BILBO_3D_State(x=0, y=0, v=0, theta=0, theta_dot=0, psi=0, psi_dot=0)
+    state: BILBO_3D_State = None
+    K: np.ndarray = None
+
+    # === INIT =========================================================================================================
+    def __init__(self, model: BilboModel, Ts=DEFAULT_SAMPLE_TIME, x0=None):
+        if x0 is not None:
+            self.x0 = x0
+
+        self.model = model
+        self.Ts = Ts
+        self.state = BILBO_3D_State.as_state(self.x0)
+
+    # === METHODS ======================================================================================================
+    def eigenstructureAssignment(self, poles: list | np.ndarray,
+                                 eigenvectors: list | np.ndarray,
+                                 apply_poles_to_system: bool = True):
+
+        # Make the reduced linear system dynamics
+        reduced_linear_dynamics = BILBO_Dynamics_3D_Linear_reduced(self.model, Ts=self.Ts)
+        K = reduced_linear_dynamics.eigenstructureAssignment(poles, eigenvectors, apply_poles_to_system=False)
+
+        K = np.hstack((np.zeros((2, 1)), K))
+
+        if apply_poles_to_system:
             self.K = K
-            A_hat = self.A - self.B @ self.K
-            self.A = A_hat
-            self.sys = control.StateSpace(self.A, self.B, self.C, self.D, self.Ts, remove_useless_states=False)
         return K
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def step(self, input: BILBO_3D_Input):
+        self.state = self._dynamics(self.state, input)
 
-class BILBO_Dynamics_3D(core.dynamics.Dynamics):
-    """
-    3D dynamics for BILBO.
-    This model uses a 7-dimensional state and accepts 2 inputs.
-    """
-    state_space = BILBO_3D_StateSpace_7D()
-    input_space = BILBO_3D_InputSpace()
-    output_space = BILBO_3D_StateSpace_7D()
+    # ------------------------------------------------------------------------------------------------------------------
+    def simulate(self, input: list[BILBO_3D_Input],
+                 reset: bool = True,
+                 x0: BILBO_3D_State = None,
+                 include_zero_step: bool = True) -> list[BILBO_3D_State]:
+        input = listToStateList(input, BILBO_3D_Input)
+        state_list = []
+        if x0 is not None:
+            self.state = BILBO_3D_State.as_state(x0)
+        elif reset:
+            self.state = copy.deepcopy(self.x0)
 
-    def __init__(self, model: BilboModel, Ts, poles=None, eigenvectors=None, speed_control: bool = False, *args,
-                 **kwargs):
-        super().__init__(Ts=Ts, *args, **kwargs)
-        self.model = model
-        # Limit the pitch (theta) to the maximum allowed value from the model.
-        # self.state_space['theta'].limits = [-self.model.max_pitch, self.model.max_pitch]
-        self.q = 1
-        self.p = 2
-        self.n = 7
+        if include_zero_step:
+            state_list.append(self.state)
 
-    def update(self, input=None):
-        if input is not None:
-            self.input = input
-        self.state = self._dynamics(self.state, self.input)
+        for inp_i in input:
+            self.step(inp_i)
+            state_list.append(self.state)
+        return state_list
 
-    def _dynamics(self, state, input):
+    # ------------------------------------------------------------------------------------------------------------------
+    def setState(self, state: BILBO_3D_State | np.ndarray | list):
+        self.state = BILBO_3D_State.as_state(state)
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _dynamics(self, state: BILBO_3D_State, input: BILBO_3D_Input):
         g = 9.81
-        x = state[0].value
-        y = state[1].value
-        v = state[2].value
-        theta = state[3].value
-        theta_dot = state[4].value
-        psi = state[5].value
-        psi_dot = state[6].value
-        u = [input[0].value, input[1].value]
+        x = state.x
+        y = state.y
+        v = state.v
+        theta = state.theta
+        theta_dot = state.theta_dot
+        psi = state.psi
+        psi_dot = state.psi_dot
+
+        if self.K is not None:
+            u = input.asarray() - self.K @ state.asarray()
+        else:
+            u = input.asarray()
+
         model = self.model
         C_12 = (model.I_y + model.m_b * model.l ** 2) * model.m_b * model.l
         C_22 = model.m_b ** 2 * model.l ** 2 * np.cos(theta)
@@ -695,7 +714,8 @@ class BILBO_Dynamics_3D(core.dynamics.Dynamics):
                        model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * 2 * model.c_alpha / model.r_w + model.m_b * model.l * np.cos(
             theta) * 2 * model.c_alpha / model.r_w ** 2
         C_11 = model.m_b ** 2 * model.l ** 2 * np.cos(theta)
-        D_12 = (model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * np.cos(
+        D_12 = (
+                       model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w - model.m_b * model.l * np.cos(
             theta) * 2 * model.c_alpha
         D_11 = (
                        model.I_y + model.m_b * model.l ** 2) * 2 * model.c_alpha / model.r_w ** 2 - 2 * model.m_b * model.l * np.cos(
@@ -714,7 +734,7 @@ class BILBO_Dynamics_3D(core.dynamics.Dynamics):
         C_23 = (model.m_b ** 2 * model.l ** 2 + (model.m_b + 2 * model.m_w + 2 * model.I_w / model.r_w ** 2) * (
                 model.I_z - model.I_x - model.m_b * model.l ** 2)) * np.cos(theta)
 
-        state_dot = np.zeros(self.n)
+        state_dot = np.zeros(len(state.asarray()))
         state_dot[0] = v * np.cos(psi)
         state_dot[1] = v * np.sin(psi)
         state_dot[2] = (np.sin(theta) / V_1) * (-C_11 * g + C_12 * theta_dot ** 2 + C_13 * psi_dot ** 2) - (
@@ -726,200 +746,277 @@ class BILBO_Dynamics_3D(core.dynamics.Dynamics):
         state_dot[5] = psi_dot
         state_dot[6] = (np.sin(theta) / V_2) * (C_31 * theta_dot * psi_dot - C_32 * psi_dot * v) - (
                 D_33 / V_2) * psi_dot - (B_3 / V_2) * (u[0] - u[1])
-        state = state + state_dot * self.Ts
-        return state
 
-    def _output(self, state):
-        return state['theta']
-
-    def init(self):
-        ...
-
-
-# -----------------------------------------------------------------------------
-# BILBO AGENTS
-# -----------------------------------------------------------------------------
-class BILBO_Agent(core.agents.Agent):
-    """
-    Base agent for BILBO.
-    """
-    object_type: str = 'bilbo_agent'
-    space = Space3D_BILBO()
-
-    def __init__(self, agent_id, *args, **kwargs):
-        # Set unique id (do not use "name")
-        self.id = f"BILBO_{agent_id}"
-        super().__init__(agent_id=agent_id, *args, **kwargs)
-        self.physics: BILBO_PhysicalObject = BILBO_PhysicalObject()
-
-    def _getParameters(self):
-        params = super()._getParameters()
-        params['physics'] = {}
-        params['size'] = {
-            'x': self.physics.depth,
-            'y': self.physics.width,
-            'z': self.physics.height
-        }
-        params['physics']['size'] = [self.physics.depth, self.physics.width, self.physics.height]
-        params['physics']['wheel_diameter'] = self.physics.wheel_diameter
-        params['physics']['l_w'] = self.physics.l_w
-        return params
-
-    def _getSample(self):
-        sample = super()._getSample()
-        sample['collision_box_pos'] = {
-            'x': self.physics.bounding_objects['body'].position[0],
-            'y': self.physics.bounding_objects['body'].position[1],
-            'z': self.physics.bounding_objects['body'].position[2]
-        }
-        return sample
-
-    def _init(self, *args, **kwargs):
-        self._updatePhysics()
+        new_state = state.asarray() + state_dot * self.Ts
+        return BILBO_3D_State.fromarray(new_state)
 
 
 # ======================================================================================================================
-bilbo_eigenstructure_assignment_poles = [0, -20, -3 + 3j, -3 - 3j, 0, -15]
+def input3Dto2D(input: list[BILBO_3D_Input | np.ndarray | list]) -> list[BILBO_2D_Input]:
+    input = listToStateList(input, BILBO_3D_Input)
+    input_2D = []
 
-bilbo_eigenstructure_assignment_eigenvectors = np.array([[1, nan, nan, nan, 0, nan],
-                                                         [nan, 1, nan, nan, nan, nan],
-                                                         [nan, nan, 1, 1, nan, 0],
-                                                         [nan, nan, nan, nan, nan, nan],
-                                                         [0, nan, nan, nan, 1, 1],
-                                                         [nan, 0, 0, 0, nan, nan]])
-
-
-class BILBO_Agent_Control_Mode(enum.IntEnum):
-    OFF = 0,
-    DIRECT = 1,
-    BALANCING = 2,
-    VELOCITY = 3,
+    for inp_i in input:
+        input_2D.append(BILBO_2D_Input(inp_i.M_L + inp_i.M_R))
+    return input_2D
 
 
-class BILBO_DynamicAgent(BILBO_Agent, core.agents.DynamicAgent):
-    """
-    Dynamic agent for BILBO that incorporates control and feedback.
-    """
-    object_type: str = 'bilbo_agent'
-    space = Space3D_BILBO()
-    # space = BILBO_3D_StateSpace_6D()
-    dynamics: BILBO_Dynamics_3D
-    linear_dynamics: BILBO_3D_Linear
+# ======================================================================================================================
+def input2Dto3D(input: list[BILBO_2D_Input | np.ndarray | list]) -> list[BILBO_3D_Input]:
+    input = listToStateList(input, BILBO_2D_Input)
+    input_3D = []
 
-    velocity_input_space = BILBO_3D_VelocityInputSpace()
-    input_space = BILBO_3D_InputSpace()
+    for inp_i in input:
+        input_3D.append(BILBO_3D_Input(inp_i.M / 2, inp_i.M / 2))
 
-    control_mode: BILBO_Agent_Control_Mode
+    return input_3D
 
-    Ts = DEFAULT_SAMPLE_TIME
 
-    def __init__(self, agent_id,
-                 speed_control: bool = False,
-                 poles=None,
-                 eigenvectors=None,
-                 K=None,
-                 model: BilboModel = DEFAULT_BILBO_MODEL, *args, **kwargs):
+# ======================================================================================================================
+# === BILBO AGENT ======================================================================================================
+class BILBO_DynamicAgent(Agent):
+    mode: BILBO_Control_Mode
 
-        # Instantiate dynamics with provided sample time and model.
-        if poles is None:
-            poles = bilbo_eigenstructure_assignment_poles
+    state: BILBO_3D_State
+    input: BILBO_3D_Input
+    dynamics: BILBO_Dynamics_3D | BILBO_Dynamics_3D_Linear
 
-        if eigenvectors is None:
-            eigenvectors = bilbo_eigenstructure_assignment_eigenvectors
+    K: np.ndarray = None
 
+    _enable_state_constraints: bool = True
+
+    # === INIT =========================================================================================================
+    def __init__(self, agent_id: str, model: BilboModel, Ts=DEFAULT_SAMPLE_TIME, x0=None,
+                 dynamics: type = BILBO_Dynamics_3D):
+        super().__init__(agent_id)
         self.model = model
+        self.Ts = Ts
 
-        self.dynamics = BILBO_Dynamics_3D(Ts=self.Ts, model=model)
+        self.dynamics = dynamics(model, Ts=Ts, x0=x0)
+        self.input = BILBO_3D_Input(M_L=0, M_R=0)
 
-        super().__init__(agent_id=agent_id, *args, **kwargs)
-
-        self.controller_v = lib_control.PID_ctrl(Ts=self.Ts, P=-1.534 / 2, I=-2.81 / 2, D=-0.07264 / 2, max_rate=75)
-        self.controller_psidot = lib_control.PID_ctrl(Ts=self.Ts, P=-0.3516, I=-1.288, D=-0.0002751)
-
-        self.poles = poles
-        self.linear_dynamics = BILBO_3D_Linear(self.model, self.Ts, poles, eigenvectors)
-        # Combine a zero column with the computed gain matrix.
-        self.state_ctrl_K = np.hstack((np.zeros((2, 1)), self.linear_dynamics.K))
-
-        print(self.state_ctrl_K)
-        if K is not None:
-            self.state_ctrl_K = K
-
-        self.input = self.input_space.getState()
+        self.mode = BILBO_Control_Mode.BALANCING
 
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._controller)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.DYNAMICS].addAction(self._dynamics)
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _controller(self):
+    # === PROPERTIES ===================================================================================================
+    @property
+    def state(self):
+        return self.dynamics.state
 
-        # raise NotImplementedError("Implement Control Modes!")
+    @state.setter
+    def state(self, value):
+        self.dynamics.state = BILBO_3D_State.as_state(value)
 
-        # if self.controller_v is not None and self.controller_psidot is not None:
-        #     e_v = self.input['v'] - self.dynamics.state['v']
-        #     u_v = self.controller_v.update(e_v.value)
-        #     e_psidot = self.input['psi_dot'] - self.dynamics.state['psi_dot']
-        #     u_psidot = self.controller_psidot.update(e_psidot.value)
-        #     input_dynamics = self.dynamics.input_space.map([u_v + u_psidot, u_v - u_psidot])
-        # else:
-        #     input_dynamics = self.input
-
-        input_dynamics = self.input
-        input_dynamics = input_dynamics - self.state_ctrl_K @ self.state
-        self.dynamics.input = input_dynamics
-
-    # ------------------------------------------------------------------------------------------------------------------
     @property
     def input(self):
         return self._input
 
-    # ------------------------------------------------------------------------------------------------------------------
     @input.setter
-    def input(self, value: (list, np.ndarray, core.spaces.State)):
-        self._input = self.input_space.map(value)
-        pass
+    def input(self, value):
+        self._input = BILBO_3D_Input.as_state(value)
 
-    def setBalancingInput(self, left, right):
-        ...
-
-    def setVelocityInput(self, forward, turn):
-        ...
+    # === METHODS ======================================================================================================
+    def simulate(self, input: list[BILBO_3D_Input],
+                 reset: bool = True,
+                 x0: BILBO_3D_State = None,
+                 include_zero_step: bool = True) -> list[BILBO_3D_State]:
+        return self.dynamics.simulate(input, reset, x0, include_zero_step)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _getParameters(self):
-        params = super()._getParameters()
-        params['physics'] = {}
-        params['size'] = {
-            'x': self.physics.depth,
-            'y': self.physics.width,
-            'z': self.physics.height
-        }
-        params['physics']['size'] = [self.physics.depth, self.physics.width, self.physics.height]
-        params['physics']['wheel_diameter'] = self.physics.wheel_diameter
-        params['physics']['l_w'] = self.physics.l_w
-        return params
+    def reset(self, x0: BILBO_3D_State = None):
+        if x0 is not None:
+            self.dynamics.x0 = x0
 
-    def _getSample(self):
-        sample = super()._getSample()
-        return sample
+        self.dynamics.reset()
 
-    def _init(self, *args, **kwargs):
-        self._updatePhysics()
+    # ------------------------------------------------------------------------------------------------------------------
+    def setMode(self, mode: BILBO_Control_Mode):
+        self.mode = mode
 
-    def _action_control(self):
-        # Placeholder for additional control actions if needed.
-        pass
+    # ------------------------------------------------------------------------------------------------------------------
+    def eigenstructureAssignment(self, poles: list | np.ndarray,
+                                 eigenvectors: list | np.ndarray):
+        self.K = self.dynamics.eigenstructureAssignment(poles, eigenvectors, apply_poles_to_system=False)
 
-    def action_output(self, *args, **kwargs):
-        self.output = self.state
+    # === PRIVATE METHODS ==============================================================================================
+    def _controller(self) -> BILBO_3D_Input:
 
-    @staticmethod
-    def get3DInputFrom2D(input: np.ndarray):
-        # return hstack([input / 2, input / 2])
-        return np.column_stack((input / 2, input / 2))
+        if self.mode == BILBO_Control_Mode.OFF:
+            controller_input = BILBO_3D_Input(M_L=0, M_R=0)
+        elif self.mode == BILBO_Control_Mode.BALANCING:
+            controller_input = self.input.asarray() - self.K @ self.dynamics.state.asarray()
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+        return BILBO_3D_Input.as_state(controller_input)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _dynamics(self):
+        controller_input = self._controller()
+        self.dynamics.step(controller_input)
+        self._calculateStateConstraints()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _calculateStateConstraints(self):
+        if not self._enable_state_constraints:
+            return
+
+        # --- dt & params ---
+        dt = float(getattr(self.dynamics, "Ts", getattr(self, "Ts", DEFAULT_SAMPLE_TIME)))
+        max_pitch = float(self.model.max_pitch)
+        tol_enter = 1e-4
+        tol_exit = 2e-4
+
+        # contact tunables (feel free to expose in BilboModel)
+        e_n = float(getattr(self.model, "restitution_n", 0.0))  # normal restitution
+        k_t = float(getattr(self.model, "tangent_decay", 12.0))  # 1/s, v decay
+        k_r = float(getattr(self.model, "yaw_decay", 10.0))  # 1/s, psi_dot decay
+
+        # use slightly larger stick thresholds to kill drift
+        v_stick = float(getattr(self.model, "v_stick", 5e-3))  # m/s
+        w_stick = float(getattr(self.model, "w_stick", 5e-3))  # rad/s
+
+        # --- initialize persistent stuff ---
+        if not hasattr(self, "_ground_contact"):
+            self._ground_contact = False
+        if not hasattr(self, "_prev_pose"):
+            self._prev_pose = {
+                "x": float(self.state.x),
+                "y": float(self.state.y),
+                "psi": float(self.state.psi),
+            }
+
+        # --- read state ---
+        x = float(self.state.x)
+        y = float(self.state.y)
+        v = float(self.state.v)
+        theta = float(self.state.theta)
+        theta_dot = float(self.state.theta_dot)
+        psi = float(self.state.psi)
+        psi_dot = float(self.state.psi_dot)
+
+        # contact detection (hysteresis)
+        side = 1.0 if theta >= 0.0 else -1.0
+        depth = abs(theta) - max_pitch
+        approaching = (theta_dot * side) > 0.0
+
+        if depth > 0.0 or (abs(abs(theta) - max_pitch) <= tol_enter and approaching):
+            self._ground_contact = True
+        elif abs(abs(theta) - max_pitch) > tol_exit and not approaching:
+            self._ground_contact = False
+
+        sticking = False
+
+        if self._ground_contact:
+            # project onto contact manifold
+            theta = side * max_pitch
+
+            # normal velocity treatment
+            if approaching:
+                theta_dot = -e_n * theta_dot
+            if abs(theta_dot) < w_stick:
+                theta_dot = 0.0
+
+            # tangential exponential decay (dt-aware)
+            decay_t = math.exp(-k_t * dt)
+            decay_r = math.exp(-k_r * dt)
+            v *= decay_t
+            psi_dot *= decay_r
+
+            # stick if small
+            if abs(v) < v_stick:
+                v = 0.0
+            if abs(psi_dot) < w_stick:
+                psi_dot = 0.0
+
+            sticking = (v == 0.0 and psi_dot == 0.0)
+
+            # *** key anti-drift step: rollback pose when sticking ***
+            if sticking:
+                x = self._prev_pose["x"]
+                y = self._prev_pose["y"]
+                psi = self._prev_pose["psi"]
+
+        else:
+            # if we notice penetration outside contact, resolve once
+            if depth > 0.0:
+                theta = side * max_pitch
+                if approaching:
+                    theta_dot = -e_n * theta_dot
+
+        # write back
+        self.state.x = x
+        self.state.y = y
+        self.state.v = v
+        self.state.theta = theta
+        self.state.theta_dot = theta_dot
+        self.state.psi = psi
+        self.state.psi_dot = psi_dot
+
+        # update snapshot for next step (must be after any rollback)
+        self._prev_pose = {"x": x, "y": y, "psi": psi}
+
+
+# ======================================================================================================================
+def example_2D():
+    dynamics_2d_linear = BILBO_Dynamics_2D_Linear(model=DEFAULT_BILBO_MODEL, Ts=DEFAULT_SAMPLE_TIME)
+    dynamics_2d_linear.polePlacement(poles=BILBO_2D_POLES)
+
+    step_input = -0.0 * np.ones(200)
+    states_linear = dynamics_2d_linear.simulate(step_input,
+                                                x0=BILBO_2D_State(s=0, v=0, theta=np.pi / 2, theta_dot=0),
+                                                include_zero_step=True)
+    theta_linear = [state.theta for state in states_linear]
+
+    dynamics_2d = BILBO_Dynamics_2D(model=DEFAULT_BILBO_MODEL, Ts=DEFAULT_SAMPLE_TIME)
+    dynamics_2d.polePlacement(poles=BILBO_2D_POLES)
+
+    states = dynamics_2d.simulate(step_input,
+                                  x0=BILBO_2D_State(s=0, v=0, theta=np.pi / 2, theta_dot=0),
+                                  include_zero_step=True)
+    theta = [state.theta for state in states]
+
+    plt.plot(theta_linear, label='linear')
+    plt.plot(theta, label='nonlinear')
+    plt.grid()
+    plt.legend()
+    plt.show()
+
+
+def example_3D():
+    bilbo_3d_dynamics = BILBO_Dynamics_3D(model=DEFAULT_BILBO_MODEL, Ts=DEFAULT_SAMPLE_TIME)
+    bilbo_3d_dynamics.eigenstructureAssignment(poles=BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES,
+                                               eigenvectors=BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS)
+
+    input_2d: np.ndarray = -0.0 * np.ones(200)
+    input_3d = input2Dto3D(input_2d)
+
+    states = bilbo_3d_dynamics.simulate(input=input_3d,
+                                        x0=BILBO_3D_State(x=0, y=0, v=0, theta=np.pi / 2, theta_dot=0, psi=0,
+                                                          psi_dot=0),
+                                        include_zero_step=True)
+    theta = [state.theta for state in states]
+
+    bilbo_3d_dynamics_linear = BILBO_Dynamics_3D_Linear(model=DEFAULT_BILBO_MODEL, Ts=DEFAULT_SAMPLE_TIME)
+    bilbo_3d_dynamics_linear.eigenstructureAssignment(poles=BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES,
+                                                      eigenvectors=BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS)
+
+    states_linear = bilbo_3d_dynamics_linear.simulate(input=input_3d,
+                                                      x0=BILBO_3D_State(x=0, y=0, v=0, theta=np.pi / 2, theta_dot=0,
+                                                                        psi=0,
+                                                                        psi_dot=0),
+                                                      include_zero_step=True)
+
+    theta_linear = [state.theta for state in states_linear]
+
+    plt.plot(theta, label='nonlinear')
+    plt.plot(theta_linear, label='linear')
+    plt.grid()
+    plt.legend()
+    plt.show()
 
 
 if __name__ == '__main__':
-    model = DEFAULT_BILBO_MODEL
-
-    x = BILBO_2D_Linear(model=model, Ts=0.02, poles=[0, -20, -2 + 2j, -2 - 2j])
-    print(x.K_disc)
+    example_3D()

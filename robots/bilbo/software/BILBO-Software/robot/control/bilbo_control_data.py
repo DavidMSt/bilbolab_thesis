@@ -8,6 +8,7 @@ class BILBO_Control_Mode(enum.IntEnum):
     BALANCING = 2,
     VELOCITY = 3,
 
+
 @dataclasses.dataclass
 class TIC_Config:
     enabled: bool = False
@@ -46,12 +47,13 @@ class SpeedControl_Config:
     psidot: TWIPR_PID_Control_Config = dataclasses.field(default_factory=TWIPR_PID_Control_Config)
     max_speeds: dict = dataclasses.field(default_factory=dict)
 
+
 @dataclasses.dataclass
 class General_Control_Config:
     max_wheel_speed: float = 0.0
     max_wheel_torque: float = 0.0
     enable_external_inputs: bool = False
-    torque_offset: dict =  dataclasses.field(default_factory=lambda: {'left': 0, 'right': 0})
+    torque_offset: dict = dataclasses.field(default_factory=lambda: {'left': 0, 'right': 0})
 
 
 @dataclasses.dataclass
@@ -72,7 +74,23 @@ class BILBO_ControlConfig:
     speed_control: SpeedControl_Config = dataclasses.field(default_factory=SpeedControl_Config)
 
 
-
+@dataclasses.dataclass
+class BILBO_LL_ControlConfig:
+    K: list = dataclasses.field(default_factory=list)
+    forward_p: float = 0.0
+    forward_i: float = 0.0
+    forward_d: float = 0.0
+    turn_p: float = 0.0
+    turn_i: float = 0.0
+    turn_d: float = 0.0
+    vic_enabled: bool = False
+    vic_ki: float = 0.0
+    vic_max_error: float = 0.0
+    vic_v_limit: float = 0.0
+    tic_enabled: bool = False
+    tic_ki: float = 0.0
+    tic_max_error: float = 0.0
+    tic_theta_limit: float = 0.0
 
 
 class BILBO_Control_Status(enum.IntEnum):
@@ -111,6 +129,8 @@ class TWIPR_Control_Sample:
         default=BILBO_Control_Status(BILBO_Control_Status.ERROR)
     )
     mode: BILBO_Control_Mode = dataclasses.field(default=BILBO_Control_Mode(BILBO_Control_Mode.OFF))
+    vic_enabled: bool = False
+    tic_enabled: bool = False
     configuration: str = ''
     input: BILBO_Control_Input = dataclasses.field(default_factory=BILBO_Control_Input)
 
@@ -119,3 +139,6 @@ class BILBO_Control_Event_Type(enum.IntEnum):
     ERROR = 0
     MODE_CHANGED = 1
     CONFIGURATION_CHANGED = 2
+    VIC_CHANGED = 3
+    TIC_CHANGED = 4
+

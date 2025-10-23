@@ -85,6 +85,10 @@ bool TWIPR_ControlManager::enableVIC(bool state){
 	BILBO_Message_Control_Event message(event_message_data);
 	sendMessage(message);
 
+	control_event_message_data_t event_message_data_vic = { .event =
+			VIC_CHANGED, .mode = mode, .config =
+			this->control_config, .tick = tick_global };
+
 	return true;
 }
 
@@ -112,6 +116,12 @@ bool TWIPR_ControlManager::enableTIC(bool state) {
 
 	BILBO_Message_Control_Event message(event_message_data);
 	sendMessage(message);
+
+	control_event_message_data_t event_message_data_tic = { .event =
+			TIC_CHANGED, .mode = mode, .config =
+			this->control_config, .tick = tick_global };
+	BILBO_Message_Control_Event message_tic(event_message_data_tic);
+	sendMessage(message_tic);
 
 	return true;
 }

@@ -81,6 +81,14 @@ def delayed_execution(func: Callable, delay: float, *args, **kwargs) -> None:
     executor.start()
 
 
+def setTimeout(func: Callable, timeout: float, *args, **kwargs):
+    delayed_execution(func, timeout, *args, **kwargs)
+
+
+
+# ======================================================================================================================
+
+
 # ======================================================================================================================
 @callback_definition
 class TimerCallbacks:
@@ -97,7 +105,7 @@ class Timer:
 
     _stop: bool
 
-    def __init__(self, timeout=None, repeat: bool = False, callback: (callable, Callback, None) = None):
+    def __init__(self, timeout=None, repeat: bool = False, callback: Callable | Callback | None = None):
         self._reset_time = time.time()
         self.timeout = timeout  # Type: Ignore
         self.repeat = repeat
@@ -166,12 +174,14 @@ class Timer:
 def sleep(seconds):
     precise_sleep(seconds)
 
+
 # ----------------------------------------------------------------------------------------------------------------------
 def precise_sleep(seconds: float, disable_precision_timing=True):
     if getOS() == "Windows":
         precise_sleep_windows(seconds, disable_precision_timing)
     else:
         precise_sleep_posix(seconds)
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 def precise_sleep_windows(seconds: float, disable_precision_timing: bool = True):
@@ -198,6 +208,7 @@ def precise_sleep_windows(seconds: float, disable_precision_timing: bool = True)
         # Always revert to default resolution
         if disable_precision_timing:
             disable_precision_timing_windows()
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 def precise_sleep_posix(seconds: float):
@@ -296,10 +307,12 @@ class IntervalTimer:
     Automatically calculates and aligns to the next interval based on a start time.
     """
 
-    def __init__(self, interval: float):
+    def __init__(self, interval: float, raise_race_condition_error: bool = True):
         self.interval = interval
+        self.raise_race_condition_error = raise_race_condition_error
         self.previous_time = time.perf_counter()
 
+    # ------------------------------------------------------------------------------------------------------------------
     def sleep_until_next(self):
         """
         Sleeps until the next interval is reached, starting from the last recorded time.
@@ -309,7 +322,7 @@ class IntervalTimer:
         current_time = time.perf_counter()
         remaining = target_time - current_time
 
-        if remaining <= 0:
+        if remaining <= 0 and self.raise_race_condition_error is True:
             raise Exception("Race Conditions")
 
         if remaining > 0:
@@ -317,11 +330,21 @@ class IntervalTimer:
 
         self.previous_time = target_time  # Update for the next cycle
 
+    # ------------------------------------------------------------------------------------------------------------------
     def reset(self):
         """
         Resets the internal timer to the current time.
         """
         self.previous_time = time.perf_counter()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def stop(self):
+        ...
+
+
+# ======================================================================================================================
+def setInterval(callback: Callback | Callable, interval: float, *args, **kwargs) -> IntervalTimer:
+    ...
 
 
 # ======================================================================================================================
@@ -381,6 +404,39 @@ class TimeoutTimer:
         """
         self._stop_event.set()
         self._timer_thread.join()
+
+
+# ======================================================================================================================
+def setInterval(callback: Callback | Callable, interval: float, *args, **kwargs) -> Timer:
+    """
+    JS-like setInterval for Python using the existing Timer class.
+    Returns a Timer object you can cancel via .stop() or clearInterval().
+
+    :param callback: Function (or Callback) to invoke every `interval` seconds.
+    :param interval: Interval in seconds (float).
+    :param args: Positional args passed to the callback.
+    :param kwargs: Keyword args passed to the callback.
+    :return: Timer (call .stop() to cancel).
+    """
+
+    def _runner():
+        try:
+            callback(*args, **kwargs)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    t = Timer(timeout=interval, repeat=True, callback=_runner)
+    t.start()
+    return t
+
+
+def clearInterval(timer: Timer) -> None:
+    """
+    JS-like clearInterval. Stops the provided Timer.
+    """
+    if timer is not None:
+        timer.stop()
 
 
 # ======================================================================================================================

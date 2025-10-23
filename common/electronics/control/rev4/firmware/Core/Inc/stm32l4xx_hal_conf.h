@@ -36,7 +36,7 @@
   * @brief This is the list of modules to be used in the HAL driver
   */
 #define HAL_MODULE_ENABLED
-/*#define HAL_ADC_MODULE_ENABLED   */
+#define HAL_ADC_MODULE_ENABLED
 /*#define HAL_CRYP_MODULE_ENABLED   */
 /*#define HAL_CAN_MODULE_ENABLED   */
 /*#define HAL_COMP_MODULE_ENABLED   */
@@ -205,7 +205,7 @@
   *        for possible callback identifiers defined in HAL_PPP_CallbackIDTypeDef
   *        for each PPP peripheral).
   */
-#define USE_HAL_ADC_REGISTER_CALLBACKS        0U
+#define USE_HAL_ADC_REGISTER_CALLBACKS        1U
 #define USE_HAL_CAN_REGISTER_CALLBACKS        0U
 #define USE_HAL_COMP_REGISTER_CALLBACKS       0U
 #define USE_HAL_CRYP_REGISTER_CALLBACKS       0U
@@ -234,7 +234,7 @@
 #define USE_HAL_SMBUS_REGISTER_CALLBACKS      0U
 #define USE_HAL_SPI_REGISTER_CALLBACKS        0U
 #define USE_HAL_SWPMI_REGISTER_CALLBACKS      0U
-#define USE_HAL_TIM_REGISTER_CALLBACKS        0U
+#define USE_HAL_TIM_REGISTER_CALLBACKS        1U
 #define USE_HAL_TSC_REGISTER_CALLBACKS        0U
 #define USE_HAL_UART_REGISTER_CALLBACKS       0U
 #define USE_HAL_USART_REGISTER_CALLBACKS      0U

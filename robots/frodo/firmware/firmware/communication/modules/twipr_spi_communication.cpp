@@ -73,7 +73,7 @@ void TWIPR_SPI_Communication::provideSampleData(
 		frodo_sample_t *sample_buffer, uint16_t len) {
 
 	this->mode = TWIPR_SPI_COMM_MODE_TX;
-	this->spi_slave.provideData((uint8_t*) sample_buffer, sizeof(frodo_sample_t) * len);
+//	this->spi_slave.provideData((uint8_t*) sample_buffer, sizeof(frodo_sample_t) * len);
 }
 
 /* =============================================================== */

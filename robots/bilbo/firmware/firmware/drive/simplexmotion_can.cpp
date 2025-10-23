@@ -142,7 +142,7 @@ HAL_StatusTypeDef SimplexMotion_CAN::read(uint16_t reg, uint16_t &data) {
 }
 /* --------------------------------------------------------------------- */
 HAL_StatusTypeDef SimplexMotion_CAN::read(uint16_t reg, int16_t &data) {
-	uint8_t responseData[2];
+	uint8_t responseData[2] = {0};
 	uint8_t responseLength = 0;
 
 	CAN_Status status = this->read(reg, responseData, 2, responseLength);
@@ -190,6 +190,10 @@ HAL_StatusTypeDef SimplexMotion_CAN::checkCommunication() {
 	// Read the mode
 	simplexmotion_can_mode_t mode;
 	HAL_StatusTypeDef status = this->readMode(mode);
+
+	float speed = 0;
+	status = this->readSpeed(speed);
+
 	return status;
 }
 

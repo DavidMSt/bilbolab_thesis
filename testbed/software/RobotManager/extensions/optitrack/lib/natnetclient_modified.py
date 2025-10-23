@@ -17,11 +17,12 @@ import os
 import socket
 import struct
 from threading import Thread
+from typing import Callable
 
 
 def trace(*args):
     ...
-    print("".join(map(str, args)))
+    # print("".join(map(str, args)))
 
 
 # Create structs for reading various object types to speed up parsing.
@@ -32,8 +33,8 @@ DoubleValue = struct.Struct('<d')
 
 
 class NatNetClient:
-    rigid_body_callback: callable
-    description_message_callback: callable
+    rigid_body_callback: Callable
+    description_message_callback: Callable
 
     def __init__(self, server_address, multicast_address="239.255.42.99"):
         # Change this value to the IP address of the NatNet server.
@@ -50,6 +51,7 @@ class NatNetClient:
         # self.localIPAddress = "192.168.8.247"
         # self.localIPAddress = '0.0.0.0'
         self.localIPAddress = '0.0.0.0'
+        # self.localIPAddress = '192.168.1.149'
 
         # This should match the multicast address listed in Motive's streaming settings.
         # self.multicastIPAddress = "239.255.42.99"
@@ -64,7 +66,7 @@ class NatNetClient:
         # Set this to a callback method of your choice to receive per-rigid-body data at each frame.
         self.rigidBodyListener = None
 
-        #self.marker_set_callback = None
+        # self.marker_set_callback = None
         self.description_message_callback = None
         self.mocap_data_callback = None
 
@@ -324,8 +326,6 @@ class NatNetClient:
                 # Channel Count
                 forcePlateChannelCount = int.from_bytes(data[offset:offset + 4], byteorder='little')
                 offset += 4
-
-                # Channel Data
                 for j in range(0, forcePlateChannelCount):
                     trace("\tChannel", j, ":", forcePlateID)
                     forcePlateChannelFrameCount = int.from_bytes(data[offset:offset + 4], byteorder='little')
@@ -548,11 +548,9 @@ class NatNetClient:
 
         offset = 4
         if messageID == self.NAT_FRAMEOFDATA:
-            ...
             self.__unpackMocapData(data[offset:])
         elif messageID == self.NAT_MODELDEF:
             self.__unpackDataDescriptions(data[offset:])
-
         elif messageID == self.NAT_PINGRESPONSE:
             offset += 256  # Skip the sending app's Name field
             offset += 4  # Skip the sending app's Version info
@@ -615,7 +613,6 @@ class NatNetClient:
         # Create a separate thread for receiving command packets
         commandThread = Thread(target=self.__dataThreadFunction, args=(self.commandSocket,))
         commandThread.start()
-
 
         self.sendCommand(self.NAT_PING, "", self.commandSocket, (self.serverIPAddress, self.commandPort))
         self.sendCommand(self.NAT_REQUEST_MODELDEF, "", self.commandSocket, (self.serverIPAddress, self.commandPort))

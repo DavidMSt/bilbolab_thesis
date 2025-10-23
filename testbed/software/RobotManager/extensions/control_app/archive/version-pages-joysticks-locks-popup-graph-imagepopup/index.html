@@ -693,7 +693,7 @@
         if (data.type === "switch_set") {
           createButtons(data.grid_items, data.show_back);
           updatePathBar(data.path);
-          if (data.pages !== undefined && data.current_page !== undefined) { updatePageIndicators(data.current_page, data.pages); }
+          if (data.groups !== undefined && data.current_page !== undefined) { updatePageIndicators(data.current_page, data.groups); }
         }
         else if (data.type === "update_button") { updateButton(data.id, data.text, data.color, data.textcolor); }
         else if (data.type === "update_multi_state") { updateMultiStateButton(data.id, data.current_state, data.states, data.text, data.state, data.color, data.textcolor); }

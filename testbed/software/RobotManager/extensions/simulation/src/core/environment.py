@@ -12,39 +12,6 @@ from core.utils.logging_utils import Logger
 from extensions.simulation.src import core as core
 
 
-#
-# #
-# ======================================================================================================================
-# @dataclasses.dataclass class EnvironmentObjectVisualization: """ Visualization data for a world object.
-#
-#     Attributes:
-#         static (bool): Whether the visualization is static.
-#         sample_flag (bool): Flag to indicate if there is a new visualization sample.
-#         _sample (dict): Internal storage for the visualization sample.
-#     """
-#     static: bool = False
-#     sample_flag: bool = False
-#     _sample: dict = dataclasses.field(default_factory=dict)
-#
-#     @property
-#     def sample(self) -> dict:
-#         return self._sample
-#
-#     @sample.setter
-#     def sample(self, value: dict):
-#         self._sample = value
-#         self.sample_flag = True
-#
-#     def getSample(self) -> dict:
-#         """
-#         Returns and resets the current visualization sample.
-#         """
-#         sample = self.sample
-#         self._sample = {}
-#         self.sample_flag = False
-#         return sample
-
-
 class BASE_ENVIRONMENT_ACTIONS(enum.StrEnum):
     ENV_INPUT = 'env_input'
     INPUT = 'input'
@@ -68,7 +35,7 @@ class Object(scheduling.ScheduledObject):
     visualization, and collision properties.
     """
     # Type annotations for attributes (these may be set externally)
-    id: str  # Unique identifier for the object
+    object_id: str  # Unique identifier for the object
     env: Environment
     space: core_spaces.Space
     _configuration: core_spaces.State
@@ -96,11 +63,12 @@ class Object(scheduling.ScheduledObject):
             group (ObjectGroup): The group that contains this object.
             space (core_spaces.Space): The space in which the object is defined.
         """
+
         # Set unique id; if not provided, generate one using the class name and object id.
         if object_id is None:
-            self.id = f"{type(self).__name__}_{id(self)}"
+            self.object_id = f"{type(self).__name__}_{id(self)}"
         else:
-            self.id = object_id
+            self.object_id = object_id
 
         self._configuration = None
         self.sample_flag = False  # Flag for tracking configuration updates
@@ -110,9 +78,8 @@ class Object(scheduling.ScheduledObject):
         self.env = None
 
         # Initialize configuration from the space state if available
-        if self.space is not None:
+        if hasattr(self, 'space') and self.space is not None:
             self._configuration = self.space.getState()
-
         # self.collision = CollisionData()
         # self.visualization = EnvironmentObjectVisualization()
 
@@ -155,7 +122,7 @@ class Object(scheduling.ScheduledObject):
         core.scheduling.Action(action_id=BASE_ENVIRONMENT_ACTIONS.OUTPUT,
                                object=self,
                                function=self.action_output,
-                               priority=70,
+                               priority=100,
                                parent=self.scheduling.actions['step'])
 
         # Register physics update action if the object is not static
@@ -333,7 +300,7 @@ class Object(scheduling.ScheduledObject):
         """
         parameters = {
             'object_type': self.object_type,
-            'id': self.id,
+            'id': self.object_id,
             'configuration': self.configuration_global.serialize(),
             'class': self.__class__.__name__
         }
@@ -344,7 +311,7 @@ class Object(scheduling.ScheduledObject):
         Generate a sample dictionary representing the object's current state.
         """
         sample = {
-            'id': self.id,
+            'id': self.object_id,
             'configuration': self.configuration_global.serialize(),
             'parameters': self.getParameters()
         }
@@ -409,8 +376,8 @@ class Object(scheduling.ScheduledObject):
         pass
 
     # === BUILT-INS =================================================================================================
-    def __repr__(self):
-        return f"{str(self.configuration)} (global: {str(self.configuration_global)})"
+    # def __repr__(self):
+    #     return f"{str(self.configuration)} (global: {str(self.configuration_global)})"
 
 
 #
@@ -664,9 +631,14 @@ class Environment(scheduling.ScheduledObject):
                 continue
 
             for _, other in self.objects.items():
-                if obj.id == other.id:
-                    logging.warning(f"There already exists an object with id \"{obj.id}\" in the world.")
+                if obj.object_id == other.object_id:
+                    logging.warning(f"There already exists an object with id \"{obj.object_id}\" in the world.")
                     break
+
+            # Check if the simulation times match
+            if (hasattr(obj, 'Ts') and obj.Ts != self.Ts) or (hasattr(obj, 'dynamics') and obj.dynamics.Ts != self.Ts):
+                self.logger.warning(f"The simulation time step of object \"{obj.object_id}\" ({type(obj)}) does not match the "
+                                    f"world's time step ({self.Ts}).")
 
             # Register the object with the world's scheduler and set its world and space.
             obj.scheduling.parent = self
@@ -679,16 +651,17 @@ class Environment(scheduling.ScheduledObject):
             else:
                 obj.space = self.space
 
-            self.objects[obj.id] = obj
+            self.objects[obj.object_id] = obj
 
             for action_name, action in self.scheduling.actions.items():
                 if (action_name in obj.scheduling.actions and action_name not in (default_action.value for
                                                                                   default_action
                                                                                   in
                                                                                   scheduling.SCHEDULING_DEFAULT_ACTIONS)):
+                    print(f"Adding action \"{action_name}\" to own action list.")
                     obj.scheduling.actions[action_name].addParent(action)
 
-            logging.info(f"Added Object \"{obj.id}\" ({type(obj)}) to the world.")
+            logging.info(f"Added Object \"{obj.object_id}\" ({type(obj)}) to the world.")
 
             obj._onAdd_callback()
 
@@ -706,7 +679,7 @@ class Environment(scheduling.ScheduledObject):
         for obj in objects:
             assert isinstance(obj, Object)
             if obj in self.objects.values():
-                del self.objects[obj.id]
+                del self.objects[obj.object_id]
             # TODO: Also deregister the simulation object.
             self.removeChild(obj)
 
@@ -718,9 +691,9 @@ class Environment(scheduling.ScheduledObject):
         Args:
             agent (Object): The agent to add.
         """
-        self.agents[agent.id] = agent
+        self.agents[agent.object_id] = agent
 
-        if agent.id not in self.objects:
+        if agent.object_id not in self.objects:
             self.addObject(agent)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -739,11 +712,11 @@ class Environment(scheduling.ScheduledObject):
 
         if not regex:
             for obj in self.objects.values():
-                if obj.id == id:
+                if obj.object_id == id:
                     result.append(obj)
         else:
             for obj in self.objects.values():
-                if re.search(id, obj.id):
+                if re.search(id, obj.object_id):
                     result.append(obj)
 
         return result
@@ -784,7 +757,7 @@ class Environment(scheduling.ScheduledObject):
         for obj in self.objects.values():
             # Update sample for dynamic objects or if a static object's state has been flagged as changed.
             if not obj.static or (obj.static and obj.sample_flag):
-                sample['objects'][obj.id] = obj.getSample()
+                sample['objects'][obj.object_id] = obj.getSample()
 
         return sample
 
@@ -800,7 +773,7 @@ class Environment(scheduling.ScheduledObject):
         objects_sample = {}
         for obj in self.objects.values():
             if not obj.static or (obj.static and obj.visualization.sample_flag):
-                objects_sample[obj.id] = obj.getVisualizationSample()
+                objects_sample[obj.object_id] = obj.getVisualizationSample()
 
         sample = {
             'time': self.scheduling.tick_global * self.Ts,
@@ -897,47 +870,3 @@ class Environment(scheduling.ScheduledObject):
 
     def action_env_output(self, *args, **kwargs):
         ...
-
-        # def setSize(self, **kwargs):
-        #     """
-        #     Set the dimensions of the world.
-        #
-        #     The size is determined by the dimensions defined in the world's space.
-        #
-        #     Args:
-        #         kwargs: Dimension names and their corresponding size values (as lists).
-        #     """
-        #     self.size = {}
-        #     if self.space.hasDimension('pos'):
-        #         self.size['pos'] = {}
-        #         for dim, value in kwargs.items():
-        #             if dim in self.space['pos']:
-        #                 assert isinstance(value, list)
-        #                 self.size['pos'][dim] = value
-        #     else:
-        #         for dim, value in kwargs.items():
-        #             if self.space.hasDimension(dim):
-        #                 assert isinstance(value, list)
-        #                 self.size[dim] = value
-
-        # def collisionCheck(self):
-        #     """
-        #     Perform collision checking for objects in the world.
-        #
-        #     For each object that requires collision checking, compare against all other objects (respecting
-        #     inclusion and exclusion lists) and update collision information accordingly.
-        #     """
-        #     for key, obj in self.objects.items():
-        #         if obj.collision.settings.check:
-        #             obj.physics.collision.collision_state = False
-        #             for _, collision_object in self.objects.items():
-        #                 if collision_object is obj:
-        #                     continue
-        #                 if collision_object.collision.settings.collidable:
-        #                     # Check if the collision_object's type is included.
-        #                     if any(isinstance(collision_object, include_class)
-        #                            for include_class in obj.collision.settings.includes):
-        #                         # Ensure it is not in the exclusion list.
-        #                         if not any(isinstance(collision_object, exclude_class)
-        #                                    for exclude_class in obj.collision.settings.excludes):
-        #                             # Insert proximity and collision checking code here.

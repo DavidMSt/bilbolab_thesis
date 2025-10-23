@@ -180,7 +180,7 @@ class Action:
         if kwargs.get('calltree', False):
             try:
                 print(
-                    f"Action: \"{self.id}\" Object: \"{self.object.id if self.object else 'None'}\": {type(self.object).__name__}")
+                    f"Action: \"{self.id}\" Object: \"{self.object.object_id if self.object else 'None'}\": {type(self.object).__name__}")
             except AttributeError:
                 print(f"Action: \"{self.id}\" Object: None")
         # Evaluate lambda expressions.
@@ -335,13 +335,13 @@ class ScheduledObject(ABC):
     Each ScheduledObject maintains its own scheduling data including actions and child objects.
     """
     scheduling: SchedulingData
-    id: str  # Unique identifier for the object
+    object_id: str  # Unique identifier for the object
 
     def __init__(self, object_id: str = None, parent=None, *args, **kwargs):
         self.scheduling = SchedulingData(_object=self)
         if object_id is None:
             object_id = f"{type(self).__name__}_{id(self)}"
-        self.id = object_id
+        self.object_id = object_id
 
         # Create default actions.
         action_entry = Action(action_id=SCHEDULING_DEFAULT_ACTIONS.ENTRY, function=self.entry)

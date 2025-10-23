@@ -1,6 +1,6 @@
 import dataclasses
 from abc import ABC, abstractmethod
-from typing import Union
+from typing import Union, Any
 
 import control
 import numpy as np
@@ -28,22 +28,23 @@ class Dynamics(ScheduledObject):
     state_initial: sp.State
 
     # === INIT =========================================================================================================
-    def __init__(self, input_space: sp.Space = None, output_space: sp.Space = None, state_space: sp.Space = None,
-                 Ts: float = None, state: Union[sp.State, list] = None, *args,
+    def __init__(self, Ts: float = None, state: Union[sp.State, list] = None, *args,
                  **kwargs):
         super().__init__(*args, **kwargs)
 
         update_action = Action(function=self.update, lambdas={'input': lambda: self.input})
+
         self.addAction(update_action)
 
-        if not hasattr(self, 'input_space'):
-            self.input_space = input_space
+        if isinstance(self.input_space, type):
+            self.input_space = self.input_space()
 
-        if not hasattr(self, 'state_space'):
-            self.state_space = state_space
+        if isinstance(self.output_space, type):
+            self.output_space = self.output_space()
 
-        if not hasattr(self, 'output_space'):
-            self.output_space = output_space
+        if isinstance(self.state_space, type):
+            self.state_space = self.state_space()
+
 
         if state is None:
             state = self.state_space.getState()
@@ -83,7 +84,9 @@ class Dynamics(ScheduledObject):
     def update(self, input=None):
         if input is not None:
             self.input = input
+
         self.state = self._dynamics(self.state, self.input)
+        print(f"Input: {self.input}, State: {self.state}")
         pass
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -114,10 +117,10 @@ class LinearDynamics(Dynamics):
     p: int
     q: int
 
-    def __init__(self, spaces: DynamicsSpaces = None, Ts: float = None, state: Union[sp.State, list] = None,
+    def __init__(self, Ts: float = None, state: Union[sp.State, list] = None,
                  discrete: bool = False, *args,
                  **kwargs):
-        super().__init__(spaces, Ts, state, *args, **kwargs)
+        super().__init__(Ts, state, *args, **kwargs)
 
         self.A = np.asarray(self.A)
         self.B = np.asarray(self.B)
@@ -148,10 +151,10 @@ class LinearDynamics(Dynamics):
 class DynamicObject(Object, ABC):
     dynamics: Dynamics
 
-    input: any
+    input: Any
 
     # === INIT =========================================================================================================
-    def __init__(self, object_id, space: sp.Space=None, *args, **kwargs):
+    def __init__(self, object_id, space: sp.Space = None, *args, **kwargs):
         super().__init__(object_id=object_id, space=space, *args, **kwargs)
 
         self.input = None
@@ -161,7 +164,11 @@ class DynamicObject(Object, ABC):
 
     # === PROPERTIES ===================================================================================================
 
-    def simulate(self, input: list = None, steps=None):
+    def simulate(self, input: list | np.ndarray = None,
+                 steps=None,
+                 zero_initial_step: bool = True,
+                 x0: list | np.ndarray = None,
+                 reset: bool = True):
 
         if steps is None and input is not None:
             steps = len(input)
@@ -173,19 +180,35 @@ class DynamicObject(Object, ABC):
             if steps > len(input):
                 raise Exception("The number of simulation steps is larger than the number of inputs.")
 
-        output = [None] * steps
+        if x0 is not None:
+            self.state = x0
+        elif reset:
+            if hasattr(self, 'reset'):
+                self.reset()
+            elif hasattr(self.dynamics, 'reset'):
+                self.dynamics.reset()
+
+        if zero_initial_step:
+            output = [None] * (steps + 1)
+
+            self.scheduling.actions['step']()
+            output[0] = self.output
+        else:
+            output = [None] * steps
 
         self.scheduling.actions['init']()
         self.scheduling.actions['start']()
+
         for i in range(steps):
             if input is not None:
                 self.input = input[i]
 
             self.scheduling.actions['entry']()
             self.scheduling.actions['step']()
+
             self.scheduling.actions['exit']()
 
-            output[i] = self.output
+            output[i + 1] = self.output
 
         self.scheduling.actions['stop']()
 

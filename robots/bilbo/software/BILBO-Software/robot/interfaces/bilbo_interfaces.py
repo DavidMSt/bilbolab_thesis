@@ -2,14 +2,15 @@ import enum
 import threading
 import time
 
+from core.communication.wifi.data_link import CommandArgument
 # === CUSTOM PACKAGES ==================================================================================================
 from core.utils.joystick.joystick_manager import JoystickManager, Joystick
 from core.utils.logging_utils import Logger
 from robot.bilbo_core import BILBO_Core
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
-from robot.interfaces.joystick import BILBO_Joystick
 from core.utils.exit import register_exit_callback
+from robot.interfaces.bilbo_display import BILBO_Display
 
 
 # ======================================================================================================================
@@ -35,35 +36,75 @@ JOYSTICK_MAPPING = {
 
 # ======================================================================================================================
 class BILBO_Interfaces:
-    joystick: BILBO_Joystick
-    app: None
-
     communication: BILBO_Communication
+
+    display: BILBO_Display
 
     input_source: InputSource
 
     _joystick: Joystick
-    # _joystick_manager: JoystickManager
+    _joystick_manager: JoystickManager
     _joystick_thread: threading.Thread
     _exit_joystick_task: bool
 
     def __init__(self, core: BILBO_Core, communication: BILBO_Communication, control: BILBO_Control):
-
+        self.logger = Logger('interfaces')
+        self.logger.setLevel('DEBUG')
         self.core = core
         self.communication = communication
         self.control = control
+
+        hardware = self.core.getHardwareDefinition()
+
+        self.has_display = hardware.electronics.display.active is not False
+
+        if self.has_display:
+            self.display = BILBO_Display(core=self.core)
 
         self._joystick_manager = JoystickManager(accept_unmapped_joysticks=False)
         self._joystick_manager.callbacks.new_joystick.register(self._onJoystickConnected)
         self._joystick_manager.callbacks.joystick_disconnected.register(self._onJoystickDisconnected)
 
-        self.logger = Logger('interfaces')
-        self.logger.setLevel('DEBUG')
-
         self._joystick = None  # type: ignore
 
-        # Add a hook function for the external control to hook into
-        # self.communication.wifi.addCommand(identifier='setBalancingInput')
+        self.communication.wifi.newCommand(
+            identifier='resume',
+            function=self.core.setResumeEvent,
+            arguments=[CommandArgument(
+                name='data',
+                type='any',
+                optional=True,
+                default=None,
+                description='Data to resume with (optional)'
+            )],
+            description='Resume the robot'
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='repeat',
+            function=self.core.setRepeatEvent,
+            arguments=[CommandArgument(
+                name='data',
+                type='any',
+                optional=True,
+                default=None,
+                description='Data to repeat with (optional)'
+            )],
+            description='Repeat the last action'
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='abort',
+            function=self.core.setAbortEvent,
+            arguments=[CommandArgument(
+                name='data',
+                type='any',
+                optional=True,
+                default=None,
+                description='Data to abort with (optional)'
+            )],
+            description='Abort the current action'
+        )
 
         self._joystick_thread = None  # type: ignore
         self._exit_joystick_task = False
@@ -81,6 +122,9 @@ class BILBO_Interfaces:
         self.logger.info('Start Interfaces')
         self._joystick_manager.start()
 
+        if self.has_display:
+            self.display.start()
+
     # ------------------------------------------------------------------------------------------------------------------
     def close(self):
         self.logger.info('Stop Interfaces')
@@ -90,11 +134,11 @@ class BILBO_Interfaces:
         if self._joystick_thread is not None and self._joystick_thread.is_alive():
             self._joystick_thread.join()
 
-
-
     # === PRIVATE METHODS ==============================================================================================
     def _onJoystickConnected(self, joystick, *args, **kwargs):
         self.logger.info(f'Joystick connected: {joystick.name}')
+        self.core.joystick_connected = True
+        self.core.events.joystick_connected.set()
         self._joystick = joystick
         joystick.setButtonCallback(button="A", event='down', function=self._onJoystickPress)
         joystick.setButtonCallback(button="B", event='down', function=self._onJoystickPress)
@@ -116,6 +160,8 @@ class BILBO_Interfaces:
             self._joystick = None  # type: ignore
             joystick.clearAllButtonCallbacks()
             self.logger.info(f'Joystick disconnected: {joystick.name}')
+            self.core.joystick_connected = False
+            self.core.events.joystick_disconnected.set()
 
             if self._joystick_thread is not None and self._joystick_thread.is_alive():
                 self._exit_joystick_task = True

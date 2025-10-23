@@ -32,7 +32,7 @@ class BILBO_SPI_Interface:
     callbacks: BILBO_SPI_Callbacks
     sample_notification_pin: int
 
-    gpio_input: (None, GPIO_Input)
+    gpio_input: GPIO_Input | None
 
     lock: threading.Lock
 
@@ -63,6 +63,7 @@ class BILBO_SPI_Interface:
     # ------------------------------------------------------------------------------------------------------------------
     def startSampleListener(self):
         self._startSampleListening = True
+
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         ...
@@ -111,13 +112,15 @@ class BILBO_SPI_Interface:
     # ------------------------------------------------------------------------------------------------------------------
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _readSamples(self) -> (list[dict], BILBO_LL_Sample):
+    def _readSamples(self) -> tuple[list[dict], BILBO_LL_Sample]:
         data_rx_bytes = bytearray(SAMPLE_BUFFER_LL_SIZE * sizeof(bilbo_ll_sample_struct))
         with self.lock:
             self._sendCommand(BILBO_SPI_Command_Type.READ_SAMPLE, 0)
             precise_sleep(0.005)
-            self.interface.readinto(data_rx_bytes, start=0,
-                                    end=SAMPLE_BUFFER_LL_SIZE * sizeof(bilbo_ll_sample_struct), write_value=0x05)
+            self.interface.readinto(data_rx_bytes,
+                                    start=0,
+                                    end=SAMPLE_BUFFER_LL_SIZE * sizeof(bilbo_ll_sample_struct),
+                                    write_value=0x05)
 
         samples = []
         for i in range(0, SAMPLE_BUFFER_LL_SIZE):
@@ -128,4 +131,3 @@ class BILBO_SPI_Interface:
 
         latest_sample = from_dict(BILBO_LL_Sample, samples[-1])
         return samples, latest_sample
-

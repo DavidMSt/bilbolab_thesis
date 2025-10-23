@@ -21,10 +21,17 @@ class BILBO_Sample_General:
     sample_time_ll: float = 0.0
 
 
+@dataclasses.dataclass
+class BILBO_Sample_Connection:
+    strength: float = 0.0
+    internet: bool = False
+
+
 # ======================================================================================================================
 @dataclasses.dataclass(frozen=False)
 class BILBO_Sample:
     general: BILBO_Sample_General = dataclasses.field(default_factory=BILBO_Sample_General)
+    connection: BILBO_Sample_Connection = dataclasses.field(default_factory=BILBO_Sample_Connection)
     control: TWIPR_Control_Sample = dataclasses.field(default_factory=TWIPR_Control_Sample)
     estimation: TWIPR_Estimation_Sample = dataclasses.field(default_factory=TWIPR_Estimation_Sample)
     drive: TWIPR_Drive_Sample = dataclasses.field(default_factory=TWIPR_Drive_Sample)

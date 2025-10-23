@@ -1,18 +1,20 @@
 import dataclasses
+import threading
+import time
+from collections import deque
 
 import numpy
 import qmt
 
-from extensions.optitrack.lib.natnetclient_modified import NatNetClient
-# from extensions.optitrack.lib_peter.DataDescriptions import MarkerDescription
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
 from core.utils.orientation.orientation_3d import transform_vector_from_a_to_b_frame
+from extensions.optitrack.lib.natnetclient_modified import NatNetClient
 
 
 # ======================================================================================================================
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class RigidBodySample:
     name: str
     id: int
@@ -20,21 +22,22 @@ class RigidBodySample:
     position: numpy.ndarray
     orientation: numpy.ndarray
     markers: dict[int, numpy.ndarray]
-    markers_raw: dict[int, numpy.ndarray]
+    markers_raw: dict[int, numpy.ndarray | None]
 
 
 # ======================================================================================================================
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class MarkerDescription:
     name: str
     id: int
     label: int
-    size: (None, float)
-    offset: list[float]
+    size: None | float
+    # Store as numpy array to avoid per-frame conversions
+    offset: numpy.ndarray
 
 
 # ======================================================================================================================
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class RigidBodyDescription:
     name: str
     id: int
@@ -52,8 +55,8 @@ class OptiTrack_Callbacks:
 # ======================================================================================================================
 @event_definition
 class OptiTrack_Events:
-    sample: ConditionEvent
-    description_received: ConditionEvent
+    sample: Event
+    description_received: Event
 
 
 # ======================================================================================================================
@@ -69,11 +72,29 @@ class OptiTrack:
 
     running: bool
 
+    max_sample_rate: int
+
+    # internal: frame queue & processing thread
+    _frame_queue: deque
+    _queue_lock: threading.Lock
+    _processor_thread: threading.Thread | None
+    _min_dt: float
+    _last_emit_t: float
+
     # ------------------------------------------------------------------------------------------------------------------
-    def __init__(self, server_address):
+    def __init__(self, server_address, max_sample_rate=30):
+        """
+        server_address: IP/hostname of the OptiTrack streaming server
+        max_sample_rate: Hz, upper bound for how often samples are emitted to your callbacks/events
+        """
         self.natnetclient = NatNetClient(server_address)
+        # Make the NatNet callbacks as light as possible
         self.natnetclient.mocap_data_callback = self._natnet_mocap_data_callback
         self.natnetclient.description_message_callback = self._natnet_description_callback
+
+        self.max_sample_rate = int(max_sample_rate)
+        self._min_dt = 1.0 / max(1, self.max_sample_rate)
+        self._last_emit_t = 0.0
 
         self.logger = Logger("Optitrack")
         self.logger.setLevel('INFO')
@@ -86,183 +107,262 @@ class OptiTrack:
         self.callbacks = OptiTrack_Callbacks()
         self.events = OptiTrack_Events()
 
+        # A single-slot queue that always holds the most recent frame only.
+        self._frame_queue = deque(maxlen=1)
+        self._queue_lock = threading.Lock()
+        self._processor_thread = None
+
     # === METHODS ======================================================================================================
 
     # ------------------------------------------------------------------------------------------------------------------
     def init(self):
         ...
 
-        # ------------------------------------------------------------------------------------------------------------------
-
+    # ------------------------------------------------------------------------------------------------------------------
     def start(self):
+        # Start processing thread first so we're ready as soon as frames arrive
+        self.running = True
+        self._processor_thread = threading.Thread(target=self._processing_loop, name="OptiTrackProcessor", daemon=True)
+        self._processor_thread.start()
+
         try:
             self.natnetclient.run()
         except Exception as e:
-            self.logger.error(f"Error while starting NatNetClient. Please make sure that Motive is running")
+            self.logger.error("Error while starting NatNetClient. Please make sure that Motive is running")
+            self.running = False
             return False
+
         self.logger.info("Start Optitrack")
-
         return True
-        # === PRIVATE METHODS ==============================================================================================
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def close(self):
+        self.running = False
+        # NatNetClient likely has its own close/stop; if available, call it here.
+        try:
+            if hasattr(self.natnetclient, "close"):
+                self.natnetclient.close()
+        except Exception:
+            pass
+        # Join processor thread (best-effort)
+        t = self._processor_thread
+        if t and t.is_alive():
+            t.join(timeout=1.0)
+
+    # === PRIVATE METHODS ==============================================================================================
     def _natnet_description_callback(self, data):
         # Rigid Bodies
-        for name, rigid_body_data in data["rigid_bodies"].items():
+        for name, rigid_body_data in data.get("rigid_bodies", {}).items():
             rigid_body_id = rigid_body_data["id"]
             marker_count = rigid_body_data["marker_count"]
-            markers = {}
+            markers: dict[int, MarkerDescription] = {}
 
-            for marker_id, marker_description in rigid_body_data["markers"].items():
+            for marker_id, marker_description in rigid_body_data.get("markers", {}).items():
                 marker_offset_y_up = marker_description["offset"]
 
-                # We have to some annoying thing here: Since Optitrack is not changing the marker offset when changing
-                # the axis "up"-direction in the streaming pane, we have to manually adjust it to z-up convention.
-                # If anyone from the future sees this and they have fixed it: great
-
+                # Adjust to z-up convention (keep existing behavior)
                 marker_offset = [0.0] * 3
-                # marker_offset[0] = marker_offset_y_up[0]
-                # marker_offset[1] = -marker_offset_y_up[2]
-                # marker_offset[2] = marker_offset_y_up[1]
-
                 marker_offset[0] = -marker_offset_y_up[0]
                 marker_offset[1] = -marker_offset_y_up[2]
                 marker_offset[2] = marker_offset_y_up[1]
 
+                # Store offset as numpy array once to avoid per-frame asarray allocations
+                marker_offset_np = numpy.asarray(marker_offset, dtype=float)
+
                 marker_size = None
                 label = self._encode_marker_label(asset_id=rigid_body_id, marker_index=marker_id)
-                marker_description = MarkerDescription(id=marker_id,
-                                                       offset=marker_offset,
-                                                       size=marker_size,
-                                                       name='',
-                                                       label=label)
-                markers[marker_id] = marker_description
+                marker_desc = MarkerDescription(id=marker_id,
+                                                offset=marker_offset_np,
+                                                size=marker_size,
+                                                name='',
+                                                label=label)
+                markers[marker_id] = marker_desc
 
             rigid_body_description = RigidBodyDescription(
                 name=rigid_body_data["name"],
-                id=rigid_body_data["id"],
+                id=rigid_body_id,
                 marker_count=marker_count,
                 markers=markers,
             )
 
             self.rigid_bodies[rigid_body_data["name"]] = rigid_body_description
 
-        # Marker Sets
-        for name, marker_set_data in data['marker_sets'].items():
-            ...
-            # print(marker_set_data)
+        # Marker Sets (not used here)
+        # for name, marker_set_data in data.get('marker_sets', {}).items():
+        #     ...
 
         self.description_received = True
 
         self.callbacks.description_received.call(self.rigid_bodies)
         self.events.description_received.set(self.rigid_bodies)
 
-        # ------------------------------------------------------------------------------------------------------------------
-
+    # ------------------------------------------------------------------------------------------------------------------
     def _natnet_mocap_data_callback(self, data):
+        """
+        SUPER LIGHT callback: just stash the latest frame and return immediately.
+        Heavy work is done in _processing_loop at a controlled rate.
+        """
         if not self.description_received:
             return
+        with self._queue_lock:
+            # Only keep most recent frame; older one is dropped automatically by maxlen=1
+            self._frame_queue.append((time.perf_counter(), data))
 
-        if not self.first_data_frame_received:
-            self._extract_initial_mocap_information(data)
-            self.first_data_frame_received = True
-            self.running = True
+    # ------------------------------------------------------------------------------------------------------------------
+    def _processing_loop(self):
+        """
+        Consumes latest frames (if any) at or below max_sample_rate,
+        converts them to RigidBodySample, and fires callbacks/events.
+        """
+        # Wait until we have descriptions
+        while self.running and not self.description_received:
+            time.sleep(0.001)
 
-            self.logger.info(f"Optitrack running!")
-            self.logger.info(f"Rigid bodies: {[body.name for body in self.rigid_bodies.values()]}")
+        while self.running:
+            frame = None
+            with self._queue_lock:
+                if self._frame_queue:
+                    frame = self._frame_queue.pop()  # get latest and clear queue
+                    self._frame_queue.clear()
 
-        sample = {}
+            if frame is None:
+                time.sleep(0.0005)
+                continue
 
-        # Extract the data
-        for rigid_body_name, rigid_body_description in self.rigid_bodies.items():
-            # Extract the rigid body data
-            rbd = data['rigid_bodies'][rigid_body_description.id]
-            position = numpy.asarray(rbd['position'])
-            orientation_xyzw = rbd['orientation']
+            now = time.perf_counter()
+            # Rate limit
+            if (now - self._last_emit_t) < self._min_dt:
+                # Too soon; skip processing this frame (keep loop snappy)
+                continue
 
-            # Change the orientation to our wxyz convention for quaternions
-            orientation = numpy.asarray(
-                [orientation_xyzw[3], orientation_xyzw[0], orientation_xyzw[1], orientation_xyzw[2]])
+            _, data = frame
 
-            tracking_valid = rbd['tracking_valid']
-            marker_error = rbd['marker_error']
+            if not self.first_data_frame_received:
+                self._extract_initial_mocap_information(data)
+                self.first_data_frame_received = True
+                self.logger.info("Optitrack running!")
+                self.logger.info(f"Rigid bodies: {[body.name for body in self.rigid_bodies.values()]}")
 
-            # Extract the raw marker positions
-            if rigid_body_name in data['marker_sets']:
-                msd = data['marker_sets'][rigid_body_description.name]
-            else:
-                msd = None
+            # Build sample (heavy part moved from NatNet thread to here)
+            sample = self._build_sample(data)
 
-            markers = {}
-            markers_raw = {}
-            for marker_id, marker_description in rigid_body_description.markers.items():
-                marker_index = marker_id
+            # Fire callbacks outside of locks
+            for callback in self.callbacks.sample:
+                try:
+                    callback(sample)
+                except Exception as e:
+                    self.logger.error(f"Error in user sample callback: {e}")
 
+            self.events.sample.set(data=sample)
+
+            self._last_emit_t = now
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _build_sample(self, data) -> dict[str, RigidBodySample]:
+        sample: dict[str, RigidBodySample] = {}
+
+        rigid_bodies_local = self.rigid_bodies
+        data_rb = data.get('rigid_bodies', {})
+        data_marker_sets = data.get('marker_sets', {})
+
+        for rigid_body_name, rigid_body_description in rigid_bodies_local.items():
+            rbd = data_rb.get(rigid_body_description.id)
+            if rbd is None:
+                # Missing rigid body in this frame – mark invalid but keep structure
+                sample[rigid_body_name] = RigidBodySample(
+                    name=rigid_body_name,
+                    id=rigid_body_description.id,
+                    valid=False,
+                    position=numpy.zeros(3, dtype=float),
+                    orientation=numpy.array([1.0, 0.0, 0.0, 0.0], dtype=float),  # identity quaternion (wxyz)
+                    markers={},
+                    markers_raw={}
+                )
+                continue
+
+            # Extract position/orientation
+            # Using asarray without copy when possible
+            position = numpy.asarray(rbd['position'], dtype=float)
+
+            # incoming XYZW -> our WXYZ
+            ox, oy, oz, ow = rbd['orientation']
+            orientation = numpy.asarray([ow, ox, oy, oz], dtype=float)
+
+            tracking_valid = bool(rbd.get('tracking_valid', True))
+            # marker_error = rbd.get('marker_error', None) # not used, keep if needed later
+
+            # Marker set for this RB (if any)
+            msd = data_marker_sets.get(rigid_body_description.name)
+
+            markers: dict[int, numpy.ndarray] = {}
+            markers_raw: dict[int, numpy.ndarray | None] = {}
+
+            # Compute solved marker positions from RB pose
+            for marker_id, marker_desc in rigid_body_description.markers.items():
+                # Raw marker (if present)
                 if msd:
-                    marker_position_raw = numpy.asarray(list(msd[marker_index]))
+                    # OptiTrack marker indices match marker_id; guard with .get for safety
+                    raw = msd.get(marker_id)
+                    marker_position_raw = numpy.asarray(list(raw), dtype=float) if raw is not None else None
                 else:
                     marker_position_raw = None
 
-                marker_position_solved = self._calculate_rigid_body_marker(rigid_body_position=position,
-                                                                           rigid_body_orientation=orientation,
-                                                                           marker_offset=marker_description.offset)
+                # Solved position from pose + offset
+                marker_position_solved = self._calculate_rigid_body_marker(
+                    rigid_body_position=position,
+                    rigid_body_orientation=orientation,
+                    marker_offset=marker_desc.offset  # already numpy array
+                )
+
                 markers[marker_id] = marker_position_solved
                 markers_raw[marker_id] = marker_position_raw
 
-            rigid_body_sample = RigidBodySample(name=rigid_body_name,
-                                                id=rigid_body_description.id,
-                                                valid=tracking_valid,
-                                                position=position,
-                                                orientation=orientation,
-                                                markers=markers,
-                                                markers_raw=markers_raw)
-
+            rigid_body_sample = RigidBodySample(
+                name=rigid_body_name,
+                id=rigid_body_description.id,
+                valid=tracking_valid,
+                position=position,
+                orientation=orientation,
+                markers=markers,
+                markers_raw=markers_raw
+            )
             sample[rigid_body_name] = rigid_body_sample
 
-        for callback in self.callbacks.sample:
-            callback(sample)
+        return sample
 
-        self.events.sample.set(resource=sample)
-
-        # ------------------------------------------------------------------------------------------------------------------
-
+    # ------------------------------------------------------------------------------------------------------------------
     def _extract_initial_mocap_information(self, data):
-        for rigid_body_id, rigid_body_description in self.rigid_bodies.items():
+        labeled = data.get('labeled_markers', {})
+
+        for rigid_body_name, rigid_body_description in self.rigid_bodies.items():
+            # First pass: fill sizes from visible labeled markers
             for marker_id, marker_description in rigid_body_description.markers.items():
-                if marker_description.label in data['labeled_markers']:
-                    marker_size = data['labeled_markers'][marker_description.label]['size'][0]
+                if marker_description.label in labeled:
+                    marker_size = labeled[marker_description.label]['size'][0]
                     marker_description.size = marker_size
                 else:
-                    self.logger.warning(f"Marker {marker_id} of rigid body \"{rigid_body_id}\" currently not visible. "
-                                        f"It's size will be inferred from the other markers.")
+                    self.logger.warning(
+                        f"Marker {marker_id} of rigid body \"{rigid_body_name}\" currently not visible. "
+                        f"Its size will be inferred from the other markers."
+                    )
 
-            # loop again through the markers and check the ones that have not been set yet
-            for marker_id, marker_description in rigid_body_description.markers.items():
-                if marker_description.size is None:
-                    # Calculate the mean over all markers where the size if not None
-                    sizes = [marker_description.size for marker_description in rigid_body_description.markers.values()
-                             if marker_description.size is not None]
+            # Second pass: infer missing sizes
+            sizes = [md.size for md in rigid_body_description.markers.values() if md.size is not None]
+            if not sizes:
+                self.logger.error(f"No markers of rigid body {rigid_body_name} are visible")
+                inferred = 0.0
+            else:
+                inferred = float(sum(sizes) / len(sizes))
+            for md in rigid_body_description.markers.values():
+                if md.size is None:
+                    md.size = inferred
 
-                    if len(sizes) == 0:
-                        self.logger.error(f"No markers of rigid body {rigid_body_id} are visible")
-                        marker_description.size = 0
-                    else:
-                        marker_description.size = sum(sizes) / len(sizes)
-
-        # ------------------------------------------------------------------------------------------------------------------
-
+    # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
     def _encode_marker_label(asset_id, marker_index):
         """
         Encode an asset id and a marker index into a single marker id.
-
-        The marker id is computed by shifting the asset id left by 16 bits and then adding the marker index.
-
-        Parameters:
-          asset_id (int): The asset identifier (e.g., 500, 501, etc.).
-          marker_index (int): The marker index (e.g., 1, 2, 3, ...).
-
-        Returns:
-          int: The encoded marker id.
+        marker_id = (asset_id << 16) + marker_index
         """
         return (asset_id << 16) + marker_index
 
@@ -270,31 +370,33 @@ class OptiTrack:
     def _decode_marker_label(marker_id):
         """
         Decode a marker id into its asset id and marker index components.
-
-        Given a marker id that was computed as:
-
-            marker_id = (asset_id << 16) + marker_index
-
-        This function returns the original asset id and marker index.
-
-        Parameters:
-          marker_id (int): The full marker id.
-
-        Returns:
-          tuple: A tuple (asset_id, marker_index).
+        Returns (asset_id, marker_index)
         """
         asset_id = marker_id >> 16
-        marker_index = marker_id & 0xFFFF  # 0xFFFF == 65535, gets the lower 16 bits
+        marker_index = marker_id & 0xFFFF
         return asset_id, marker_index
 
     @staticmethod
     def _calculate_rigid_body_marker(rigid_body_position, rigid_body_orientation, marker_offset):
-        marker_offset = numpy.asarray(marker_offset)
+        # marker_offset is already a numpy array (no per-call conversion)
+        # NOTE: previous code computed qmt.qinv(...) but never used the inverse; removed for efficiency.
+        vector_rotated = transform_vector_from_a_to_b_frame(
+            vector_in_a_frame=marker_offset,
+            orientation_from_b_to_a=rigid_body_orientation
+        )
+        return vector_rotated + rigid_body_position
 
-        q = qmt.qinv(rigid_body_orientation)
-        vector_rotated = transform_vector_from_a_to_b_frame(vector_in_a_frame=marker_offset,
-                                                            orientation_from_b_to_a=rigid_body_orientation)
 
-        vector_out = vector_rotated + rigid_body_position
+if __name__ == '__main__':
+    optitrack = OptiTrack(server_address='192.168.1.248', max_sample_rate=30)
+    optitrack.init()
+    ok = optitrack.start()
 
-        return vector_out
+    if ok:
+        try:
+            while True:
+                time.sleep(10)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            optitrack.close()

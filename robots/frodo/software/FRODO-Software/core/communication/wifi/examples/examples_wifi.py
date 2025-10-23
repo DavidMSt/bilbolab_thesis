@@ -1,7 +1,7 @@
 import logging
 import time
 
-from core.communication.wifi.wifi_connection import WIFI_Connection
+from core.communication.wifi.archive.wifi_connection import WIFI_Connection
 
 logging.basicConfig(level='DEBUG')
 

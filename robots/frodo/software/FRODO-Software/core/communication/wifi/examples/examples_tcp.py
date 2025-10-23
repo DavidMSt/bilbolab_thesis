@@ -1,13 +1,13 @@
 import logging
 import time
 
-import core.communication.wifi.tcp.tcp as tcp
+import core.communication.wifi.archive.tcp.tcp as tcp
 import core.communication.wifi.udp.udp_socket as udp
-import utils.network as network
-from core.communication.wifi.tcp.protocols.tcp_handshake_protocol import TCP_Handshake_Message, TCP_Handshake_Protocol
-from core.communication.wifi.tcp.protocols.tcp_base_protocol import TCP_Base_Message
+from core import utils as network
+from core.communication.wifi.archive.tcp import TCP_Handshake_Message, TCP_Handshake_Protocol
+from core.communication.wifi.archive.tcp.protocols import TCP_Base_Message
 from core.communication.wifi.protocols.tcp import TCP_JSON_Protocol
-import core.communication.wifi.addresses as uid
+import core.communication.wifi.archive.addresses as uid
 
 logging.basicConfig(level='DEBUG')
 

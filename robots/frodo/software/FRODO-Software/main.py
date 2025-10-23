@@ -1,21 +1,32 @@
 import time
 
-from robot.control.frodo_control import FRODO_Control_Mode
-from robot.utilities.video_streamer.video_streamer import VideoStreamer
+from core.utils.colors import color_to_255
 from robot.frodo import FRODO
-from robot.definitions import FRODO_Model
+from robot.frodo_core.lowlevel_definitions import FRODO_LL_SAMPLE
+
+
+def printData(sample: FRODO_LL_SAMPLE):
+    # print(f"Speed: {sample.drive.speed.left}, {sample.drive.speed.right}")
+    print(f"Speed: {sample.drive.rpm.left}, {sample.drive.rpm.right}")
+
 
 def main():
     frodo = FRODO()
     frodo.init()
     frodo.start()
+    # frodo.control.setTrackSpeed(0.0, 0.0)
+    # frodo.core.lowlevel.events.sample.on(printData)
 
-    frodo.control.setMode(FRODO_Control_Mode.NAVIGATION)
+    # frodo.core.lowlevel.board.setRGBLEDExtern(color_to_255([1, 0, 0]))
 
-    streamer = VideoStreamer()
-    streamer.image_fetcher = frodo.sensors.aruco_detector.getOverlayFrame
-    streamer.start()
+    # time.sleep(1)
+    # frodo.control.setSpeed(0.2, 0.2)
+    # time.sleep(2)
+    # frodo.control.setSpeed(0, 0)
 
+    # frodo.core.lowlevel.board.setRGBLEDExtern([int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)])
+    # time.sleep(5)
+    # return
     while True:
         time.sleep(1)
 

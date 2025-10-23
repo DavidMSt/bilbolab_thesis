@@ -1,35 +1,20 @@
 import dataclasses
-from abc import ABC, abstractmethod
+import time as t
 
 
 @dataclasses.dataclass
-class DataPacket:
-    pass
+class JSON_Message:
+    address: str | dict = None
+    source: str = None
 
+    type: str = None
+    time: float = None
+    id: int = 0
+    event: str = None
+    request_id: int = 0
+    request_response: bool = False
+    data: dict = dataclasses.field(default_factory=dict)
 
-class Message:
-    _protocol: 'Protocol' = None
-
-    def encode(self, *args, **kwargs):
-        return self._protocol.encode(self, *args, **kwargs)
-
-
-class Protocol(ABC):
-    Message: type
-    base: 'Protocol'
-    identifier: int
-
-    def __init__(self):
-        pass
-
-    @abstractmethod
-    def decode(self, data):
-        pass
-
-    @abstractmethod
-    def encode(self, msg: Message, *args, **kwargs):
-        pass
-
-    @abstractmethod
-    def check(self, data):
-        pass
+    def __post_init__(self):
+        self.id = id(self)
+        self.time = t.time()

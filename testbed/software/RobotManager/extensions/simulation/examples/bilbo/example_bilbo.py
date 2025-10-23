@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
-from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_SMALL, DEFAULT_BILBO_MODEL
+from extensions.simulation._archive.bilbo import BILBO_DynamicAgent, DEFAULT_BILBO_MODEL
 from extensions.simulation.src.objects.base_environment import BaseEnvironment
-from extensions.babylon.babylon import BabylonVisualization
-from extensions.babylon.objects.objects import BILBO, Floor
+from extensions.babylon.src.babylon import BabylonVisualization
+# from extensions.babylon.archive.objects.objects import BILBO, Floor
 from core.utils.keyboard import ArrowKeys
 
 
@@ -37,8 +37,6 @@ class TestAgent(BILBO_DynamicAgent):
 def main():
     env = BaseEnvironment(Ts=0.02, run_mode='rt')
 
-
-
     bilbo1 = TestAgent(agent_id='bilbo1')
     env.addObject(bilbo1)
 
@@ -66,13 +64,9 @@ def test_babylon():
         time.sleep(1)
 
 
-def test_only_bilbo():
-    # K = np.asarray([[0, 0, -0.1343, -0.1105, -0.0139, 0, -0.1939],
-    #                 [0, 0, -0.1343, -0.1105, -0.0139, 0, 0.1939]])
-    bilbo1 = TestAgent(agent_id='bilbo1', model=BILBO_SMALL)
+def example_only_bilbo():
+    bilbo1 = BILBO_DynamicAgent(agent_id='bilbo1', model=DEFAULT_BILBO_MODEL)
 
-    print(bilbo1.state_ctrl_K)
-    #
     input = 0.2*np.ones((250, 2), dtype=float)
     output = bilbo1.simulate(input)
 
@@ -121,4 +115,4 @@ def test_together():
 
 
 if __name__ == '__main__':
-    test_together()
+    example_only_bilbo()

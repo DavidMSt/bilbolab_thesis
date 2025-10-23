@@ -33,6 +33,7 @@
 typedef struct twipr_spi_comm_config_t {
     SPI_HandleTypeDef *hspi;                      ///< Pointer to the SPI hardware handle.
     twipr_logging_sample_t *sample_buffer;        ///< Buffer for sample data transmission.
+    twipr_logging_sample_t *sample_buffer_dummy;        ///< Buffer for sample data transmission.
     uint16_t len_sample_buffer;                   ///< Length of the sample data buffer.
     twipr_sequence_input_t *sequence_buffer;      ///< Buffer for receiving trajectory inputs.
     uint16_t len_sequence_buffer;                 ///< Length of the trajectory sequence buffer.

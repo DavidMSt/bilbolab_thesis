@@ -11,6 +11,7 @@ to handle nested dataclasses.
 
 import copy
 import dataclasses
+import enum
 from enum import IntEnum
 from itertools import zip_longest
 from functools import lru_cache
@@ -18,7 +19,7 @@ from functools import lru_cache
 # Consolidate duplicate imports from typing
 from typing import (
     Any, Dict, Tuple, Type, TypeVar, Optional, get_type_hints,
-    Mapping, Collection, MutableMapping
+    Mapping, Collection, MutableMapping, get_origin, get_args, Union
 )
 
 import graphviz
@@ -61,7 +62,7 @@ from dacite.types import (
 T = TypeVar("T")
 
 
-def from_dict(data_class: Type[T], data: Data, config: Optional[Config] = None) -> T:
+def from_dict(data_class: Type[T], data: Data | dict, config: Optional[Config] = None) -> T:
     """
     Create a dataclass instance from a dictionary.
 
@@ -506,7 +507,7 @@ def analyze_dataclass(
         graph.render(dataclass_name, cleanup=True)
 
 
-@lru_cache(maxsize=10)
+@lru_cache(maxsize=20)
 def get_dataclass_fields(cls):
     """
     Retrieve the fields for a dataclass type using caching.
@@ -553,6 +554,204 @@ def asdict_optimized(obj):
 
 
 # ======================================================================================================================
+def update_dataclass_from_dict(dataclass_instance, update_dict):
+    if not is_dataclass(dataclass_instance):
+        raise TypeError("Provided object is not a dataclass instance")
+
+    for field in fields(dataclass_instance):
+        if field.name in update_dict:
+            setattr(dataclass_instance, field.name, update_dict[field.name])
+
+
+# ======================================================================================================================
+# ======================================================================================================================
+# Optimized dataclass deepcopy with global cache
+# - Compiles one copier per dataclass type and caches it globally via @lru_cache.
+# - Uses type hints to specialize container element copying.
+# - Honors field metadata {"shallow": True} to keep references instead of copying.
+# - Handles common containers; treats primitives & Enums as atomic.
+# - Note: This assumes acyclic object graphs (typical for records/trees). For cyclic graphs,
+#         stick with copy.deepcopy or extend this with a memo table.
+# ======================================================================================================================
+
+# Atomic / passthrough types
+_ATOMIC = (int, float, bool, str, bytes, type(None))
+
+
+def _is_atomic_value(x: Any) -> bool:
+    return isinstance(x, _ATOMIC) or isinstance(x, enum.Enum)
+
+
+def deepcopy_dataclass(obj: Any) -> Any:
+    """
+    Deep-copy a dataclass instance (and nested dataclasses/containers) using a
+    globally cached, per-type copier. Falls back to a fast generic copier for
+    non-dataclass values.
+    """
+    if is_dataclass(obj):
+        return _compile_dataclass_copier(type(obj))(obj)
+    return _generic_copy(obj)
+
+
+def prewarm_dataclass_copiers(*classes: type) -> None:
+    """
+    Optionally pre-compile copier functions for the provided dataclass classes.
+    Useful if you want to JIT them up front (e.g., before a tight loop).
+    """
+    for cls in classes:
+        if not is_dataclass(cls):
+            raise TypeError(f"{cls!r} is not a dataclass type")
+        _compile_dataclass_copier(cls)  # populate cache
+
+
+# ------------------------------- generic copy helpers -------------------------------
+
+def _generic_value_copier(v: Any) -> Any:
+    return _generic_copy(v)
+
+
+def _generic_copy(x: Any) -> Any:
+    # Keep very fast exits first
+    if _is_atomic_value(x):
+        return x
+    if is_dataclass(x):
+        return _compile_dataclass_copier(type(x))(x)
+    if isinstance(x, list):
+        c = _generic_value_copier
+        return [c(e) for e in x]
+    if isinstance(x, tuple):
+        c = _generic_value_copier
+        return tuple(c(e) for e in x)
+    if isinstance(x, set):
+        c = _generic_value_copier
+        return {c(e) for e in x}
+    if isinstance(x, dict):
+        ck = _generic_value_copier
+        cv = _generic_value_copier
+        return {ck(k): cv(v) for k, v in x.items()}
+    # Unknown user class: return as-is (acts like shallow copy)
+    return x
+
+
+def _generic_container_copier_for(container_type: type):
+    if container_type is list:
+        def _copy_list(x):
+            return x if x is None else [_generic_value_copier(v) for v in x]
+
+        return _copy_list
+    if container_type is tuple:
+        def _copy_tuple(x):
+            return x if x is None else tuple(_generic_value_copier(v) for v in x)
+
+        return _copy_tuple
+    if container_type is set:
+        def _copy_set(x):
+            return x if x is None else {_generic_value_copier(v) for v in x}
+
+        return _copy_set
+    if container_type is dict:
+        def _copy_dict(x):
+            if x is None:
+                return x
+            ck = _generic_value_copier
+            cv = _generic_value_copier
+            return {ck(k): cv(v) for k, v in x.items()}
+
+        return _copy_dict
+    return _generic_copy
+
+
+# ------------------------------- compiler: per-type copiers -------------------------------
+
+@lru_cache(maxsize=None)
+def _compile_dataclass_copier(cls: type):
+    """
+    Build and cache a fast copier for a dataclass type.
+    Uses evaluated type hints to specialize container element copying.
+    Supports field metadata {"shallow": True}.
+    """
+    # Get evaluated type hints; if resolution fails, fall back to empty
+    try:
+        # Prefer your existing cache for get_type_hints if you want:
+        # hints = cache(get_type_hints)(cls)
+        hints = get_type_hints(cls, include_extras=True)
+    except Exception:
+        hints = {}
+
+    field_specs = []
+    for f in fields(cls):
+        shallow = (f.metadata or {}).get("shallow", False)
+        hint = hints.get(f.name, Any)
+        copier = _compile_field_copier(hint, shallow)
+        field_specs.append((f.name, copier))
+
+    def _copy_instance(x):
+        # kwargs assembly is fast and avoids dataclasses.replace overhead
+        kw = {}
+        for name, copier in field_specs:
+            kw[name] = copier(getattr(x, name))
+        return cls(**kw)
+
+    return _copy_instance
+
+
+def _compile_field_copier(hint: Any, shallow: bool):
+    if shallow:
+        return lambda v: v
+
+    # Dataclass type directly?
+    if isinstance(hint, type) and is_dataclass(hint):
+        copier = _compile_dataclass_copier(hint)
+        return lambda v: None if v is None else copier(v)
+
+    origin = get_origin(hint)
+    args = get_args(hint)
+
+    # Parameterized containers
+    if origin in (list, set):
+        elem_c = _compile_hint_copier(args[0]) if args else _generic_value_copier
+        if origin is list:
+            return lambda v: None if v is None else [elem_c(e) for e in v]
+        return lambda v: None if v is None else {elem_c(e) for e in v}
+
+    if origin is dict:
+        key_c = _compile_hint_copier(args[0]) if args else _generic_value_copier
+        val_c = _compile_hint_copier(args[1]) if len(args) > 1 else _generic_value_copier
+        return lambda v: None if v is None else {key_c(k): val_c(val) for k, val in v.items()}
+
+    if origin is tuple:
+        # tuple[T, ...] or just tuple[Any, ...]
+        if not args or args[-1] is ...:
+            elem_c = _compile_hint_copier(args[0]) if args and args[-1] is ... else _generic_value_copier
+            return lambda v: None if v is None else tuple(elem_c(e) for e in v)
+        # tuple[T1, T2, ...]
+        elem_cs = tuple(_compile_hint_copier(a) for a in args)
+        return lambda v: None if v is None else tuple(c(e) for c, e in zip(elem_cs, v))
+
+    if origin is Union:
+        # Optional[T] fast-path
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            inner = _compile_hint_copier(non_none[0])
+            return lambda v: None if v is None else inner(v)
+        # General union: fall back (runtime check)
+        return _generic_value_copier
+
+    # Primitive / enums via hint
+    if hint in _ATOMIC:
+        return lambda v: v
+    if isinstance(hint, type) and issubclass(hint, enum.Enum):
+        return lambda v: v
+
+    # Unknown or Any
+    return _generic_value_copier
+
+
+@lru_cache(maxsize=None)
+def _compile_hint_copier(hint: Any):
+    return _compile_field_copier(hint, shallow=False)
+
+
 # Example usage and simple test of the implemented functions
 
 if __name__ == "__main__":

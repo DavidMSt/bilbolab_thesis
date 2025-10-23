@@ -1,18 +1,28 @@
+from core.utils.archives.events import pred_flag_key_equals
+from core.utils.callbacks import callback_definition, CallbackContainer
 from robots.bilbo.robot.bilbo_core import BILBO_Core
+from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event, EventFlag
 
 
 @event_definition
 class BILBO_Control_Events:
-    mode_changed: ConditionEvent = ConditionEvent(flags=[('mode', BILBO_Control_Mode)])
-    configuration_changed: ConditionEvent
-    error: ConditionEvent
+    mode_changed: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
+    configuration_changed: Event
+    error: Event
+
+
+@callback_definition
+class BILBO_Control_Callbacks:
+    mode_changed: CallbackContainer
+    configuration_changed: CallbackContainer
+    # error: CallbackContainer
 
 
 # ======================================================================================================================
 class BILBO_Control:
-    mode: (BILBO_Control_Mode, None)
+    mode: BILBO_Control_Mode | None
 
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Core):
@@ -22,23 +32,28 @@ class BILBO_Control:
 
         self.core = core
         self.events = BILBO_Control_Events()
+        self.callbacks = BILBO_Control_Callbacks()
 
         self.mode = None
 
-        self.device.events.event.on(callback=self.handleEventMessage, flags={'event': 'control'}, input_resource=True)
-        self.device.events.stream.on(callback=self._handle_stream, input_resource=True)
+        self.device.events.event.on(callback=self.handleEventMessage,
+                                    predicate=pred_flag_key_equals('event', 'control'),
+                                    input_data=True)
+
+        self.core.events.stream.on(callback=self._sampleStreamHandler, input_data=True)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setControlMode(self, mode: (int, BILBO_Control_Mode), *args, **kwargs):
+    def setControlMode(self, mode: int | BILBO_Control_Mode, *args, **kwargs):
         if isinstance(mode, int):
             mode = BILBO_Control_Mode(mode)
 
         self.logger.info(f"Robot {self.id}: Set Control Mode to {mode.name}")
-        self.device.function(function='setControlMode', data={'mode': mode})
+        self.device.executeFunction(function_name='setControlMode', arguments={'mode': mode})
 
     # ------------------------------------------------------------------------------------------------------------------
     def setNormalizedBalancingInput(self, forward, turn, *args, **kwargs):
-        self.device.function('setNormalizedBalancingInput', data={'forward': forward, 'turn': turn})
+        self.device.executeFunction('setNormalizedBalancingInput',
+                                    arguments={'forward': forward, 'turn': turn})
 
     # ------------------------------------------------------------------------------------------------------------------
     def getControlState(self):
@@ -57,27 +72,37 @@ class BILBO_Control:
         ...
 
     def enableTIC(self, state):
-        self.device.function(function='enableTIC', data={
+        self.device.executeFunction(function_name='enableTIC', arguments={
             'enable': state
         })
 
     def setWaypoints(self, waypoints):
-        self.device.function(function='setWaypoints', data={
+        self.device.executeFunction(function_name='setWaypoints', arguments={
             'waypoints': waypoints
         })
 
+    # ------------------------------------------------------------------------------------------------------------------
     def handleEventMessage(self, message):
-
         match message.data['event']:
             case 'mode_change':
-                ...
+                self._handleModeChangeEvent(message.data)
             case 'configuration_change':
-                ...
+                self._handleConfigurationChangeEvent(message.data)
             case 'error':
                 ...
             case _:
                 self.core.logger.warning(f"Unknown control event message: {message.data['event']}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handle_stream(self, stream_message):
-        ...
+    def _handleModeChangeEvent(self, message):
+        self.callbacks.mode_changed.call(BILBO_Control_Mode(message['mode']))
+        self.events.mode_changed.set(data=BILBO_Control_Mode(message['mode']))
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleConfigurationChangeEvent(self, data):
+        self.callbacks.configuration_changed.call(data['configuration'])
+        self.events.configuration_changed.set(data['configuration'])
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _sampleStreamHandler(self, sample: BILBO_Sample):
+        self.mode = sample.control.mode

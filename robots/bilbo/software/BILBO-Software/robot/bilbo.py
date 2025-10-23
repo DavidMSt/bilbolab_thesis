@@ -1,17 +1,20 @@
 import ctypes
+import os
 import time
 
-from core.utils.delayed_executor import delayed_execution
+import math
+
 # === OWN PACKAGES =====================================================================================================
+from core.utils.delayed_executor import delayed_execution
 from hardware.control_board import RobotControl_Board
 from hardware.stm32.stm32 import resetSTM32
 from robot.bilbo_core import BILBO_Core
+from robot.core import MainProvider, set_main_provider
 from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
 from robot.utilities.bilbo_utilities import BILBO_Utilities
-from robot.utilities.id import readID
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import EventListener, ConditionEvent, event_definition
+from core.utils.events import EventListener, Event, event_definition
 from core.utils.singletonlock.singletonlock import SingletonLock, terminate
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control_data import BILBO_Control_Mode
@@ -27,10 +30,7 @@ from core.utils.revisions import get_versions, is_ll_version_compatible
 import robot.lowlevel.stm32_addresses as stm32_addresses
 from core.utils.exit import register_exit_callback
 
-
-
 # === GLOBAL VARIABLES =================================================================================================
-
 setLoggerLevel('wifi', 'ERROR')
 setLoggerLevel('Sound', 'ERROR')
 
@@ -44,16 +44,16 @@ class BILBO_Callbacks:
 # === Events ===========================================================================================================
 @event_definition
 class BILBO_Events:
-    update: ConditionEvent
+    update: Event
 
 
 # ======================================================================================================================
-class BILBO:
+class BILBO(MainProvider):
     id: str
 
+    core: BILBO_Core
     board: RobotControl_Board
 
-    core: BILBO_Core
     communication: BILBO_Communication
     control: BILBO_Control
     estimation: BILBO_Estimation
@@ -81,17 +81,20 @@ class BILBO:
         self.lock = SingletonLock(lock_file="/tmp/twipr.lock", timeout=10, override=True, override_timeout=5)
         self.lock.__enter__()
 
-        time.sleep(0.1)
-
         self.logger = Logger("BILBO")
+
+        # param = os.sched_param(80)  # priority 1–99 (higher = higher priority)
+        # os.sched_setscheduler(0, os.SCHED_FIFO, param)
 
         if reset_stm32:
             self.logger.info(f"Reset STM32. This takes ~2 Seconds")
             resetSTM32()
             time.sleep(3)
 
+        self.core = BILBO_Core()
+
         # Read the ID from the ID file
-        self.id = readID()
+        self.id = self.core.getID()
 
         self.loop_time = 0
         self.update_time = 0
@@ -100,48 +103,53 @@ class BILBO:
 
         self._initialized = False
 
+        set_main_provider(self)
+
         # Set up the control board
-        self.board = RobotControl_Board(device_class='robot', device_type='bilbo', device_revision='v4',
-                                        device_id=self.id, device_name=self.id)
+        self.board = RobotControl_Board()
 
         # Start the communication module (WI-FI, Serial and SPI)
-        self.communication = BILBO_Communication(board=self.board)
+        self.communication = BILBO_Communication(board=self.board, core=self.core)
 
-        self.core = BILBO_Core()
         # Set up the individual modules
-        self.control = BILBO_Control(comm=self.communication)
+        self.control = BILBO_Control(core=self.core, comm=self.communication)
         self.estimation = BILBO_Estimation(comm=self.communication)
         self.drive = BILBO_Drive(comm=self.communication)
         self.sensors = BILBO_Sensors(comm=self.communication)
         self.supervisor = TWIPR_Supervisor(comm=self.communication)
 
-        self.utilities = BILBO_Utilities(core=self.core, communication=self.communication)
-        self.experiment_handler = BILBO_ExperimentHandler(communication=self.communication,
+        self.utilities = BILBO_Utilities(core=self.core, communication=self.communication, board=self.board)
+        self.experiment_handler = BILBO_ExperimentHandler(core=self.core,
+                                                          communication=self.communication,
                                                           utils=self.utilities,
                                                           control=self.control, )
 
-        self.logging = BILBO_Logging(comm=self.communication,
+        self.logging = BILBO_Logging(core=self.core,
+                                     comm=self.communication,
                                      control=self.control,
                                      estimation=self.estimation,
                                      drive=self.drive,
                                      sensors=self.sensors,
                                      experiment_handler=self.experiment_handler,
-                                     general_sample_collect_function=self._getSample)
+                                     )
 
-        self.interfaces = BILBO_Interfaces(communication=self.communication, control=self.control, core=self.core)
+        self.interfaces = BILBO_Interfaces(communication=self.communication,
+                                           control=self.control,
+                                           core=self.core)
 
         # Test Command
-        self.communication.wifi.addCommand(identifier='test',
-                                           callback=self.test,
+        self.communication.wifi.newCommand(identifier='test',
+                                           function=self.test,
                                            arguments=['input'],
                                            description='Test the communication')
 
         self.events = BILBO_Events()
         self.callbacks = BILBO_Callbacks()
+
         self._eventListener = EventListener(event=self.communication.events.rx_stm32_sample, callback=self.update)
+
         register_exit_callback(self._shutdown, priority=0)
         register_exit_callback(self._shutdownInit, priority=2)
-
 
         self._startup_phase = True
 
@@ -158,7 +166,7 @@ class BILBO:
         self.supervisor.init()
         self.sensors.init()
         self.logging.init()
-        self.experiment_handler.init(self.logging)
+        self.experiment_handler.init()
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -181,7 +189,6 @@ class BILBO:
         if not self._resetLowLevel():
             self.logger.error("Failed to reset lowlevel firmware")
             raise Exception("Failed to reset lowlevel firmware")
-
 
         self.utilities.playTone('notification')
         self.utilities.speak(f'Start {self.id}')
@@ -217,8 +224,7 @@ class BILBO:
         self.callbacks.update.call()
 
         # Events
-        with self.events.update:
-            self.events.update.notify_all()
+        self.events.update.set()
 
         if not self._first_sample_user_message_sent:
             self._sendFirstSampleMessage()
@@ -281,7 +287,7 @@ class BILBO:
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _getSample(self):
+    def getSample(self):
         sample = BILBO_Sample_General()
         # sample.status = 'ok'
         # sample.id = self.id
@@ -304,13 +310,65 @@ class BILBO:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _setExternalLEDs(self):
-        if self.control.mode == BILBO_Control_Mode.OFF:
-            self.board.setRGBLEDExtern([2, 2, 2])
-        elif self.control.mode == BILBO_Control_Mode.BALANCING:
-            self.board.setRGBLEDExtern([0, 10, 0])
-        elif self.control.mode == BILBO_Control_Mode.VELOCITY:
-            self.board.setRGBLEDExtern([0, 0, 10])
+        """
+        Update the 16 external LEDs based on the control mode.
 
+        - OFF: set all LEDs to a very dim white [2,2,2].
+        - BALANCING:
+            * Outer LEDs (1,8,9,16) solid green at MAX_GREEN.
+            * Inner LEDs (3,4,5,6) on BOTH sides fade from MAX_GREEN at theta=0
+              down to 0 at |theta| >= OFF_DEG (in degrees).
+        """
+        # knobs (can optionally be set on 'self' to override defaults)
+        MAX_GREEN = getattr(self, "led_max_green", 20)  # 0..255, default 20
+        OFF_DEG = getattr(self, "led_theta_off_deg", 1.0)  # degrees to fully off
+
+        # Helper to push a uniform color to all 16 quickly
+        def _all(c):
+            self.board.setAllLEDsExtern([tuple(c)] * 16)
+
+        mode = self.control.mode
+
+        if mode == BILBO_Control_Mode.OFF:
+            _all((2, 2, 2))
+            return
+
+        if mode == BILBO_Control_Mode.BALANCING:
+            # Read theta in radians
+            theta = float(self.logging.sample.lowlevel.estimation.state.theta)
+            abs_theta = abs(theta)
+
+            # Map |theta| in [0, OFF_RAD] -> fade in [1..0]
+            off_rad = math.radians(OFF_DEG) if OFF_DEG > 0 else 0.0
+            if off_rad <= 0.0:
+                fade = 1.0
+            else:
+                fade = 1.0 - (abs_theta / off_rad)
+                if fade < 0.0:
+                    fade = 0.0
+                elif fade > 1.0:
+                    fade = 1.0
+
+            inner_val = int(round(MAX_GREEN * fade))
+            outer_val = int(MAX_GREEN)
+
+            # Start with all off
+            colors = [(0, 0, 0)] * 16
+
+            # Outer LEDs: indices 1-based -> (1,8) on side A, (9,16) on side B
+            for idx in (1, 8, 9, 16):
+                colors[idx - 1] = (0, outer_val, 0)
+
+            # Inner LEDs on each side: 3,4,5,6 (1-based)
+            for base in (0, 8):  # side A = 0..7, side B = 8..15
+                for i in (3, 4, 5, 6):
+                    colors[base + (i - 1)] = (0, inner_val, 0)
+
+            self.board.setAllLEDsExtern(colors)
+            return
+
+        # Fallback for other modes: turn everything off (adjust if you prefer)
+        self.board.setAllLEDsExtern([(0, 0, 0)] * 16)
     # ------------------------------------------------------------------------------------------------------------------
     def _sendFirstSampleMessage(self):
         self.logger.info(f"BILBO is running!")

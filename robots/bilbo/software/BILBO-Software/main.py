@@ -1,13 +1,7 @@
 import time
-
 from robot.bilbo import BILBO
 from core.utils.logging_utils import setLoggerLevel, Logger
-from robot.control.bilbo_control_data import BILBO_Control_Mode
-
-setLoggerLevel('wifi', 'ERROR')
-
-logger = Logger('main')
-logger.setLevel('DEBUG')
+from robot.logging.bilbo_sample import BILBO_Sample
 
 
 def main():
@@ -15,9 +9,15 @@ def main():
     bilbo.init()
     bilbo.start()
 
+    # def sample_callback(sample: BILBO_Sample):
+    #     print(f"Theta: {np.degrees(sample.lowlevel.estimation.state.theta):.1f}")
+    #
+    # bilbo.core.events.sample.on(callback=sample_callback)
+
 
     while True:
         time.sleep(1)
+
 
 
 if __name__ == '__main__':

@@ -31,7 +31,7 @@ def test_comm():
 
     while True:
         robot.debug(state)
-        robot.setSpeed([0.5, 0.25])
+        robot.setTrackSpeed([0.5, 0.25])
         state = not state
         time.sleep(0.25)
 
@@ -96,7 +96,7 @@ def test_receive():
     robot = VisionRobot()
     robot.init()
     robot.start()
-    robot.setSpeed([0.0, 0.0])
+    robot.setTrackSpeed([0.0, 0.0])
 
     while True:
         time.sleep(1)

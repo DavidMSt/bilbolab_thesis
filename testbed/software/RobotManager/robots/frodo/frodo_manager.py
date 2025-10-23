@@ -1,129 +1,169 @@
-import time
-
-from core.device_manager import DeviceManager
-from robots.frodo.frodo import Frodo
+from core.communication.device_server import DeviceServer, Device
+from core.communication.protocol import JSON_Message
+from core.utils.archives.events import pred_flag_key_equals
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.dataclass_utils import from_dict, from_dict_auto
+from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
+from core.utils.network.network import getHostIP
+from extensions.cli.cli import CommandSet
+from robots.frodo.frodo import FRODO
+from robots.frodo.frodo_definitions import FRODO_Information
 
 
-# ======================================================================================================================
 @callback_definition
-class FrodoManager_Callbacks:
+class FRODO_Manager_Callbacks:
     new_robot: CallbackContainer
     robot_disconnected: CallbackContainer
-    stream: CallbackContainer
 
 
-# ======================================================================================================================
 @event_definition
-class FrodoManager_Events:
-    new_robot: ConditionEvent
-    robot_disconnected: ConditionEvent
-    stream: ConditionEvent
+class FRODO_Manager_Events:
+    new_robot: Event = Event(copy_data_on_set=False)
+    robot_disconnected: Event = Event(copy_data_on_set=False)
 
 
-logger = Logger('FRODO MANAGER')
-logger.setLevel('INFO')
+# === FRODO MANAGER ====================================================================================================
+class FRODO_Manager:
+    device_server: DeviceServer
 
+    robots: dict[str, FRODO]
+    # frodo_scanner: FRODO_NetworkScanner | None
 
-# ======================================================================================================================
-class FrodoManager:
-    deviceManager: DeviceManager
-    robots: dict[str, Frodo]
-    callbacks: FrodoManager_Callbacks
+    _devices: dict[str, Device]
 
-    def __init__(self):
-        self.deviceManager = DeviceManager()
+    cli: CommandSet
+
+    # === INIT =========================================================================================================
+    def __init__(self, host: str | None = None, enable_scanner: bool = False):
+        if host is None:
+            host = getHostIP()
+
+        self.callbacks = FRODO_Manager_Callbacks()
+        self.events = FRODO_Manager_Events()
+        self.host = host
+
+        self._devices = {}
+
         self.robots = {}
-        self.callbacks = FrodoManager_Callbacks()
 
-        self.deviceManager.callbacks.new_device.register(self._newDevice_callback)
-        self.deviceManager.callbacks.device_disconnected.register(self._deviceDisconnected_callback)
-        self.deviceManager.callbacks.stream.register(self._deviceStream_callback)
+        self.device_server = DeviceServer(host)
 
-        register_exit_callback(self.close)
+        self.device_server.events.new_device.on(callback=self._newDevice_event,
+                                                predicate=pred_flag_key_equals('type', 'frodo'))
 
-    # ==================================================================================================================
+        self.device_server.events.device_disconnected.on(callback=self._deviceDisconnected_event,
+                                                         predicate=pred_flag_key_equals('type', 'frodo'))
+
+        # CLI
+        self.cli = FRODO_Manager_CommandSet(self)
+
+        self.logger = Logger("FRODO Manager", "DEBUG")
+
+        # Exit Handler
+        register_exit_callback(self.close, priority=10)
+
+    # === METHODS ======================================================================================================
     def init(self):
-        self.deviceManager.init()
+        self.device_server.init()
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        logger.info('Starting Frodo Manager')
-        self.deviceManager.start()
+        self.logger.info("Starting FRODO Manager")
+        self.device_server.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
-        logger.info('Closing Frodo Manager')
+        self.logger.info("Closing FRODO Manager")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getRobotByID(self, robot_id: str) -> (Frodo, None):
+    def emergencyStop(self):
+        self.logger.warning("Emergency stop. Need to implement this!")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def getRobotById(self, robot_id):
         if robot_id in self.robots:
             return self.robots[robot_id]
         else:
             return None
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _newDevice_callback(self, device, *args, **kwargs):
-        # Check if the device has the correct class and type
-        if not (device.information.device_class == 'robot' and device.information.device_type == 'frodo'):
-            if device.information.device_class == 'robot':
-                logger.warning(f"Robot attempted to connect with type {device.information.device_type}")
+    # === PRIVATE METHODS ==============================================================================================
+    def _newDevice_event(self, device: Device):
+        if device.information.device_id in self._devices:
+            self.logger.warning(f"Device with id {device.information.device_id} already exists")
             return
 
-        robot = Frodo(device)
-        # Check if this robot ID is already used
-        if robot.device.information.device_id in self.robots.keys():
-            logger.warning(f"New Robot connected, but ID {robot.device.information.device_id} is already in use")
-
-        self.robots[robot.device.information.device_id] = robot
-        logger.info(f"New Frodo connected with ID: \"{robot.device.information.device_id}\"")
-
-        # robot.beep()
-        # delayed_execution(robot.setSpeed, delay=5, speed_left=1, speed_right=-1)
-        # delayed_execution(robot.setSpeed, delay=10, speed_left=0, speed_right=0)
-
-        for callback in self.callbacks.new_robot:
-            callback(robot, *args, **kwargs)
+        self._devices[device.information.device_id] = device
+        self.logger.info(f"New frodo device connected: {device.information.device_id}")
+        device.callbacks.event.register(self._deviceEvent_callback, inputs={'device': device})
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _deviceDisconnected_callback(self, device, *args, **kwargs):
-        """
-        Callback for handling device disconnections.
-
-        :param device: The disconnected device
-        """
-        if device.information.device_id not in self.robots:
-            return
-
-        robot = self.robots[device.information.device_id]
-        self.robots.pop(device.information.device_id)
-
-        logger.info(f"Robot {device.information.device_id} disconnected")
-
-        # Remove any joystick assignments
-        for callback in self.callbacks.robot_disconnected:
-            callback(robot, *args, **kwargs)
+    def _deviceDisconnected_event(self, device: Device):
+        # Go through all robots and check if this device is one of them
+        for robot in self.robots.values():
+            if robot.device == device:
+                self._removeBilbo(robot)
+                break
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _deviceStream_callback(self, stream, device, *args, **kwargs):
-        """
-        Callback for handling data streams from devices.
+    def _deviceEvent_callback(self, event_message: JSON_Message, device: Device):
+        # Check if the event is a BILBO handshake. Only then do we accept it as a BILBO
+        if event_message.event == 'frodo_handshake':
+            try:
+                frodo_information = from_dict_auto(FRODO_Information, event_message.data)
+            except Exception as e:
+                self.logger.error(f"Error in frodo handshake: {e}. Message: {event_message}")
+                return
 
-        :param stream: The data stream
-        :param device: The device sending the stream
-        """
-        if device.information.device_id in self.robots.keys():
-            for callback in self.callbacks.stream:
-                callback(stream, self.robots[device.information.device_id], *args, **kwargs)
+            # Check if this device is already registered
+            if frodo_information.id in self.robots:
+                self.logger.warning(f"Device with ID {frodo_information.id} already registered")
+                return
+
+            self._addNewFrodo(device, frodo_information)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _addNewFrodo(self, device: Device, information: FRODO_Information):
+
+        # Remove the callback for the event
+        device.callbacks.event.remove(self._deviceEvent_callback)
+
+        # Create a new BILBO robot
+        new_robot = FRODO(device, information)
+        self.robots[information.id] = new_robot
+
+        # Add the robot's CLI command set
+        self.cli.addChild(new_robot.interfaces.cli_command_set)
+
+        # Call the callbacks and events for a new robot
+        self.callbacks.new_robot.call(new_robot)
+        self.events.new_robot.set(data=new_robot)
+
+        self.logger.info(f"New FRODO \"{information.id}\" connected")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _removeBilbo(self, robot: FRODO):
+        self.robots.pop(robot.id)
+        self._devices.pop(robot.device.information.device_id)
+
+        # Remove the robot's CLI command set
+        self.cli.removeChild(robot.interfaces.cli_command_set)
+
+        self.callbacks.robot_disconnected.call(robot)
+        self.events.robot_disconnected.set(data=robot)
+
+        self.logger.info(f"FRODO \"{robot.id}\" disconnected")
 
 
-if __name__ == '__main__':
-    manager = FrodoManager()
-    manager.init()
-    manager.start()
 
-    while True:
-        time.sleep(10)
+# ======================================================================================================================
+class FRODO_Manager_CommandSet(CommandSet):
+    name = 'robots'
+    description = 'Functions related to connected FRODO'
+
+    # === INIT =========================================================================================================
+    def __init__(self, frodo_manager: FRODO_Manager):
+        self.manager = frodo_manager
+
+        super().__init__(self.name, commands=[], children=[], description=self.description)

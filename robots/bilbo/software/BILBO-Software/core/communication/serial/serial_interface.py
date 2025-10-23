@@ -1,14 +1,16 @@
 import ctypes
 import enum
 import threading
+from typing import Union
 
 # === OWN PACKAGES =====================================================================================================
 from core.communication.serial.core.serial_protocol import UART_Message
 from core.communication.serial.core.serial_connection import SerialConnection
+from core.utils.bytes_utils import intToByte
 from core.utils.ctypes_utils import is_valid_ctype, ctype_to_value, value_to_ctype, bytes_to_ctype, ctype_to_bytes, \
     bytes_to_value, value_to_bytes
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
 import core
 
@@ -44,7 +46,7 @@ class SerialMessage:
     data_type: type = None
 
     @classmethod
-    def decode(cls, message: UART_Message) -> 'SerialMessage':
+    def decode(cls, message: UART_Message) -> Union['SerialMessage', None]:
         if cls.data_type is None:
             return None
         try:
@@ -86,10 +88,10 @@ class SerialInterface_Callbacks:
 # === EVENTS ===========================================================================================================
 @event_definition
 class SerialInterface_Events:
-    rx: ConditionEvent
-    event: ConditionEvent
-    stream: ConditionEvent
-    error: ConditionEvent
+    rx: Event
+    event: Event
+    stream: Event
+    error: Event
 
 
 # ======================================================================================================================
@@ -116,7 +118,7 @@ class Serial_Interface:
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addMessage(self, messages: (object, list[object])):
+    def addMessage(self, messages: object | list[object]):
         if not isinstance(messages, list):
             messages = [messages]
 
@@ -134,7 +136,7 @@ class Serial_Interface:
         self.device.close()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def write(self, module: int = 0, address: (int, list) = None, value=None, type=ctypes.c_uint8):
+    def write(self, module: int = 0, address: int | list = None, value=None, type=ctypes.c_uint8):
         assert (type is None or is_valid_ctype(type))
 
         if value is None:
@@ -145,7 +147,7 @@ class Serial_Interface:
         self._send(cmd=SerialCommandType.UART_CMD_WRITE, module=module, address=address, flag=0, data=data_bytes)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def echo(self, module: int = 0, address: (int, list) = None, value=None, type=ctypes.c_uint8, flag: int = 0):
+    def echo(self, module: int = 0, address: int | list = None, value=None, type=ctypes.c_uint8, flag: int = 0):
         assert (type is None or is_valid_ctype(type))
         raise NotImplementedError()
 
@@ -303,10 +305,10 @@ class Serial_Interface:
         return request
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _send(self, cmd: int = 0, module: int = 0, address: (bytes, bytearray, list, int) = None, flag: int = 0,
+    def _send(self, cmd: int = 0, module: int = 0, address: bytes | bytearray | list | int = None, flag: int = 0,
               data=None):
         if isinstance(address, int):
-            address = list(core.utils.bytes_utils.intToByte(address, 2))
+            address = list(intToByte(address, 2))
         elif isinstance(address, bytes):
             address = list(address)
         elif isinstance(address, bytearray):

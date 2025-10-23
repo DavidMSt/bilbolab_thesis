@@ -7,7 +7,7 @@ import numpy as np  # Import the NumPy scientific computing library
 import glob  # Used to get retrieve files that have a specified pattern
 import yaml
 
-from utils.files import splitExtension
+from core.utils.files import splitExtension
 
 # Chessboard dimensions
 number_of_squares_X = 10  # Number of chessboard squares along the x-axis
@@ -102,6 +102,8 @@ def chessboard_calibration(images_path, calibration_file, resolution, camera, sa
     # on the edge of the undistorted image.
     # x, y, w, h = roi
     # undistorted_image = undistorted_image[y:y+h, x:x+w]
+
+
 
     # Display key parameter outputs of the camera calibration process
     #print("Optimal Camera matrix:")

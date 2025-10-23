@@ -3,7 +3,7 @@ import json
 from control import tf
 
 from core.utils.files import fileExists
-from paths import calibrations_path
+from robot.paths import calibrations_path
 
 
 class BILBO_Dynamics:

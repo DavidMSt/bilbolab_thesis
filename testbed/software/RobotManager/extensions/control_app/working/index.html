@@ -533,8 +533,8 @@
             if (data.type === "switch_set") {
                 createButtons(data.grid_items, data.show_back);
                 updatePathBar(data.path);
-                if (data.pages !== undefined && data.current_page !== undefined) {
-                    updatePageIndicators(data.current_page, data.pages);
+                if (data.groups !== undefined && data.current_page !== undefined) {
+                    updatePageIndicators(data.current_page, data.groups);
                 }
             } else if (data.type === "update_status_bar_widget") {
                 updateStatusBarWidget(data);
@@ -1369,6 +1369,7 @@
         if (e.target.closest(".sliderWidget") || e.target.closest(".joystickWidget")) return;
         touchStartY = e.changedTouches[0].screenY;
     }, {passive: true});
+
     gridWrapper.addEventListener("touchmove", function (e) {
         if (e.target.closest(".sliderWidget") || e.target.closest(".joystickWidget")) return;
         let currentY = e.changedTouches[0].screenY;

@@ -19,7 +19,7 @@ from zeroconf import Zeroconf, ServiceInfo
 from core.utils.logging_utils import Logger
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.mdns import MDNSResolver
-from core.utils.network.network import getValidHostIP
+from core.utils.network.network import getHostIP
 from core.utils.paths import is_subpath
 
 ALLOW_FIRST_COLUMN_ON_SUBSEQUENT_PAGES = True
@@ -3089,7 +3089,7 @@ class ControlApp:
         self.runner = web.AppRunner(self.app)
         self.event_loop.run_until_complete(self.runner.setup())
 
-        ip = getValidHostIP()
+        ip = getHostIP()
         if ip is None:
             ip = '127.0.0.1'
 

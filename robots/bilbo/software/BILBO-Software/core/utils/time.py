@@ -157,7 +157,7 @@ class TimeoutTimer:
         while not self._stop_event.is_set():
             # Timer logic only executes if the timer is in a running state
             if self._is_running.is_set():
-                if self._last_reset_time is not None and time.time() - self._last_reset_time >= self.timeout_time:
+                if self._last_reset_time is not None and time.monotonic() - self._last_reset_time >= self.timeout_time:
                     # Timer has timed out; trigger the callback and enter timeout state
                     self.timeout_callback()
                     self._is_running.clear()  # Exit the running state
@@ -169,14 +169,14 @@ class TimeoutTimer:
         """
         if not self._is_running.is_set():
             self._is_running.set()
-            self._last_reset_time = time.time()
+            self._last_reset_time = time.monotonic()
 
     def reset(self):
         """
         Resets the timer by updating the last reset time.
         """
         if self._is_running.is_set():
-            self._last_reset_time = time.time()
+            self._last_reset_time = time.monotonic()
 
     def stop(self):
         """

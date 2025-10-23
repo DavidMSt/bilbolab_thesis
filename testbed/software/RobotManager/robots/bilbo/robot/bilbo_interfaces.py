@@ -1,19 +1,21 @@
 import math
 import threading
 import time
+from enum import Enum
 
 # === CUSTOM PACKAGES ==================================================================================================
 from core.utils.sound.sound import speak
-from extensions.cli.src.cli import CommandSet, Command, CommandArgument
+from extensions.cli.cli import CommandSet, Command, CommandArgument
 from extensions.joystick.joystick_manager import Joystick
+from core.utils.curve_utils import shape_joystick, JoystickCurve
 from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
-from robots.bilbo.robot.bilbo_data import twiprSampleFromDict, BILBO_STATE_DATA_DEFINITIONS
+from robots.bilbo.robot.bilbo_data import bilboSampleFromDict
 from core.utils.callbacks import CallbackContainer, callback_definition, Callback
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event, EventListener, pred_flag_contains
 from core.utils.exit import register_exit_callback
-from robots.bilbo.robot.bilbo_experiment import BILBO_Experiments
+from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robots.bilbo.robot.bilbo_utilities import BILBO_Utilities
 
 # ======================================================================================================================
@@ -30,30 +32,30 @@ class BILBO_Interfaces_Callbacks:
 
 @event_definition
 class BILBO_Interfaces_Events:
-    joystick_connected: ConditionEvent
-    joystick_disconnected: ConditionEvent
+    joystick_connected: Event
+    joystick_disconnected: Event
 
 
 # ======================================================================================================================
 class BILBO_Interfaces:
-    joystick: (Joystick, None)
+    joystick: Joystick | None
     live_plots: list[dict]
 
-    joystick_thread: (threading.Thread, None)
+    joystick_thread: threading.Thread | None
     _exit_joystick_thread: bool
+
+    _joystick_event_listeners: list[EventListener]
 
     # ------------------------------------------------------------------------------------------------------------------
     def __init__(self, core: BILBO_Core,
                  control: BILBO_Control,
                  utilities: BILBO_Utilities,
-                 experiments: BILBO_Experiments):
+                 experiments: BILBO_ExperimentHandler):
 
         self.core = core
         self.control = control
         self.utilities = utilities
         self.experiments = experiments
-        self.core.events.stream.on(self._streamCallback)
-
         self.cli_command_set = BILBO_CLI_CommandSet(core=self.core,
                                                     control=self.control,
                                                     experiments=self.experiments,
@@ -63,6 +65,7 @@ class BILBO_Interfaces:
         self.joystick_thread = None
 
         self._exit_joystick_thread = False
+        self._joystick_event_listeners = []
 
         register_exit_callback(self.close)
 
@@ -77,32 +80,47 @@ class BILBO_Interfaces:
         speak(f"Joystick {joystick.id} assigned to {self.core.id}")
 
         self.joystick = joystick
-        self.joystick.events.button.on(self.core.interface_events.resume.set, flags={'button': 'DPAD_RIGHT'},
-                                       input_resource=False)
-        self.joystick.events.button.on(self.core.interface_events.revert.set, flags={'button': 'DPAD_LEFT'},
-                                       input_resource=False)
 
-        self.joystick.events.button.on(Callback(self.control.enableTIC,
-                                                inputs={'state': True},
-                                                discard_inputs=True), flags={'button': 'DPAD_UP'}, input_resource=False)
+        listener = self.joystick.events.button.on(self.core.setResumeEvent,
+                                                  predicate=pred_flag_contains('button', 'DPAD_RIGHT'),
+                                                  input_data=False)
+        self._joystick_event_listeners.append(listener)
 
-        self.joystick.events.button.on(Callback(self.control.enableTIC,
-                                                inputs={'state': False},
-                                                discard_inputs=True), flags={'button': 'DPAD_DOWN'},
-                                       input_resource=False)
+        listener = self.joystick.events.button.on(self.core.setRevertEvent,
+                                                  predicate=pred_flag_contains('button', 'DPAD_LEFT'),
+                                                  input_data=False)
+        self._joystick_event_listeners.append(listener)
 
-        self.joystick.events.button.on(Callback(self.control.setControlMode,
-                                                inputs={'mode': BILBO_Control_Mode.BALANCING},
-                                                discard_inputs=True),
-                                       flags={'button': 'A'}, input_resource=False)
-
-        self.joystick.events.button.on(Callback(self.control.setControlMode,
-                                                inputs={'mode': BILBO_Control_Mode.OFF},
-                                                discard_inputs=True),
-                                       flags={'button': 'B'})
-
-        self.joystick.events.button.on(callback=self.core.beep, flags={'button': 'X'}, input_resource=False)
-
+        listener = self.joystick.events.button.on(Callback(self.control.enableTIC,
+                                                           inputs={'state': True},
+                                                           discard_inputs=True),
+                                                  predicate=pred_flag_contains('button', 'DPAD_UP'),
+                                                  input_data=False)
+        self._joystick_event_listeners.append(listener)
+        listener = self.joystick.events.button.on(Callback(self.control.enableTIC,
+                                                           inputs={'state': False},
+                                                           discard_inputs=True),
+                                                  predicate=pred_flag_contains('button', 'DPAD_DOWN'),
+                                                  input_data=False, )
+        self._joystick_event_listeners.append(listener)
+        listener = self.joystick.events.button.on(Callback(self.control.setControlMode,
+                                                           inputs={'mode': BILBO_Control_Mode.BALANCING},
+                                                           discard_inputs=True),
+                                                  predicate=pred_flag_contains('button', 'A'),
+                                                  input_data=False,
+                                                  )
+        self._joystick_event_listeners.append(listener)
+        listener = self.joystick.events.button.on(Callback(self.control.setControlMode,
+                                                           inputs={'mode': BILBO_Control_Mode.OFF},
+                                                           discard_inputs=True),
+                                                  predicate=pred_flag_contains('button', 'B'),
+                                                  )
+        self._joystick_event_listeners.append(listener)
+        listener = self.joystick.events.button.on(callback=self.core.beep,
+                                                  predicate=pred_flag_contains('button', 'X'),
+                                                  input_data=False,
+                                                  )
+        self._joystick_event_listeners.append(listener)
         self._startJoystickThread()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -111,25 +129,19 @@ class BILBO_Interfaces:
             self.core.logger.info("Remove Joystick")
             speak(f"Joystick {self.joystick.id} removed from {self.core.id}")
             self.joystick.clearAllButtonCallbacks()
+            try:
+                for listener in self._joystick_event_listeners:
+                    listener.stop()
+            except Exception as e:
+                self.core.logger.error(f"Error stopping joystick event listeners: {e}")
+            self._joystick_event_listeners = []
             self.joystick = None
 
         if self.joystick_thread is not None and self.joystick_thread.is_alive():
             self._exit_joystick_thread = True
             self.joystick_thread.join()
             self.joystick_thread = None
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _streamCallback(self, stream, *args, **kwargs):
-        data = twiprSampleFromDict(stream.data)
-        #
-        # for plot in self.live_plots:
-        #     state_name = plot["state_name"]
-        #     state_data = getattr(data.estimation.state, state_name)
-        #     if BILBO_STATE_DATA_DEFINITIONS[state_name]['unit'] == 'rad':
-        #         state_data = math.degrees(state_data)
-        #     elif BILBO_STATE_DATA_DEFINITIONS[state_name]['unit'] == 'rad/s':
-        #         state_data = math.degrees(state_data)
-        #     plot["plot"].push_data(state_data)
+            self.core.logger.info("Joystick thread closed.")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _startJoystickThread(self):
@@ -143,19 +155,26 @@ class BILBO_Interfaces:
     def _joystick_task(self):
         self._exit_joystick_thread = False
         while not self._exit_joystick_thread:
-            forward_joystick = -self.joystick.getAxis('LEFT_VERTICAL')
-            turn_joystick = -self.joystick.getAxis('RIGHT_HORIZONTAL')
+            # Raw inputs still expected in [-1, 1]
+            raw_forward = -self.joystick.getAxis('LEFT_VERTICAL')
+            raw_turn = -self.joystick.getAxis('RIGHT_HORIZONTAL')
 
-            # if self.control.mode == BILBO_Control_Mode.BALANCING:
+            # Shape them using the global curve
+            forward_joystick = shape_joystick(raw_forward, JoystickCurve.POWER, 2)
+            turn_joystick = shape_joystick(raw_turn, JoystickCurve.POWER, 2)
+
+            # Send normalized, shaped inputs to the controller
             self.control.setNormalizedBalancingInput(forward_joystick, turn_joystick)
 
             time.sleep(JOYSTICK_UPDATE_TIME)
+
+    # ------------------------------------------------------------------------------------------------------------------
 
 
 # ======================================================================================================================
 class BILBO_CLI_CommandSet(CommandSet):
 
-    def __init__(self, core: BILBO_Core, control: BILBO_Control, experiments: BILBO_Experiments,
+    def __init__(self, core: BILBO_Core, control: BILBO_Control, experiments: BILBO_ExperimentHandler,
                  utilities: BILBO_Utilities):
         self.core = core
         self.control = control
@@ -163,7 +182,7 @@ class BILBO_CLI_CommandSet(CommandSet):
         self.utilities = utilities
 
         beep_command = Command(name='beep',
-                               callback=self.core.beep,
+                               function=self.core.beep,
                                allow_positionals=True,
                                arguments=[
                                    CommandArgument(name='frequency',
@@ -191,7 +210,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                description='Beeps the Buzzer')
 
         speak_command = Command(name='speak',
-                                callback=self.core.speak,
+                                function=self.core.speak,
                                 allow_positionals=True,
                                 arguments=[
                                     CommandArgument(name='text',
@@ -204,7 +223,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                 ], )
 
         mode_command = Command(name='mode',
-                               callback=self.control.setControlMode,
+                               function=self.control.setControlMode,
                                allow_positionals=True,
                                arguments=[
                                    CommandArgument(name='mode',
@@ -217,7 +236,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                ], )
 
         stop_command = Command(name='stop',
-                               callback=Callback(
+                               function=Callback(
                                    function=self.control.setControlMode,
                                    inputs={'mode': BILBO_Control_Mode.OFF},
                                    discard_inputs=True,
@@ -226,11 +245,11 @@ class BILBO_CLI_CommandSet(CommandSet):
                                arguments=[])
 
         read_state_command = Command(name='read',
-                                     callback=self.control.getControlState,
+                                     function=self.control.getControlState,
                                      description='Reads the current control state and mode', )
 
         plot_state_command = Command(name='plot',
-                                     callback=self.utilities.openLivePlot,
+                                     function=self.utilities.openLivePlot,
                                      allow_positionals=True,
                                      arguments=[
                                          CommandArgument(name='state',
@@ -242,7 +261,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                      ], )
 
         test_communication = Command(name='testComm',
-                                     callback=Callback(
+                                     function=Callback(
                                          function=self.utilities.test_response_time,
                                          execute_in_thread=True,
                                      ),
@@ -257,7 +276,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                      ])
 
         statefeedback_command = Command(name='sfg',
-                                        callback=self.control.setStateFeedbackGain,
+                                        function=self.control.setStateFeedbackGain,
                                         allow_positionals=True,
                                         arguments=[
                                             CommandArgument(name='gain',
@@ -269,7 +288,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                         ], )
 
         forward_pid_command = Command(name='fpid',
-                                      callback=self.control.setForwardPID,
+                                      function=self.control.setForwardPID,
                                       allow_positionals=True,
                                       arguments=[
                                           CommandArgument(name='p',
@@ -291,7 +310,7 @@ class BILBO_CLI_CommandSet(CommandSet):
 
         turn_pid_command = Command(name='tpid',
                                    allow_positionals=True,
-                                   callback=self.control.setTurnPID,
+                                   function=self.control.setTurnPID,
                                    arguments=[
                                        CommandArgument(name='p',
                                                        type=float,
@@ -311,7 +330,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                    ])
 
         read_control_config_command = Command(name='read',
-                                              callback=self.control.readControlConfiguration,
+                                              function=self.control.readControlConfiguration,
                                               description='Reads the current control configuration',
                                               arguments=[])
 
@@ -324,16 +343,10 @@ class BILBO_CLI_CommandSet(CommandSet):
 
         test_trajectory_command = Command(name='test',
                                           allow_positionals=True,
-                                          callback=self.experiments.runTestTrajectories,
+                                          function=self.experiments.runRandomTestTrajectory,
                                           execute_in_thread=True,
                                           arguments=[
-                                              CommandArgument(name='num',
-                                                              short_name='n',
-                                                              type=int,
-                                                              description='Number of trajectories',
-                                                              optional=False,
-                                                              ),
-                                              CommandArgument(name='time',
+                                              CommandArgument(name='time_s',
                                                               short_name='t',
                                                               type=float,
                                                               description='Time to run the trajectory',
@@ -352,22 +365,8 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                               default=0.1),
                                           ])
 
-        ilc_command = Command(name='ilc',
-                              allow_positionals=True,
-                              callback=self.experiments.runILC,
-                              execute_in_thread=True,
-                              arguments=[
-                                  CommandArgument(name='num',
-                                                  short_name='n',
-                                                  type=int,
-                                                  description='Number of ILC iterations',
-                                                  optional=False,
-                                                  ),
-                              ]
-                              )
-
         experiment_command_set = CommandSet(name='experiment',
-                                            commands=[test_trajectory_command, ilc_command])
+                                            commands=[test_trajectory_command])
 
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
@@ -377,4 +376,4 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                            plot_state_command,
                                                            test_communication],
 
-                         child_sets=[control_command_set, experiment_command_set])
+                         children=[control_command_set, experiment_command_set])

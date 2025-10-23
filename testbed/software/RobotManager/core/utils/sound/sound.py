@@ -273,7 +273,11 @@ class SoundSystem:
         :param volume: Volume level for playback.
         :param flush: Whether to clear the playback queue.
         """
-        filename = self._get_or_generate_tts_file(text)
+        try:
+            filename = self._get_or_generate_tts_file(text)
+        except Exception as e:
+            logger.error(f"Error during TTS generation: {e}")
+            return
         if filename is None:
             return
         if force:

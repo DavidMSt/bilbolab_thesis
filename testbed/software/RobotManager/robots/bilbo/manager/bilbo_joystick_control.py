@@ -2,13 +2,13 @@ import dataclasses
 import threading
 import time
 
-from extensions.cli.src.cli import CommandSet, Command, CommandArgument
+from extensions.cli.cli import CommandSet, Command, CommandArgument
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
 from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
-from robots.bilbo.robot.bilbo_data import TWIPR_Control_Mode
+from robots.bilbo.robot.bilbo_data import BILBO_Control_Mode
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
 
 from robots.bilbo.robot.bilbo_definitions import *
@@ -31,10 +31,10 @@ class TWIPRJoystickControlCallbacks:
 
 @event_definition
 class TWIPRJoystickControlEvents:
-    new_assignment: ConditionEvent
-    assigment_removed: ConditionEvent
-    new_joystick: ConditionEvent
-    joystick_disconnected: ConditionEvent
+    new_assignment: Event
+    assigment_removed: Event
+    new_joystick: Event
+    joystick_disconnected: Event
 
 
 @dataclasses.dataclass
@@ -52,7 +52,7 @@ class BILBO_JoystickControl:
     callbacks: TWIPRJoystickControlCallbacks
 
     _run_in_thread: bool
-    _thread: threading.Thread
+    _thread: threading.Thread | None
     _exit: bool
 
     # ==================================================================================================================
@@ -94,13 +94,10 @@ class BILBO_JoystickControl:
     # ==================================================================================================================
     def init(self):
         self.joystick_manager.init()
-        # self.resetLimits()
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.joystick_manager.start()
-        # if self._run_in_thread:
-        #     self._thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self):
@@ -110,6 +107,8 @@ class BILBO_JoystickControl:
 
     # ------------------------------------------------------------------------------------------------------------------
     def assignJoystick(self, joystick, bilbo):
+
+        logger.info(f"Try to assign Joystick: {joystick.id} -> Robot: {bilbo.id}")
         if isinstance(joystick, str):
             joystick = self.joystick_manager.getJoystickById(joystick)
             if joystick is None:
@@ -119,19 +118,10 @@ class BILBO_JoystickControl:
             if bilbo is None:
                 return
 
-        self.assignments[joystick.id] = JoystickAssignment(joystick, bilbo)
+        if joystick.id in self.assignments.keys():
+            self.unassignJoystick(joystick)
 
-        # joystick.setButtonCallback(button=1, event='down', function=bilbo.control.setControlMode,
-        #                            parameters={'mode': BILBO_Control_Mode.BALANCING})
-        #
-        # joystick.setButtonCallback(button=0, event='down', function=bilbo.control.setControlMode,
-        #                            parameters={'mode': BILBO_Control_Mode.OFF})
-        #
-        # joystick.setButtonCallback(button=2, event='down', function=bilbo.control.setControlMode,
-        #                            parameters={'mode': BILBO_Control_Mode.VELOCITY})
-        #
-        # joystick.setButtonCallback(button=4, event='down', function=bilbo.beep,
-        #                            parameters={'frequency': 800, 'time_ms': 500, 'repeats': 1})
+        self.assignments[joystick.id] = JoystickAssignment(joystick, bilbo)
 
         bilbo.interfaces.addJoystick(joystick)
 
@@ -157,6 +147,30 @@ class BILBO_JoystickControl:
                 for callback in self.callbacks.assigment_removed:
                     callback(joystick, assignment.robot)
                 return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def robotIsAssigned(self, robot: BILBO):
+        for assignment in self.assignments.values():
+            if assignment.robot == robot:
+                return assignment.joystick
+        return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def getJoysticksWithAssignments(self):
+        out = {}
+        for joystick in self.joystick_manager.joysticks.values():
+            out[joystick.id] = {
+                'joystick': joystick,
+                'assigned_robot': self.assignments[joystick.id].robot.id if joystick.id in self.assignments else None,
+            }
+
+        return out
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def getFirstJoystick(self):
+        if len(self.joystick_manager.joysticks) == 0:
+            return None
+        return list(self.joystick_manager.joysticks.values())[0]
 
     # ------------------------------------------------------------------------------------------------------------------
     def resetLimits(self):
@@ -240,13 +254,13 @@ class BILBO_JoystickManager_CommandSet(CommandSet):
 
         self.joystick_control = joystick_control
 
-        list_joysticks_command = Command(name='lj',
-                                         callback=self._list_joysticks,
+        list_joysticks_command = Command(name='list',
+                                         function=self._list_joysticks,
                                          allow_positionals=False,
-                                         description='Beeps the Buzzer')
+                                         description='Lists all joysticks')
 
         rumble_command = Command(name='rumble',
-                                 callback=self._rumble_joystick,
+                                 function=self._rumble_joystick,
                                  allow_positionals=True,
                                  arguments=[
                                      CommandArgument(name='id',
@@ -259,7 +273,7 @@ class BILBO_JoystickManager_CommandSet(CommandSet):
                                  description='Rumbles the given joystick')
 
         assign_command = Command(name='assign',
-                                 callback=self._assign_joystick,
+                                 function=self._assign_joystick,
                                  allow_positionals=True,
                                  arguments=[
                                      CommandArgument(name='id',
@@ -278,7 +292,7 @@ class BILBO_JoystickManager_CommandSet(CommandSet):
                                  description='Rumbles the given joystick')
 
         unassign_command = Command(name='unassign',
-                                   callback=self._unassign_joystick,
+                                   function=self._unassign_joystick,
                                    allow_positionals=True,
                                    arguments=[
                                        CommandArgument(name='id',
@@ -299,13 +313,16 @@ class BILBO_JoystickManager_CommandSet(CommandSet):
                                                       rumble_command,
                                                       assign_command,
                                                       unassign_command],
-                         child_sets=[])
+                         children=[])
 
     def _list_joysticks(self):
         output = ''
         for joystick in self.joystick_control.joystick_manager.joysticks.values():
             output += f"{joystick.id}: {joystick.name}\n"
-        return output
+
+        if output == "":
+            output = "No joysticks connected"
+        self.joystick_control.joystick_manager.logger.info(output)
 
     def _rumble_joystick(self, id: int):
         joystick = self.joystick_control.joystick_manager.getJoystickById((id))

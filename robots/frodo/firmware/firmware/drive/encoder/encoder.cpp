@@ -24,7 +24,11 @@ void Encoder::start() {
 
 /* -------------------------------------------------------------------- */
 void Encoder::update() {
-	this->readings[reading_index] = __HAL_TIM_GET_COUNTER(this->config.tim);
+	int value = __HAL_TIM_GET_COUNTER(this->config.tim);
+	if (value > 0) {
+		nop();
+	}
+	this->readings[reading_index] = value;
 	__HAL_TIM_SET_COUNTER(this->config.tim, 0);
 	this->_updateIndex();
 }

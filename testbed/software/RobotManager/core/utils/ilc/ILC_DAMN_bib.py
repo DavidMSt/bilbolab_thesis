@@ -1,4 +1,14 @@
 import dataclasses
+import os
+import warnings
+
+# Disable multithreading in BLAS libraries
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import numpy as np
 from matplotlib import pyplot as plt
 from numpy import nan
@@ -9,9 +19,12 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 import matplotlib
 import matplotlib.patches as patches
 from scipy.linalg import toeplitz
+from scipy.signal import firwin
 
-seed = 42
+seed = 55
 np.random.seed(seed)
+
+
 
 
 @dataclasses.dataclass
@@ -727,9 +740,51 @@ class BILBO:
 def lift_vec2mat(u):
     return np.tril(toeplitz(u))
 
+# def create_q_filter_matrix(N, cutoff=0.1, numtaps=21):
+#     # FIR low-pass filter design
+#     q_kernel = firwin(numtaps=numtaps, cutoff=cutoff, window='hamming')
+#     Q = np.zeros((N, N))
+#     for i in range(N):
+#         for j in range(numtaps):
+#             if i - j >= 0:
+#                 Q[i, i - j] += q_kernel[j]
+#     return Q
+
+import numpy as np
+from scipy.signal import firwin
+from scipy.linalg import toeplitz
+
+
+def generate_q_filter(sample_frequency, N, cutoff_ratio=0.1, order=50):
+    """
+    Generates a Q matrix for ILC learning that acts as a low-pass filter in matrix form.
+
+    Parameters:
+        sample_frequency (float): Sampling frequency in Hz.
+        N (int): Length of signal u (number of time samples).
+        cutoff_ratio (float): Cutoff frequency as a fraction of Nyquist frequency (0 < cutoff_ratio < 1).
+        order (int): Filter order for FIR filter.
+
+    Returns:
+        Q (ndarray): NxN Q-filter matrix for applying to u = Q * (u + Le)
+    """
+    # Design FIR low-pass filter
+    q_kernel = firwin(order + 1, cutoff=cutoff_ratio * 0.5 * sample_frequency, fs=sample_frequency)
+
+    # Create Toeplitz matrix (convolution matrix)
+    first_col = np.zeros(N)
+    first_col[:len(q_kernel)] = q_kernel
+    first_row = np.zeros(N)
+    first_row[0] = q_kernel[0]
+
+    Q = toeplitz(first_col, first_row)
+
+    return Q
+
 
 def noilc_design(M, self_para_func):
     W, S = self_para_func(M)
+    S = 1.5*S
     N = M.shape[0]
     jitter = 1e-8 * np.eye(N)
     A = M @ W @ M.T + S + jitter
@@ -744,7 +799,16 @@ def noilc_design(M, self_para_func):
 def noilc_self_para_v2(M):
     N = M.shape[0]
     W = np.eye(N)
-    S = M.T @ M + 1e-8 * np.eye(N)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always", RuntimeWarning)
+        S = M.T @ M + 1e-6 * np.eye(N)
+        for warning in w:
+            if issubclass(warning.category, RuntimeWarning):
+                print(f"Caught warning: {warning.message}")
+                print("Min:", np.min(M))
+                print("Max:", np.max(M))
+                print("Any NaN?", np.isnan(M).any())
+                print("Any Inf?", np.isinf(M).any())
     return W, S
 
 

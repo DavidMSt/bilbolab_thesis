@@ -315,7 +315,7 @@ class CallbackContainer:
         else:
             self.expected_parameters = {}
 
-    def register(self, function: callable, inputs: dict = None, parameters: dict = None, lambdas: dict = None,
+    def register(self, function: typing.Callable, inputs: dict = None, parameters: dict = None, lambdas: dict = None,
                  discard_inputs=False, *args, **kwargs):
         if self.expected_parameters:
             if parameters is None:

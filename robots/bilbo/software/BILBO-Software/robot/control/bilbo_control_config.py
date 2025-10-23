@@ -1,11 +1,12 @@
 import math
 
 from core.utils.files import fileExists
-from paths import control_config_path
+
 from robot.control.bilbo_control_data import BILBO_ControlConfig, BILBO_Control_Mode, General_Control_Config, \
-    ExternalInputsConfig, TWIPR_Balancing_Control_Config, TIC_Config, VIC_Config, SpeedControl_Config
+    ExternalInputsConfig, TWIPR_Balancing_Control_Config, TIC_Config, VIC_Config
 from core.utils.json_utils import writeJSON, readJSON
 from core.utils.dataclass_utils import asdict_optimized, from_dict
+from robot.settings import control_config_path
 
 config_bilbo_normal = BILBO_ControlConfig(
     name='default_normal',
@@ -17,9 +18,8 @@ config_bilbo_normal = BILBO_ControlConfig(
     ),
     external_inputs=ExternalInputsConfig(
         balancing_input_gain={
-            'forward': 0.4,
-
-            'turn': 0.15
+            'forward': 0.3,
+            'turn': 0.12
         },
         speed_input_gain={
             'forward': 0,
@@ -29,12 +29,23 @@ config_bilbo_normal = BILBO_ControlConfig(
     balancing_control=TWIPR_Balancing_Control_Config(
         # K=[0.3, 0.42, 0.04, 0.025,
         #    0.3, 0.42, 0.04, -0.025],
-        K=[0.25, 0.35, 0.04, 0.025,
-           0.25, 0.35, 0.04, -0.025],
+
+        # Standard and aggressive
+        # K=[0.25, 0.35, 0.04, 0.025,
+        #    0.25, 0.35, 0.04, -0.025],
+
+        K=[0.25, 0.32, 0.03, 0.025,
+           0.25, 0.32, 0.03, -0.025],
+        # tic=TIC_Config(
+        #     enabled=False,
+        #     ki=0.2,
+        #     max_error=0.3,
+        #     theta_limit=math.radians(10)
+        # ),
         tic=TIC_Config(
             enabled=False,
-            ki=0.2,
-            max_error=0.3,
+            ki=0.4,
+            max_error=0.5,
             theta_limit=math.radians(10)
         ),
         vic=VIC_Config(
@@ -67,7 +78,7 @@ config_bilbo_hhi = BILBO_ControlConfig(
     balancing_control=TWIPR_Balancing_Control_Config(
         # K=[0.3, 0.42, 0.04, 0.025,
         #    0.3, 0.42, 0.04, -0.025],
-        K=[0.15, 0.17,  0.017, 0.015,
+        K=[0.15, 0.17, 0.017, 0.015,
            0.15, 0.17, 0.017, -0.015],
         tic=TIC_Config(
             enabled=False,
@@ -94,8 +105,8 @@ config_bilbo_big = BILBO_ControlConfig(
     ),
     external_inputs=ExternalInputsConfig(
         balancing_input_gain={
-            'forward': 0.2,
-            'turn': 0.15
+            'forward': 0.3,
+            'turn': 0.12
         },
         speed_input_gain={
             'forward': 0,
@@ -103,12 +114,12 @@ config_bilbo_big = BILBO_ControlConfig(
         }
     ),
     balancing_control=TWIPR_Balancing_Control_Config(
-        K=[0.12, 0.25, 0.030, 0.02,
-           0.12, 0.25, 0.030, -0.02],
+        K=[0.2, 0.28, 0.035, 0.02,
+           0.2, 0.28, 0.035, -0.02],
         tic=TIC_Config(
             enabled=False,
-            ki=0.2,
-            max_error=0.3,
+            ki=0.4,
+            max_error=0.6,
             theta_limit=math.radians(10)
         ),
         vic=VIC_Config(
@@ -130,8 +141,8 @@ config_bilbo_small = BILBO_ControlConfig(
     ),
     external_inputs=ExternalInputsConfig(
         balancing_input_gain={
-            'forward': 0.2,
-            'turn': 0.15
+            'forward': 0.35,
+            'turn': 0.2
         },
         speed_input_gain={
             'forward': 0,
@@ -143,8 +154,8 @@ config_bilbo_small = BILBO_ControlConfig(
            0.16, 0.3, 0.030, -0.02],
         tic=TIC_Config(
             enabled=False,
-            ki=0.15,
-            max_error=0.3,
+            ki=0.25,
+            max_error=0.5,
             theta_limit=math.radians(10)
         ),
         vic=VIC_Config(
@@ -168,19 +179,17 @@ def load_config(name: str) -> BILBO_ControlConfig:
 
 
 def generate_default_config(model: str):
-    if model not in ['normal', 'big', 'small', 'hhi']:
-        raise ValueError("Model must be either 'normal', 'big', 'small' or 'hhi'")
-
-    if model == 'normal':
+    if model in ['normal', 'bilbo1', 'bilbo2']:
         config = config_bilbo_normal
     elif model == 'big':
         config = config_bilbo_big
-    elif model == 'small':
+    elif model == 'mini':
         config = config_bilbo_small
     elif model == 'hhi':
         config = config_bilbo_hhi
     else:
-        raise ValueError("Model must be either 'normal', 'big', 'small' or 'hhi'")
+        raise ValueError("Model must be either 'normal', 'big', 'mini' or 'hhi'")
+
 
     config_dict = asdict_optimized(config)
     file = f"{control_config_path}default.json"
@@ -190,7 +199,3 @@ def generate_default_config(model: str):
 
 if __name__ == '__main__':
     generate_default_config('normal')
-
-
-
-

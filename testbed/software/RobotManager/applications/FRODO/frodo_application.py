@@ -1,705 +1,571 @@
-import math
-
-import numpy as np
-import qmt
+import dataclasses
+import enum
 import threading
 import time
 
-# ----------------------------------------------------------------------------------------------------------------------
-from applications.FRODO.experiments.frodo_experiments import FRODO_ExperimentHandler, FRODO_Experiments_CLI
-from applications.FRODO.frodo_agent import FRODO_Agent, FRODO_Aruco_Measurements, FRODO_Measurement_Data
-from applications.FRODO.tracker.assets import TrackedVisionRobot, TrackedAsset, TrackedOrigin
-from applications.FRODO.tracker.tracker import Tracker
-from extensions.cli.cli_gui import CLI_GUI_Server
-from extensions.cli.src.cli import CommandSet, Command
-from robots.frodo.frodo import Frodo
-from robots.frodo.frodo_definitions import get_title_from_marker
-from robots.frodo.frodo_manager import FrodoManager
-from robots.frodo.utils.frodo_cli import FRODO_CommandSet
-from robots.frodo.utils.frodo_manager_cli import FrodoManager_Commands
-from core.utils.callbacks import Callback
+import numpy as np
+
+from applications.FRODO.algorithm.algorithm import AlgorithmAgentState, AlgorithmAgentMeasurement, AlgorithmAgentInput
+from applications.FRODO.algorithm.algorithm_centralized import CentralizedAgent, CentralizedAlgorithm
+from applications.FRODO.algorithm.algorithm_distributed import DistributedAlgorithm, DistributedAgent
+from applications.FRODO.data_aggregator import FRODO_DataAggregator, TestbedObject_FRODO, TestbedObject_STATIC
+from applications.FRODO.gui.frodo_gui import FRODO_GUI
+from applications.FRODO.tracker.frodo_tracker import FRODO_Tracker
+from core.utils.callbacks import CallbackContainer, callback_definition
+from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
-from applications.FRODO.utilities.web_gui.FRODO_Web_Interface import FRODO_Web_Interface, Group
-from core.utils.sound.sound import SoundSystem
-from core.utils.sound.sound import speak
-from core.utils.thread_worker import ThreadWorker, WorkerPool
-from core.utils.logging_utils import Logger, setLoggerLevel
-import robots.frodo.frodo_definitions as frodo_definitions
-# import utils.orientation.plot_2d.dynamic.dynamic_2d_plotter as plotter
-import applications.FRODO.utilities.web_gui.FRODO_Web_Interface as plotter
-from core.utils.orientation.orientation_2d import rotate_vector
-from applications.FRODO.algorithm.centralized_ekf_sincos import CentralizedLocationAlgorithm, VisionAgent, \
-    VisionAgentMeasurement
+from core.utils.logging_utils import Logger
+from core.utils.network.network import getHostIP
+from core.utils.sound.sound import SoundSystem, speak
+from core.utils.time import IntervalTimer
+from extensions.cli.cli import CLI, CommandSet, Command, CommandArgument
+from extensions.joystick.joystick_manager import JoystickManager
+from robots.frodo.frodo import FRODO
+from robots.frodo.frodo_manager import FRODO_Manager
+
+UPDATE_TIME = 0.02
+
+INITIAL_GUESS_AGENTS = np.asarray([0.01, 0.012, 0.002])
+INITIAL_GUESS_AGENTS_COVARIANCE = 1e5 * np.diag([1, 1, 1])
+
+STATIC_AGENTS_COVARIANCE = 1e-8 * np.diag([1, 1, 1])
+
+
+class AlgorithmState(enum.StrEnum):
+    RUNNING = "RUNNING"
+    STOPPED = "STOPPED"
+
 
 # ----------------------------------------------------------------------------------------------------------------------
-setLoggerLevel('Sound', 'INFO')
-# ----------------------------------------------------------------------------------------------------------------------
-
-Ts = 0.2
-
-
-# ======================================================================================================================
-class FRODO_Static:
-    id: str
-    position: np.ndarray
+@dataclasses.dataclass
+class AgentError:
+    x: float
+    y: float
     psi: float
-    asset: TrackedOrigin
-
-    def __init__(self, id: str, asset: TrackedOrigin):
-        self.id = id
-        self.asset = asset
 
     @property
     def position(self):
-        return np.array([self.asset.position[0], self.asset.position[1]])
+        return np.asarray([self.x, self.y])
 
     @property
-    def psi(self):
-        return self.asset.psi
+    def distance(self):
+        return np.linalg.norm(self.position)
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class AgentContainer:
+    centralized_algorithm_agent: CentralizedAgent
+    distributed_algorithm_agent: DistributedAgent
+    testbed_object: TestbedObject_FRODO
+    robot: FRODO
+    error: AgentError | None = None
+
+
+@dataclasses.dataclass
+class SimulatedAgentContainer:
+    ...
+
+
+@dataclasses.dataclass
+class StaticContainer:
+    centralized_algorithm_agent: CentralizedAgent
+    distributed_algorithm_agent: DistributedAgent
+
+
+@event_definition
+class FRODO_Application_Events:
+    algorithm_started: Event
+    algorithm_stopped: Event
+    update: Event
+
+
+@callback_definition
+class FRODO_Application_Callbacks:
+    algorithm_started: CallbackContainer
+    algorithm_stopped: CallbackContainer
+    update: CallbackContainer
+
+
+# ======================================================================================================================
 class FRODO_Application:
-    agents: dict[str, FRODO_Agent]
-    statics: dict[str, FRODO_Static]
+    agents: dict
+    manager: FRODO_Manager
+    joystick_manager: JoystickManager
 
-    manager: FrodoManager
-    tracker: (Tracker, None)
-    cli_gui: CLI_GUI_Server
+    aggregator: FRODO_DataAggregator
 
-    read_worker_pool: WorkerPool
+    algorithm_centralized: CentralizedAlgorithm
+    algorithm_distributed: DistributedAlgorithm
 
-    experiment_handler: FRODO_ExperimentHandler
+    gui: FRODO_GUI
+    tracker: FRODO_Tracker
+    soundsystem: SoundSystem
 
-    plotter: (FRODO_Web_Interface, None)
-    logger: Logger
+    agents: dict[str, AgentContainer]
+    statics: dict[str, StaticContainer]
 
-    step: int = 0
-    _exit: bool = False
-    _thread: threading.Thread
+    algorithm_state = AlgorithmState.STOPPED
 
-    aruco_plotting_objects: dict
+    # === INIT =========================================================================================================
+    def __init__(self):
+        host = getHostIP()
 
-    algorithm_running: bool
+        # Logger
+        self.logger = Logger('FRODO Application', 'DEBUG')
 
-    algorithm: CentralizedLocationAlgorithm
-    algorithm_agents: dict[str, VisionAgent]
+        # Events
+        self.events = FRODO_Application_Events()
+        self.callbacks = FRODO_Application_Callbacks()
 
-    # === CONSTRUCTOR ==================================================================================================
-    def __init__(self, enable_tracking: bool = True, start_webapp=True):
-        self.manager = FrodoManager()
-        self.manager.callbacks.new_robot.register(self._new_robot_callback)
-        self.manager.callbacks.robot_disconnected.register(self._robot_disconnected_callback)
+        # Manager
+        self.manager = FRODO_Manager(host=host)
+        self.manager.callbacks.new_robot.register(self._newRobot_callback)
+        self.manager.callbacks.robot_disconnected.register(self._robotDisconnected_callback)
 
-        self.agents = {}
-        self.read_worker_pool = None
+        # Joystick Manager
+        self.joystick_manager = JoystickManager()
 
-        if enable_tracking:
-            self.tracker = Tracker()
-        else:
-            self.tracker = None
-
-        if self.tracker:
-            self.tracker.callbacks.new_sample.register(self._tracker_new_sample)
-            self.tracker.callbacks.description_received.register(self._tracker_description_received)
-
-        self.experiment_handler = FRODO_ExperimentHandler(self.manager, self.tracker, self.agents)
-
-        self.cli_gui = CLI_GUI_Server(address='localhost', port=8090)
-
-        # -- IO --
-        self.logger = Logger('APP')
-        self.logger.setLevel('INFO')
-        self.soundsystem = SoundSystem(primary_engine='etts')
+        # Sound
+        self.soundsystem = SoundSystem(primary_engine='etts', volume=1)
         self.soundsystem.start()
 
-        if start_webapp:
-            self.plotter = FRODO_Web_Interface()
-        else:
-            self.plotter = None
+        # Tracker
+        self.tracker = FRODO_Tracker()
 
-        self.aruco_plotting_objects = {}
+        # Data Aggregator
+        self.aggregator = FRODO_DataAggregator(manager=self.manager, tracker=self.tracker)
+
+        # Algorithm
+        self.algorithm_centralized = CentralizedAlgorithm(Ts=UPDATE_TIME)
+        self.algorithm_distributed = DistributedAlgorithm(Ts=UPDATE_TIME)
+
+        # Objects
+        self.agents = {}
         self.statics = {}
 
-        # self._thread = threading.Thread(target=self._update_plot, daemon=True)
-        self._thread = threading.Thread(target=self.update, daemon=True)
+        # CLI
+        self.command_set = FRODO_Application_CLI(self)
+        self.cli = CLI(id='frodo_app_cli', root=self.command_set)
 
-        # self.timer = PrecisionTimer(timeout=0.1, repeat=True, callback=self.update)
+        # GUI
+        self.gui = FRODO_GUI(host, application=self, tracker=self.tracker, cli=self.cli, manager=self.manager,
+                             aggregator=self.aggregator, )
 
-        self.algorithm = CentralizedLocationAlgorithm(Ts=Ts)
-        self.algorithm_running = False
+        # Timer
+        self.timer = IntervalTimer(interval=UPDATE_TIME, raise_race_condition_error=False)
+
+        # Thread
+        self._exit = False
+        self._thread = None
 
         register_exit_callback(self.close)
 
     # === METHODS ======================================================================================================
     def init(self):
+        self.tracker.init()
+        self.gui.init()
         self.manager.init()
-
-        if self.tracker:
-            self.tracker.init()
-
-        self._getRootCLISet()
+        self.joystick_manager.init()
+        self.cli.root.addChild(self.manager.cli)
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
+        self.tracker.start()
+        self.gui.start()
         self.manager.start()
-        self.cli_gui.start()
-        self._thread.start()
-
-        if self.plotter:
-            self.plotter.start()
-            self._prepare_plotting()
-
-        if self.tracker:
-            self.tracker.start()
-
-        # self._thread.start()
-        # self.timer.start()
+        self.joystick_manager.start()
         speak("Start Frodo Application")
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         speak("Closing Frodo Application")
+        time.sleep(1)
+        self.tracker.close()
         self._exit = True
-        if self.plotter:
-            self.plotter.close()
-        time.sleep(2)
 
-    # === METHODS ======================================================================================================
-    def update(self):
+    # ------------------------------------------------------------------------------------------------------------------
+    def task(self):
         while not self._exit:
-            time1 = time.time()
-            # print(f"Update {self.step}")
-            # Step 1: Read all agent's data
-            data = self._read_agents(0.1)
-
-            # Step 2: Analyze and correct the data
-            processed_data = self._processAgentMeasurements(data)
-
-            # Step 3: Plot the stuff
-            self._plotData(processed_data)
-
-            # Step 4: Do measurements for plotting
-
-            # Step 5: Do the algorithm
-            if self.algorithm_running:
-                # Step 5.1: Fill the algorithm agents with the inputs and measurements
-                self._prepareAlgorithmAgents(processed_data)
-                self.algorithm.update()
-                self._collectAlgorithmData()
-
-            self.step += 1
-            time_elapsed = time.time() - time1
-            if time_elapsed > 0.2:
-                print("RACE CONDITIONS")
-            time.sleep(0.2 - time_elapsed)
+            self.update()
+            self.timer.sleep_until_next()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _prepareAlgorithmAgents(self, data):
+    def update(self):
+        """
+        This is the main update loop for acquiring data, processing the data, updating the algorithm and logging
+        """
 
-        # Loop through the algorithm agents
-        for id, algorithm_agent in self.algorithm_agents.items():
+        # 1. Update the data aggregator
+        self.aggregator.update()
 
-            # Make the measurements empty for the current estimation step
-            algorithm_agent.measurements = []
-            # Check if it is a static or an agent
-            if id in self.agents:
+        # 2. Update the Algorithms
+        if self.algorithm_state == AlgorithmState.RUNNING:
+            # 2.1 Prediction Centralized
+            self._prediction_centralized()
 
-                # if the agent has no measurements, skip it
-                if id not in data:
-                    continue
+            # 2.2 Prediction Distributed
+            self._prediction_distributed()
 
-                # Set the input to zero (for now)
-                algorithm_agent.input = np.asarray([0, 0])
+            # 2.3 Update Centralized
+            self._update_centralized()
 
-                # Go through the measurements
-                agent_measurements = data[id]['measurements']
+            # 2.4 Update Distributed
+            self._update_distributed()
 
-                for object_id, measurement_data in agent_measurements.items():
-                    # VisionAgentMeasurement
+            # 4. Calculate the estimation error
+            self._calculate_estimation_errors()
 
-                    # TODO: Here is still an error sometimes
-                    algorithm_measurement = VisionAgentMeasurement(
-                        source=id,
-                        source_index=self.algorithm.getAgentIndex(id),
-                        target=object_id,
-                        target_index=self.algorithm.getAgentIndex(object_id),
-                        measurement=np.asarray([measurement_data['measurement_noisy']['position'][0],
-                                                measurement_data['measurement_noisy']['position'][1],
-                                                measurement_data['measurement_noisy']['psi']]),
-                        measurement_covariance=np.diag([measurement_data['measurement_noisy']['position_uncertainty'],
-                                                        measurement_data['measurement_noisy']['position_uncertainty'],
-                                                        0.01])
-                    )
-
-                    algorithm_agent.measurements.append(algorithm_measurement)
-
-
-            else:
-                # Do nothing for statics now
-                ...
+        # Emit the events
+        self.events.update.set()
+        self.callbacks.update.call()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _collectAlgorithmData(self):
-        # Get the agent's position data
-        for agent_id, agent in self.agents.items():
-            agent_estimated_state = self.algorithm.agents[agent_id].state
+    def init_application(self):
 
-            # TODO: I think I should use the estimated state here
-            agent.state_true.x = float(agent_estimated_state[0])
-            agent.state_true.y = float(agent_estimated_state[1])
-            agent.state_true.psi = float(agent_estimated_state[2])
+        if self._thread is not None:
+            self.logger.warning("Application is already running")
+            return
 
-            # Update the plotting item for the estimated state
-            agent.estimated_plot_item.position = [agent.state_true.x, agent.state_true.y]
-            agent.estimated_plot_item.psi = agent.state_true.psi
+        self.agents = {}
+        self.statics = {}
 
-            agent.estimated_plot_covariance.mid = [agent.state_true.x, agent.state_true.y]
-            covariance = self.algorithm.agents[agent_id].state_covariance[0:2, 0:2]
-            eigenvalues, _ = np.linalg.eigh(covariance)
-            confidence_scale = 2  # 95% confidence
-            max_variance = np.max(eigenvalues)
-            radius = confidence_scale * np.sqrt(max_variance)
+        # Clear the aggregator
+        self.aggregator.clear()
 
-            agent.estimated_plot_covariance.diameter = 2 * radius
+        for robot in self.manager.robots.values():
+            testbed_object = self.aggregator.addRobot(robot)
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _startAlgorithm(self):
+            centralized_algorithm_agent = CentralizedAgent(id=robot.id,
+                                                           Ts=UPDATE_TIME,
+                                                           state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
+                                                           covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
+                                                           is_anchor=False)
 
-        # Start by building the agents
-        self.algorithm_agents = {}
+            distributed_algorithm_agent = DistributedAgent(id=robot.id,
+                                                           Ts=UPDATE_TIME,
+                                                           state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
+                                                           covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
+                                                           is_anchor=False)
 
-        index = 0
-        initial_state_guess_agents = [0.01, 0.012, 0.002]
+            agent = AgentContainer(
+                robot=robot,
+                testbed_object=testbed_object,
+                centralized_algorithm_agent=centralized_algorithm_agent,
+                distributed_algorithm_agent=distributed_algorithm_agent,
+            )
 
-        # First, add the actual agents
-        for agent_id, agent in self.agents.items():
-            self.algorithm_agents[agent_id] = VisionAgent(id=agent_id,
-                                                          index=index,
-                                                          state=np.asarray(initial_state_guess_agents),
-                                                          state_covariance=np.diag(np.asarray([100.1, 100.2, 100.3])),
-                                                          input=np.asarray([0, 0]),
-                                                          input_covariance=np.eye(2) * 1e-3,
-                                                          measurements=[],
-                                                          dynamics_noise=1e-2
-                                                          )
-            index += 1
+            self.agents[robot.id] = agent
+            self.logger.important(f"Added agent {robot.id} to the application")
 
-        # # Now, add the static markers
-        for static_id, static in self.statics.items():
-            self.algorithm_agents[static_id] = VisionAgent(id=static_id,
-                                                           index=index,
-                                                           state=np.asarray(
-                                                               [static.position[0], static.position[1], static.psi]),
-                                                           state_covariance=np.diag(
-                                                               np.asarray(
-                                                                   [0.00011 ** 2, 0.000012 ** 2, 0.000013 ** 2])),
-                                                           input=np.asarray([0, 0]),
-                                                           input_covariance=np.eye(2) * 1e-6,
-                                                           measurements=[],
-                                                           dynamics_noise=1e-9
-                                                           )
-            index += 1
+        # TODO: How to get the available statics?
 
-        # Add the plotting items to the algorithm group
-        algorithm_group: Group = self.plotter.get_element_by_id('algorithm')
-        algorithm_group.clear()
+        self.aggregator.initialize()
 
-        for agent_id, agent in self.agents.items():
-            algorithm_group.add_vision_agent(agent.estimated_plot_item)
-            algorithm_group.add_circle(agent.estimated_plot_covariance)
-
-        self.algorithm.init(agents=self.algorithm_agents)
-        self.algorithm_running = True
-        self.logger.important("Start Algorithm")
-        speak("Start Algorithm")
+        self._exit = False
+        self.logger.important("Application initialized")
+        self._thread = threading.Thread(target=self.task, daemon=True)
+        self._thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _stopAlgorithm(self):
+    def stop_application(self):
+        self._exit = True
 
-        # Clear the algorithm plotting group
-        algorithm_group: Group = self.plotter.get_element_by_id('algorithm')
-        algorithm_group.clear()
-
-        self.algorithm_running = False
-        self.logger.important("Stop Algorithm")
-        speak("Stop Algorithm")
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _resetAlgorithm(self):
-        self._stopAlgorithm()
-        self._startAlgorithm()
+    def start_algorithm(self):
+        if self.algorithm_state == AlgorithmState.RUNNING:
+            self.logger.warning("Algorithm is already running")
+            return
+
+        if self._thread is None:
+            self.logger.warning("Application is not initialized. Please initialize the application first")
+            return
+
+        centralized_algorithm_agents = []
+        distributed_algorithm_agents = []
+
+        for agent_id, agent_container in self.agents.items():
+            agent_container.centralized_algorithm_agent.state = AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS)
+            agent_container.centralized_algorithm_agent.state_covariance = INITIAL_GUESS_AGENTS_COVARIANCE
+            centralized_algorithm_agents.append(agent_container.centralized_algorithm_agent)
+
+            agent_container.distributed_algorithm_agent.state = AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS)
+            agent_container.distributed_algorithm_agent.state_covariance = INITIAL_GUESS_AGENTS_COVARIANCE
+            distributed_algorithm_agents.append(agent_container.distributed_algorithm_agent)
+
+        for static_id, static_container in self.statics.items():
+            centralized_algorithm_agents.append(static_container.centralized_algorithm_agent)
+            distributed_algorithm_agents.append(static_container.distributed_algorithm_agent)
+
+        self.algorithm_centralized.initialize(centralized_algorithm_agents)
+        self.algorithm_distributed.initialize(distributed_algorithm_agents)
+
+        self.algorithm_state = AlgorithmState.RUNNING
+        self.logger.important("Start FRODO Algorithm")
+        self.soundsystem.speak('Start FRODO Algorithm')
+        self.events.algorithm_started.set()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _plotData(self, data):
-
-        aruco_group: Group = self.plotter.get_element_by_id('aruco_objects')
-        optitrack_group: Group = self.plotter.get_element_by_id('optitrack')
-
-        # Go through all aruco objects and set update=False
-        for element_id, element in self.aruco_plotting_objects.items():
-            element['updated'] = False
-
-        for agent_id, agent_data in data.items():
-            # print(f"Plotting data for {agent_id}")
-
-            for object_id, measurement_data in agent_data['measurements'].items():
-                # print(f"Plotting the measurement for {agent_id} -> {object_id}")
-                if not 'measurement_actual' in measurement_data:
-                    continue
-
-                measured_position = agent_data['true_position'] + rotate_vector(
-                    measurement_data['measurement_noisy']['position'], agent_data['true_psi'])
-
-                plotted_marker_type = 'point' if measurement_data['type'] == 'static' else 'agent'
-                plotted_marker_id = f"{agent_id}_{object_id}"
-
-                if not plotted_marker_id in self.aruco_plotting_objects:
-                    # Make a new object
-                    self.aruco_plotting_objects[plotted_marker_id] = {}
-
-                    if plotted_marker_type == 'point':
-
-                        # plot the point
-                        self.aruco_plotting_objects[plotted_marker_id]['element'] = aruco_group.add_point(
-                            id=plotted_marker_id,
-                            x=float(measured_position[0]),
-                            y=float(measured_position[1]),
-                            alpha=0.1
-                        )
-
-                        # plot the measurement line
-                        self.aruco_plotting_objects[plotted_marker_id]['line'] = aruco_group.add_line(
-                            id=f"{plotted_marker_id}_line",
-                            start=(
-                                self.agents[agent_id].estimated_plot_item
-                                if self.algorithm_running
-                                else optitrack_group.get_element_by_id(agent_id)),
-                            end=optitrack_group.get_element_by_id(object_id),
-                        )
-
-                        self.aruco_plotting_objects[plotted_marker_id]['updated'] = True
-
-                    else:
-                        self.aruco_plotting_objects[plotted_marker_id]['element'] = aruco_group.add_point(
-                            id=plotted_marker_id,
-                            x=float(measured_position[0]),
-                            y=float(measured_position[1]),
-                            alpha=0.1,
-                        )
-
-                        # plot the measurement line
-                        self.aruco_plotting_objects[plotted_marker_id]['line'] = aruco_group.add_line(
-                            id=f"{plotted_marker_id}_line",
-                            start=(
-                                self.agents[agent_id].estimated_plot_item
-                                if self.algorithm_running
-                                else optitrack_group.get_element_by_id(agent_id)),
-                            end=(
-                                self.agents[object_id].estimated_plot_item
-                                if self.algorithm_running
-                                else optitrack_group.get_element_by_id(object_id)),
-                        )
-
-                        self.aruco_plotting_objects[plotted_marker_id]['updated'] = True
-
-
-                else:
-                    if plotted_marker_type == 'point':
-                        element = aruco_group.get_element_by_id(plotted_marker_id)
-                        if element is not None:
-                            element.x = float(measured_position[0])
-                            element.y = float(measured_position[1])
-                        self.aruco_plotting_objects[plotted_marker_id]['updated'] = True
-                    else:
-                        element = aruco_group.get_element_by_id(plotted_marker_id)
-                        if element is not None:
-                            element.x = float(measured_position[0])
-                            element.y = float(measured_position[1])
-                        self.aruco_plotting_objects[plotted_marker_id]['updated'] = True
-
-        # No gow through the aruco plotting objects and delete all that have not been updated
-        for element_id in list(self.aruco_plotting_objects.keys()):
-            element = self.aruco_plotting_objects[element_id]
-            if not element['updated']:
-                aruco_group.remove_element_by_id(element_id)
-                aruco_group.remove_element_by_id(f"{element_id}_line")
-                del self.aruco_plotting_objects[element_id]
+    def stop_algorithm(self):
+        self.algorithm_state = AlgorithmState.STOPPED
+        self.logger.info("Stop FRODO Algorithm")
+        self.soundsystem.speak('Stop FRODO Algorithm')
+        self.events.algorithm_stopped.set()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _processAgentMeasurements(self, data: dict[str, FRODO_Measurement_Data]):
-
-        out = {}
-        for agent_id, measurement_data in data.items():
-
-            # print(f"Processing measurements for agent {agent_id}")
-            out[agent_id] = {}
-
-            true_position_agent = np.array([self.agents[agent_id].state_true.x, self.agents[agent_id].state_true.y])
-            true_psi_agent = self.agents[agent_id].state_true.psi
-
-            out[agent_id]['true_position'] = true_position_agent
-            out[agent_id]['true_psi'] = true_psi_agent
-
-            # Process the Aruco measurements
-            aruco_measurements: list[FRODO_Aruco_Measurements] = measurement_data.aruco_measurements
-            out[agent_id]['measurements'] = {}
-
-            for measurement in aruco_measurements:
-                # Let's see if we know this marker
-                object_id, object_def, psi_offset = frodo_definitions.get_object_from_marker_id(measurement.marker_id)
-
-                if object_id is None:
-                    continue
-
-                object_type = object_def.get('type', None)
-
-                out[agent_id]['measurements'][object_id] = {}
-
-                # print(f"Frodo {agent_id} measures {object_id} of type {object_type}")
-
-                # Get the true position for the current agent and the measured object
-
-                # print(f"The true position of the agent is [{true_position_agent[0]:.1f},{true_position_agent[1]:.1f}]")
-
-                # Get the true position of the other thing. First check if it's an agent or a static
-
-                if object_type == 'robot':
-                    if object_id in self.agents:
-                        true_position_object = np.array(
-                            [self.agents[object_id].state_true.x, self.agents[object_id].state_true.y])
-                        true_psi_object = self.agents[object_id].state_true.psi
-                    else:
-                        continue
-                elif object_type == 'static':
-                    true_position_object = self.tracker.tracked_assets[object_id].position
-                    true_psi_object = self.tracker.tracked_assets[object_id].psi
-                    # print(f"The objects data is {data}")
-                else:
-                    self.logger.warning(f"Object {object_id} is neither an agent nor a static object")
-                    continue
-
-                out[agent_id]['measurements'][object_id]['type'] = object_type
-
-                # Get the actual measurement
-                out[agent_id]['measurements'][object_id]['measurement_actual'] = {}
-                out[agent_id]['measurements'][object_id]['measurement_actual']['position'] = measurement.translation_vec
-                out[agent_id]['measurements'][object_id]['measurement_actual'][
-                    'position_uncertainty'] = measurement.tvec_uncertainty
-                out[agent_id]['measurements'][object_id]['measurement_actual']['psi'] = measurement.psi
-
-                # Calculate the "true" measurement
-                calculated_position_measurement = rotate_vector(true_position_object - true_position_agent,
-                                                                -true_psi_agent)
-
-                out[agent_id]['measurements'][object_id]['measurement_ideal'] = {}
-                out[agent_id]['measurements'][object_id]['measurement_ideal'][
-                    'position'] = calculated_position_measurement
-                out[agent_id]['measurements'][object_id]['measurement_ideal']['psi'] = true_psi_object - true_psi_agent
-
-                out[agent_id]['measurements'][object_id]['measurement_noisy'] = {}
-
-                uncertainty_distance = measurement.tvec_uncertainty
-                simulated_noise = np.random.normal(loc=0.0, scale=(uncertainty_distance / 10), size=2)
-
-
-                # HERE I DO MY NASTY BUSINESS:
-                alpha = 0.7
-                noisy_calculated_measurement = calculated_position_measurement + simulated_noise
-                noisy_calculated_measurement = alpha * calculated_position_measurement + (1 - alpha) * np.asarray(
-                    measurement.translation_vec)
-
-                out[agent_id]['measurements'][object_id]['measurement_noisy']['position'] = noisy_calculated_measurement
-                out[agent_id]['measurements'][object_id]['measurement_noisy']['psi'] = \
-                    out[agent_id]['measurements'][object_id]['measurement_ideal']['psi']
-                out[agent_id]['measurements'][object_id]['measurement_noisy'][
-                    'position_uncertainty'] = measurement.tvec_uncertainty
-
-        return out
+    def reset_algorithm(self):
+        raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _getRootCLISet(self):
 
-        command_set_robots = FrodoManager_Commands(self.manager)
-
-        start_algorithm_command = Command("start",
-                                          callback=self._startAlgorithm,
-                                          arguments=[],
-                                          description="Starts the algorithm")
-
-        stop_algorithm_command = Command("stop",
-                                         callback=self._stopAlgorithm,
-                                         arguments=[],
-                                         description="Stops the algorithm")
-
-        reset_algorithm_command = Command("reset",
-                                          callback=self._resetAlgorithm,
-                                          arguments=[],
-                                          description="Resets the algorithm")
-
-        command_set_algorithm = CommandSet('algorithm', commands=[start_algorithm_command,
-                                                                  stop_algorithm_command,
-                                                                  reset_algorithm_command])
-
-        command_set_experiments = FRODO_Experiments_CLI(self.experiment_handler)
-
-        command_set_root = CommandSet('.',
-                                      child_sets=[command_set_robots,
-                                                  command_set_algorithm,
-                                                  command_set_experiments])
-
-        self.cli_gui.updateCLI(command_set_root)
+    # === PRIVATE METHODS ==============================================================================================
+    def _newRobot_callback(self, robot: FRODO, *args, **kwargs):
+        self.soundsystem.speak(f"New robot {robot.id} connected")
+        # self.aggregator.addRobot(robot)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _robot_disconnected_callback(self, robot):
-        speak(f'Robot {robot.group_id} disconnected')
-        self.cli_gui.sendLog(f'Robot {robot.group_id} disconnected')
+    def _robotDisconnected_callback(self, robot: FRODO, *args, **kwargs):
+        self.soundsystem.speak(f"Robot {robot.id} disconnected")
+        # self.aggregator.removeRobot(robot)
 
-        if robot.group_id in self.cli_gui.cli.root_set.child_sets['robots'].child_sets:
-            self.cli_gui.cli.root_set.child_sets['robots'].removeChild(robot.group_id)
-            self.cli_gui.updateCLI()
+    # === ALGORITHM METHODS ============================================================================================
+    def _prediction_centralized(self):
+        if self.algorithm_state != AlgorithmState.RUNNING:
+            return
 
-        # Remove the agent
-        if robot.group_id in self.agents:
-            del self.agents[robot.group_id]
-            self.plotter.remove_element_by_id(f'agents/{robot.group_id}')
+        for agent_id, agent_container in self.agents.items():
+            # 3. Set the inputs
+            agent_container.centralized_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
+                agent_container.testbed_object.dynamic_state.v,
+                agent_container.testbed_object.dynamic_state.psi_dot
+            ])
+            )
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _new_robot_callback(self, robot: Frodo):
-        speak(f"New Robot {robot.id} connected")
-        self.cli_gui.sendLog(f'New Robot {robot.id} connected')
-
-        # Add a new agent
-        agent = FRODO_Agent(id=robot.id, robot=robot)
-        self.agents[robot.id] = agent
-
-        if self.plotter:
-            group_agents: Group = self.plotter.get_element_by_id('agents')
-            group_agent = group_agents.add_group(id=robot.id)
-            group_agent.add_vision_agent(id=f'{robot.id}_true',
-                                         position=[0, 0],
-                                         psi=0,
-                                         vision_radius=1.5,
-                                         vision_fov=math.radians(120),
-                                         color=frodo_definitions.frodo_colors[robot.id])
-
-        # Get the command set
-        command_set_robot = FRODO_CommandSet(robot)
-        self.cli_gui.cli.root_set.child_sets['robots'].addChild(command_set_robot)
-        self.cli_gui.updateCLI()
+        self.algorithm_centralized.prediction()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _tracker_new_sample(self, sample: dict[str, TrackedAsset]):
-        optitrack_group: Group = self.plotter.get_element_by_id('optitrack')
-        for id, asset in sample.items():
-            if isinstance(asset, TrackedVisionRobot):
-
-                # Update the plot
-                if self.plotter:
-                    optitrack_element = optitrack_group.get_element_by_id(id)
-                    if optitrack_element is not None and isinstance(optitrack_element, plotter.VisionAgent):
-                        optitrack_element.position = [float(asset.position[0]), float(asset.position[1])]
-                        optitrack_element.psi = asset.psi
-
-                # Update the agent
-                if id in self.agents:
-                    self.agents[id].updateRealState(x=asset.position[0], y=asset.position[1], psi=asset.psi)
-
-                    # Update the real agents position in the plot
-                    if self.plotter:
-                        agent_element = self.plotter.get_element_by_id(f'agents/{id}/{id}_true')
-                        if agent_element is not None and isinstance(agent_element, plotter.VisionAgent):
-                            agent_element.position = [float(asset.position[0]), float(asset.position[1])]
-                            agent_element.psi = asset.psi
-
-            elif isinstance(asset, TrackedOrigin):
-                if self.plotter:
-                    optitrack_element = optitrack_group.get_element_by_id(id)
-                    if optitrack_element is not None and isinstance(optitrack_element, plotter.Point):
-                        optitrack_element.x = float(asset.position[0])
-                        optitrack_element.y = float(asset.position[1])
+    def _prediction_distributed(self):
+        if self.algorithm_state != AlgorithmState.RUNNING:
+            return
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _tracker_description_received(self, assets):
-        self.logger.info(f'Tracker Description Received')
-        if self.plotter is not None:
-            optitrack_group: Group = self.plotter.get_element_by_id('optitrack')
-            for id, asset in assets.items():
+    def _prediction(self):
+        if self.algorithm_state != AlgorithmState.RUNNING:
+            return
 
-                if isinstance(asset, TrackedVisionRobot):
+        for agent_id, agent_container in self.agents.items():
+            agent_container.distributed_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
+                agent_container.testbed_object.dynamic_state.v,
+                agent_container.testbed_object.dynamic_state.psi_dot
+            ])
+            )
 
-                    if id in frodo_definitions.frodo_colors:
-                        color = frodo_definitions.frodo_colors[id]
-                    else:
-                        color = [0.5, 0.5, 0.5]
+            agent_container.centralized_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
+                agent_container.testbed_object.dynamic_state.v,
+                agent_container.testbed_object.dynamic_state.psi_dot
+            ]))
 
-                    optitrack_group.add_vision_agent(id=id,
-                                                     position=[0, 0],
-                                                     psi=0,
-                                                     vision_radius=1.5,
-                                                     vision_fov=math.radians(120),
-                                                     color=color)
 
-                if isinstance(asset, TrackedOrigin):
-                    optitrack_group.add_point(id=id,
-                                              x=0.0,
-                                              y=0.0,
-                                              color=[0.5, 0.5, 0.5])
+        self.algorithm_distributed.prediction()
+        self.algorithm_centralized.prediction()
 
-                    self.statics[id] = FRODO_Static(id=id, asset=asset)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _prepare_plotting(self):
-        self.plotter.add_rectangle(id='testbed', mid=[0, 0], x=3, y=3, fill=[0.9, 0.9, 0.9])
-        group_robots: Group = self.plotter.add_group(id='robots')
-        self.plotter.add_group(id='optitrack')
-        self.plotter.add_group(id='algorithm')
-        self.plotter.add_group(id='agents')
-        self.plotter.add_group(id='aruco_objects')
-
-        self.plotter.add_video("FRODO 1", "frodo1", 5000, placeholder=False)
-        self.plotter.add_video("FRODO 2", "frodo2", 5000, placeholder=False)
-        self.plotter.add_video("FRODO 3", "frodo3", 5000, placeholder=False)
-        self.plotter.add_video("TESTBED", "localhost", 8199, placeholder=False)
+    def _correction(self):
+        ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _read_agents(self, timeout):
-        if self.read_worker_pool is None or len(self.read_worker_pool.workers) != len(self.agents):
-            self._set_agent_read_pool()
+    def _update_centralized(self):
+        if self.algorithm_state != AlgorithmState.RUNNING:
+            return
+
+        # Update the real agents
+        for agent_id, agent_container in self.agents.items():
+
+            # 1. Clear measurements
+            agent_container.centralized_algorithm_agent.measurements.clear()
+
+            # 2. Add measurements from the real agent
+            for measurement in agent_container.testbed_object.measurements:
+                to_id = measurement.object_to.id
+
+                algorithm_measurement = AlgorithmAgentMeasurement(
+                    source=self.algorithm_centralized.agents[agent_id],
+                    source_index=self.algorithm_centralized.agents[agent_id].index,
+                    target=self.algorithm_centralized.agents[to_id],
+                    target_index=self.algorithm_centralized.agents[to_id].index,
+                    measurement=np.asarray([measurement.relative.x, measurement.relative.y, measurement.relative.psi]),
+                    measurement_covariance=measurement.covariance
+                )
+
+                agent_container.centralized_algorithm_agent.measurements.append(algorithm_measurement)
+
+        # Update the statics
+        for static_id, static_container in self.statics.items():
+
+            # 1. Clear measurements (should be empty anyway)
+            static_container.algorithm_agent.measurements.clear()
+
+            # 2. Check if the static has been moved and trigger an error here. For now, we assume that statics stay in the same position
+            static_position_new = np.asarray(
+                [static_container.testbed_object.state.x, static_container.testbed_object.state.y])
+            if np.linalg.norm(static_position_new - static_container.algorithm_agent.state.as_array()) > 0.02:
+                self.logger.error(
+                    f"Static {static_id} moved. New position: {static_position_new}, original position: {static_container.algorithm_agent.state.as_array()}")
+
+        # Update the centralized algorithm
+        self.algorithm_centralized.update()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _update_distributed(self):
+        if self.algorithm_state != AlgorithmState.RUNNING:
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _calculate_estimation_errors(self):
+
+        for agent_id, agent_container in self.agents.items():
+            x_true = agent_container.testbed_object.state.x
+            y_true = agent_container.testbed_object.state.y
+            psi_true = agent_container.testbed_object.state.psi
+
+            x_estimated = agent_container.centralized_algorithm_agent.state.x
+            y_estimated = agent_container.centralized_algorithm_agent.state.y
+            psi_estimated = agent_container.centralized_algorithm_agent.state.psi
+
+            agent_container.error = AgentError(
+                x=x_true - x_estimated,
+                y=y_true - y_estimated,
+                psi=psi_true - psi_estimated,
+            )
+
+
+# === FRODO APPLICATION CLI COMMAND SET ================================================================================
+class FRODO_Application_CLI(CommandSet):
+    name = 'frodo_app_cli'
+
+    def __init__(self, app: FRODO_Application):
+        super().__init__(self.name)
+        self.app = app
+
+        joystick_command_set = CommandSet('joystick')
+        assign_joystick_command = Command(name='assign',
+                                          function=self._assign_joystick,
+                                          description='Assign a joystick to a robot',
+                                          allow_positionals=True,
+                                          arguments=[
+                                              CommandArgument(name='joystick', type=int,
+                                                              short_name='j',
+                                                              description='ID of the joystick'),
+                                              CommandArgument(name='robot',
+                                                              short_name='r',
+                                                              type=str,
+                                                              description='ID of the robot')
+                                          ]
+                                          )
+
+        joystick_command_set.addCommand(assign_joystick_command)
+
+        remove_joystick_command = Command(name='remove',
+                                          function=self._remove_joystick,
+                                          description='Remove a joystick from an agent',
+                                          allow_positionals=False,
+                                          arguments=[
+                                              CommandArgument(name='robot',
+                                                              short_name='r',
+                                                              type=str,
+                                                              optional=True,
+                                                              default=None,
+                                                              description='ID of the robot to remove the joystick from'),
+                                              CommandArgument(name='joystick',
+                                                              short_name='j',
+                                                              type=int,
+                                                              optional=True,
+                                                              default=None,
+                                                              description='ID of the joystick to remove'
+                                                              )
+                                          ]
+                                          )
+
+        joystick_command_set.addCommand(remove_joystick_command)
+
+        start_command = Command(name='init',
+                                function=self.app.init_application, )
+
+        self.addCommand(start_command)
+
+        self.addChild(joystick_command_set)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _assign_joystick(self, joystick: int, robot: str):
+
+        # 1. get the joystick from the joystick manager
+        joystick = self.app.joystick_manager.getJoystickById(joystick)
+
+        if joystick is None:
+            self.app.logger.warning(f'Joystick with ID {joystick} does not exist')
+            return
+
+        # 1. Check if this joystick is already assigned to a robot
+        for r in self.app.manager.robots.values():
+            if joystick == r.interfaces.joystick:
+                self.app.logger.warning(f'Joystick {joystick.id} is already assigned to robot {r.id}')
+                return
+
+        # 2. Assign the joystick to the robot
+        robot = self.app.manager.getRobotById(robot)
+        robot.interfaces.assignJoystick(joystick)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _remove_joystick(self, robot: str = None, joystick: int = None):
+
+        if robot is None and joystick is None:
+            self.app.logger.warning('Either robot or joystick must be specified')
+            return
+
+        if robot is not None and joystick is not None:
+            self.app.logger.warning('Either robot or joystick must be specified, not both')
+            return
+
+        if robot is not None:
+            robot = self.app.manager.getRobotById(robot)
+            if robot is None:
+                self.app.logger.warning(f'Robot with ID {robot} does not exist')
+                return
+            robot.interfaces.removeJoystick()
         else:
-            self.read_worker_pool.reset()
+            joystick = self.app.joystick_manager.getJoystickById(joystick)
+            if joystick is None:
+                self.app.logger.warning(f'Joystick with ID {joystick} does not exist')
+                return
 
-        self.read_worker_pool.start()
-        results = self.read_worker_pool.wait(timeout=timeout)
+            owner_found = False
+            for robot in self.app.manager.robots.values():
+                if joystick == robot.interfaces.joystick:
+                    robot.interfaces.removeJoystick()
+                    owner_found = True
+                    break
 
-        if not all(results):
-            self.logger.warning(f"Read Agents: Not all workers finished successfully: {results}")
-            self.logger.warning(f"Errors: {self.read_worker_pool.errors}")
-
-        data = {}
-
-        for id, agent in self.agents.items():
-            data[id] = agent.measurements
-
-        return data
+            if not owner_found:
+                self.app.logger.warning(f'Joystick {joystick.id} is not assigned to any robot')
+                return
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _set_agent_read_pool(self):
-        workers = []
-        for key, agent in self.agents.items():
-            workers.append(ThreadWorker(start=False, function=Callback(function=agent.readRobotData)))
-        pool = WorkerPool(workers)
-        self.read_worker_pool = pool
+
+    # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------
 
 
-# ======================================================================================================================
-def start_frodo_application():
-    app = FRODO_Application(enable_tracking=True, start_webapp=True)
+if __name__ == '__main__':
+    app = FRODO_Application()
     app.init()
     app.start()
+
     while True:
-        time.sleep(20)
-
-
-# ======================================================================================================================
-if __name__ == '__main__':
-    start_frodo_application()
+        time.sleep(10)

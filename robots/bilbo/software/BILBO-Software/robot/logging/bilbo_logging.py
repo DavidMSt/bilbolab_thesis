@@ -1,10 +1,16 @@
-from collections import deque
-from copy import copy
-from datetime import datetime
-import threading
+from __future__ import annotations
 
-from core.utils.delayed_executor import delayed_execution
+import queue
+import time
+from collections import deque
+from copy import copy, deepcopy
+import threading
+from typing import Callable
+
+from robot.bilbo_definitions import BILBO_DynamicState
 # === OWN PACKAGES =====================================================================================================
+from robot.core import set_logging_provider, LoggingProvider, get_main_provider
+from robot.bilbo_core import BILBO_Core
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from robot.drive.bilbo_drive import BILBO_Drive
@@ -14,19 +20,19 @@ from robot.logging.bilbo_sample import BILBO_Sample
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample, SAMPLE_BUFFER_LL_SIZE
 from robot.sensors.bilbo_sensors import BILBO_Sensors
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.dict_utils import copy_dict, optimized_deepcopy
-from core.utils.events import EventListener
+from core.utils.dict_utils import copy_dict, optimized_deepcopy, optimized_generate_empty_copies
+from core.utils.events import EventListener, event_definition, Event
 from core.utils.csv_utils import CSVLogger
-from paths import experiments_path
 from core.utils.dataclass_utils import from_dict, asdict_optimized
 from core.utils.time import PerformanceTimer, TimeoutTimer
 from core.utils.logging_utils import Logger
 from core.utils.h5 import H5PyDictLogger
 from core.utils.exit import register_exit_callback
 from core.utils.delayed_executor import delayed_execution
+from robot.settings import experiments_path
 
-logger = Logger("Logging")
-logger.setLevel('DEBUG')
+# === GLOBAL SETTINGS ==================================================================================================
+SAMPLE_TIMEOUT_TIME = 0.5
 
 
 # === Callbacks ========================================================================================================
@@ -36,114 +42,122 @@ class BILBO_Logging_Callbacks:
     initialized: CallbackContainer
 
 
+@event_definition
+class BILBO_Logging_Events:
+    sample: Event = Event(data_type=BILBO_Sample)
+    error: Event
+    initialized: Event
+
+
 # === BILBO Logging ====================================================================================================
-class BILBO_Logging:
+class BILBO_Logging(LoggingProvider):
+    core: BILBO_Core
     comm: BILBO_Communication
     control: BILBO_Control
     sensors: BILBO_Sensors
     estimation: BILBO_Estimation
     drive: BILBO_Drive
+    experiment_handler: BILBO_ExperimentHandler
 
-    general_sample_collect_function: callable
+    callbacks: BILBO_Logging_Callbacks
+    events: BILBO_Logging_Events
 
     sample: BILBO_Sample
-    _sample_buffer: (None, list[dict])
 
+    # -- Private Variables --
     _h5Logger: H5PyDictLogger
+    _sample_timeout_timer: TimeoutTimer
+    _num_samples: int = 0
+    _samples_queue: queue.Queue
 
-    SAMPLE_BUFFER_SIZE = 1 * 60 * 100
+    _lock: threading.Lock
 
-    _sample_buffer_ll: list[dict]
-    _csvLogger: CSVLogger
+    # -- Caches for optimized data access --
+    _copy_cache_full: list
+    _copy_cache_ll: list
+    _out_samples: list[dict]
 
-    _rx_stm32_event_listener: EventListener
+    _initialized: bool = False
 
-    def __init__(self, comm: BILBO_Communication,
+    # === INIT =========================================================================================================
+    def __init__(self,
+                 core: BILBO_Core,
+                 comm: BILBO_Communication,
                  control: BILBO_Control,
                  sensors: BILBO_Sensors,
                  estimation: BILBO_Estimation,
                  drive: BILBO_Drive,
                  experiment_handler: BILBO_ExperimentHandler,
-                 general_sample_collect_function: callable):
-
+                 ):
+        # --- Argument handling ---
+        self.core = core
         self.comm = comm
         self.control = control
         self.sensors = sensors
         self.estimation = estimation
         self.drive = drive
         self.experiment_handler = experiment_handler
-        self.general_sample_collect_function = general_sample_collect_function
 
-        self.comm.spi.callbacks.rx_samples.register(self._stm32samples_callback)
-        self.sample = BILBO_Sample()
+        # --- Logger ---
+        self.logger = Logger('LOGGING', level='DEBUG')
+        # --- Core Settings ---
+        set_logging_provider(self)
+        self.core.events.sample.data_type = BILBO_Sample
 
-        self._sample_timeout_timer = TimeoutTimer(timeout_time=2, timeout_callback=self._sample_timeout_callback)
+        # --- Logger Callbacks and Events ---
+        self.callbacks = BILBO_Logging_Callbacks()
+        self.events = BILBO_Logging_Events()
 
+        # --- Tick ---
+        self.tick = 0
+
+        # --- Samples Queue ---
+        self._samples_queue = queue.Queue()
+
+        # --- H5 Logger ---
         self._h5Logger = H5PyDictLogger(filename='log.h5')
-        self._csvLogger = CSVLogger()
-        self._num_samples = 0
-        self.sample_index = None
+        self._initialize_caches()
+        self._lock = threading.Lock()
 
-        register_exit_callback(self.close, priority=2)
+        # --- Sample Timeout Timer ---
+        self._sample_timeout_timer = TimeoutTimer(timeout_time=SAMPLE_TIMEOUT_TIME,
+                                                  timeout_callback=self._timeout_callback)
 
-        self._sample_buffer = None
-        self._index_sample_buffer = 0
-        self._first_sample_received = False
-        self._startup_phase = True  # Tracks if the logging is still in the startup phase, because in here it might be
-        self._running = False
-        # throwing warnings
-        self._dict_cache = None
-        self._dict_cache_ll = None
-        self._sample_deepcopy_cache = None
-        self._sample_buffer_ll = []
-        self._lock = threading.Lock()  # Lock to ensure thread-safe access to the ring buffer.
-        self._samples_queue = deque()  # Queue for low-level sample batches.
-    # === METHODS ======================================================================================================
-    def init(self) -> None:
-        self._build_sample_buffer()
+        # -- Exit Handling --
+        register_exit_callback(self.close)
+
+    # === PROPERTIES ===================================================================================================
+    @property
+    def tick(self):
+        return self._tick
+
+    @tick.setter
+    def tick(self, value):
+        self._tick = value
 
     # ------------------------------------------------------------------------------------------------------------------
-    def start(self) -> None:
-        delayed_execution(lambda: setattr(self, '_startup_phase', False), 1)
-        self._running = True
-    # ------------------------------------------------------------------------------------------------------------------
-    def getNumSamples(self):
+    @property
+    def num_samples(self):
         return self._num_samples
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def startFileLogging(self, filename: str = None, folder: str = None):
-        # Append yyyymmdd_hhmmss to the filename
-        time_value = datetime.fromtimestamp(self.comm.wifi.getTime())
-
-        if filename is not None:
-            filename = f"{filename}_{time_value:%Y%m%d_%H%M%S}.csv"
-        else:
-            filename = f"{time_value:%Y%m%d_%H%M%S}.csv"
-
-        folder = f"{experiments_path}/{folder}" if folder is not None else experiments_path
-
-        logger.debug(f"Start logging to {folder}/{filename}")
-
-        self._csvLogger.make_file(filename, folder)
+    # === METHODS ======================================================================================================
+    def init(self):
+        ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getData(self, index_start: int = None, index_end: int = None, signals=None, hdf5_only: bool = True,
-                deepcopy: bool = False) -> (list, dict):
-        """
-        Retrieves a list of logged samples between index_start and index_end.
-        This function checks whether the requested samples are in the local ring buffer or in the HDF5 file.
-        The global sample count is tracked by self._num_samples.
-        The local ring buffer holds the most recent samples corresponding to indices from
-        (self._num_samples - len(self._sample_buffer)) to (self._num_samples - 1) if the buffer is full.
-        If the buffer is not full, samples are stored sequentially in the beginning of the list.
+    def start(self):
+        # --- Register STM32 Callback ---
+        self.comm.spi.callbacks.rx_samples.register(self._stm32Samples_callback)
 
-        Parameters:
-            index_start (int): Starting global sample index.
-            index_end (int): Ending global sample index.
-            hdf5_only (bool): If True, only read samples from the H5Py logger.
-            deepcopy (bool): If True, deep copy samples retrieved from the local ring buffer.
-        """
+    # ------------------------------------------------------------------------------------------------------------------
+    def close(self):
+        self._h5Logger.close()
+        self._sample_timeout_timer.stop()
+        self._sample_timeout_timer.close()
+        self.logger.info('Closing BILBO Logging')
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def getData(self, signals, start_index: int = None, end_index: int = None):
         if signals is not None and not isinstance(signals, list):
             signals = [signals]
 
@@ -152,200 +166,226 @@ class BILBO_Logging:
             if total_samples == 0:
                 return []
             # Default indices if not provided.
-            if index_start is None:
-                index_start = 0
-            if index_end is None or index_end > total_samples:
-                index_end = total_samples
-            if index_start < 0:
-                index_start = 0
+            if start_index is None:
+                start_index = 0
+            if end_index is None or end_index > total_samples:
+                end_index = total_samples
+            if start_index < 0:
+                start_index = 0
 
-        # If hdf5_only is requested, return all samples from H5.
-        if hdf5_only:
-            samples = self._h5Logger.getSampleBatch(slice(index_start, index_end), signals=signals)
-            return samples
-
-        raise Exception("HDF5 only mode supported yet.")
-        # with self._lock:
-        #     buffer_size = len(self._sample_buffer)
-        #     result = []
-        #
-        #     # Determine the global index corresponding to the first sample in the ring buffer.
-        #     if total_samples < buffer_size:
-        #         ring_buffer_start_index = 0  # All samples are in the buffer sequentially.
-        #     else:
-        #         ring_buffer_start_index = total_samples - buffer_size
-        #
-        #     # Fetch older samples from HDF5 if needed.
-        #     if index_start < ring_buffer_start_index:
-        #         h5_end = min(index_end, ring_buffer_start_index)
-        #         with self._h5Logger.lock:
-        #             h5_data = self._h5Logger.dataset[index_start:h5_end]
-        #         h5_samples = self._h5Logger.record_to_dict(h5_data)
-        #         result.extend(h5_samples)
-        #
-        #     # Fetch samples from the local ring buffer if the requested range includes recent samples.
-        #     if index_end > ring_buffer_start_index:
-        #         for i in range(max(index_start, ring_buffer_start_index), index_end):
-        #             if total_samples < buffer_size:
-        #                 # Buffer not full: direct mapping.
-        #                 local_idx = i
-        #             else:
-        #                 # Buffer is full: map global index to local index using circular indexing.
-        #                 local_idx = (self._index_sample_buffer + (i - ring_buffer_start_index)) % buffer_size
-        #             if deepcopy:
-        #                 result.append(optimized_deepcopy(self._sample_buffer[local_idx], self._sample_deepcopy_cache))
-        #             else:
-        #                 result.append(self._sample_buffer[local_idx])
-        #     return result
+        samples = self._h5Logger.getSampleBatch(slice(start_index, end_index), signals=signals)
+        return samples
 
     # ------------------------------------------------------------------------------------------------------------------
-    def stopFileLogging(self):
-        self._csvLogger.close()
-        logger.debug("Stop file logging")
+    """
+    This gets called by the BILBO object every time the sample event from the low-level STM32 is fired.
+    """
 
-    def close(self, *args, **kwargs) -> None:
-        self._h5Logger.close()
-        self._sample_timeout_timer.close()
-        self._running = False
-        logger.info("Logging closed")
-
-    # ------------------------------------------------------------------------------------------------------------------
     def update(self) -> None:
-
-        if not self._running:
-            return
-
+        # Reset timeout early
         self._sample_timeout_timer.reset()
 
-        # Collect the sample from all submodules
-        timer = PerformanceTimer(name='Update', print_output=False)
-        sample: dict = self._collectData()
+        # Ensure H5 + buffers are ready
+        self._initialize_caches()
 
-        # Send the current sample via WI-FI
-        if self.comm.wifi.connected:
-            self.comm.wifi.sendStream(sample)
+        # Collect current HL data (real values from submodules)
+        hl = self._collectDataFromSubmodules()
 
-        # Process all available low-level sample batches from the queue.
+        # Drain all available batches
+        index_batch = 0
         while True:
             try:
-                batch = self._samples_queue.popleft()
-            except IndexError:
+                batch = self._samples_queue.get_nowait()
+                index_batch += 1
+                if index_batch == 2:
+                    self.logger.important("Working on the second batch!")
+            except queue.Empty:
                 break
 
-            for i in range(0, SAMPLE_BUFFER_LL_SIZE):
-                self._dict_cache = copy_dict(dict_from=sample,
-                                             dict_to=self._sample_buffer[self._index_sample_buffer],
-                                             structure_cache=self._dict_cache)
-                self._sample_buffer[self._index_sample_buffer]['general']['tick'] = sample['general']['tick'] + i
-                self._sample_buffer[self._index_sample_buffer]['general']['time'] = (sample['general']['tick'] + i) * \
-                                                                                    sample['general']['sample_time_ll']
+            performance_timer = PerformanceTimer(name='Update', print_output=False)
+            n = len(batch)
 
-                self._dict_cache_ll = copy_dict(dict_from=batch[i],
-                                                dict_to=self._sample_buffer[self._index_sample_buffer]['lowlevel'],
-                                                structure_cache=self._dict_cache_ll)
+            # 1) Copy HL leaves into each preallocated out-sample
+            #    Use HL-only cache (faster) or _copy_cache_full (safe).
+            cache_for_hl = getattr(self, "_copy_cache_hl", self._copy_cache_full)
+            for i in range(n):
+                dst = self._out_samples[i]
+                copy_dict(dict_from=hl, dict_to=dst, structure_cache=cache_for_hl)
 
-                self._index_sample_buffer = (self._index_sample_buffer + 1) % len(self._sample_buffer)
+            # 2) Patch tick/time and copy LL per sample
+            base_tick = hl['general']['tick'] + index_batch * SAMPLE_BUFFER_LL_SIZE
+            dt_ll = hl['general']['sample_time_ll']
+            for i in range(n):
+                dst = self._out_samples[i]
+                ti = base_tick + i
+                dst['general']['tick'] = ti
+                dst['general']['time'] = ti * dt_ll
 
-            # --------------------------------------------------------------------------------------------------------------
-            self._h5Logger.appendSamples(self._get_last_samples(SAMPLE_BUFFER_LL_SIZE))
+                copy_dict(dict_from=batch[i],
+                          dict_to=dst['lowlevel'],
+                          structure_cache=self._copy_cache_ll)
 
-            # --------------------------------------------------------------------------------------------------------------
-            if self._csvLogger.is_open:
-                self._csvLogger.log_event(self._get_last_samples(SAMPLE_BUFFER_LL_SIZE))
+            # 3) Persist in one shot; reuse the same preallocated list
+            self._h5Logger.appendSamples(self._out_samples[:n])
 
-            if self.sample_index is None:
-                self._sample_timeout_timer.start()
-                self.sample_index = from_dict(BILBO_Sample,
-                                              self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick
+            # 5) Checking
+            ll_tick = self._out_samples[0]['lowlevel']['general']['tick']
+            if ll_tick != self.tick:
+                self.logger.error(f"Sample index mismatch: BILBO_Logging: {self.tick} != LL: {ll_tick}")
 
-                # Check if the sample index started at 0
-                if self.sample_index != SAMPLE_BUFFER_LL_SIZE - 1:
-                    logger.warning(
-                        f"Sample index started at {self.sample_index - SAMPLE_BUFFER_LL_SIZE + 1} instead of 0")
-                else:
-                    logger.debug("Logging started with sample index 0")
-            else:
-                self.sample_index += SAMPLE_BUFFER_LL_SIZE
+            # 4) Bookkeeping
+            self._num_samples += n
+            self._tick += n
 
-            self._num_samples += SAMPLE_BUFFER_LL_SIZE
+            # 6) Debug Logs
+            if self.num_samples % 2000 == 0:
+                self.logger.debug(f"Samples collected: {self.num_samples}")
 
-            if self._num_samples % 2000 == 0:
-                logger.debug(f"Samples collected: {self._num_samples}")
+            elapsed_time = performance_timer.stop()
+            if elapsed_time > 0.1:
+                self.logger.debug(f"Logging took {elapsed_time:.2f}s")
 
-        self.sample = from_dict(BILBO_Sample, self._sample_buffer[self._index_sample_buffer - 1])
+            # 7) Extract the most recent sample
+            self.sample = from_dict(BILBO_Sample, self._out_samples[0])
 
-        if self.sample_index != from_dict(BILBO_Sample,
-                                          self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick:
-            logger.warning(
-                f"Sample index mismatch: HL: {self.sample_index} != LL: {from_dict(BILBO_Sample, self._sample_buffer[self._index_sample_buffer - 1]).lowlevel.general.tick}")
+            # 8) Send events
+            self.events.sample.set(data=self.sample)
+            self.core.events.sample.set(data=self.sample)
 
-        elapsed_time = timer.stop()
-
-        if elapsed_time > 0.1 and not self._startup_phase:
-            logger.warning(f"Logging took {elapsed_time:.2f}s")
+            # 9) Send data via wifi
+            self._sendSamplesToWifi(self._out_samples)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def deepcopy_samples(self, samples: list[dict]) -> list[dict]:
-        if not isinstance(samples, list):
-            samples = [samples]
-        new_samples = []
-        for i in range(len(samples)):
-            new_samples.append(optimized_deepcopy(samples[i], self._sample_deepcopy_cache))
-        return new_samples
 
     # === PRIVATE METHODS ==============================================================================================
-    def _collectData(self) -> dict:
+    # ------------------------------------------------------------------------------------------------------------------
+    def _stm32Samples_callback(self, samples, *args, **kwargs):
+        self._samples_queue.put(copy(samples))
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _initialize_caches(self) -> None:
+        if self._initialized:
+            return
+
+        # Schema based on dataclasses (structure only, values None)
+        hl_template = asdict_optimized(BILBO_Sample())  # includes 'lowlevel' in the dataclass
+        ll_template = asdict_optimized(BILBO_LL_Sample())
+
+        schema = dict(hl_template)
+        schema['lowlevel'] = ll_template
+
+        self._h5Logger.init(schema)
+        self._h5Logger.start('w')
+
+        # Preallocate N dicts with identical structure and None leaves
+        self._out_samples = optimized_generate_empty_copies(schema, SAMPLE_BUFFER_LL_SIZE)
+
+        # Build caches using dict_to (out_samples[0]) so shapes match destination
+        self._copy_cache_full = copy_dict(dict_from=schema,
+                                          dict_to=self._out_samples[0],
+                                          structure_cache=None)
+        self._copy_cache_ll = copy_dict(dict_from=ll_template,
+                                        dict_to=self._out_samples[0]['lowlevel'],
+                                        structure_cache=None)
+
+        # OPTIONAL: build a HL-only cache that excludes 'lowlevel' paths
+        # Comment these two lines out if you prefer to keep _copy_cache_full.
+        # self._copy_cache_hl = [p for p in self._copy_cache_full if (p and p[0] != 'lowlevel')]
+
+        self._initialized = True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _timeout_callback(self):
+        self.logger.error('Sample timeout')
+        self.events.error.set(flags={'type': 'sample_timeout'})
+        self.core.events.error.set(data={'type': 'sample_timeout'})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _collectDataFromSubmodules(self) -> dict:
         sample = {
-            'general': self.general_sample_collect_function(),
+            'general': get_main_provider().getSample(),
+            'connection': self.core.getConnectionStatus(as_dict=True),
             'control': self.control.getSample(),
             'sensors': self.sensors.getSample(),
             'estimation': self.estimation.getSample(),
             'drive': self.drive.getSample(),
-            'experiment': self.experiment_handler.getSample(),
+            # 'experiment': self.experiment_handler.getSample(),
         }
         return sample
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _stm32samples_callback(self, samples: list[dict]):
-        self._samples_queue.append(copy(samples))
+    def _sendSamplesToWifi(self, samples: list[dict]):
+        samples_out = [optimized_deepcopy(s, self._copy_cache_full) for s in samples]
+        self.comm.wifi.sendStream(samples_out, 'samples')
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _build_sample_buffer(self):
-        sample = self._collectData()
-        sample['lowlevel'] = asdict_optimized(BILBO_LL_Sample())
 
-        _, self._sample_deepcopy_cache = optimized_deepcopy(sample)
-        self._sample_buffer = [optimized_deepcopy(sample, self._sample_deepcopy_cache) for _ in
-                               range(self.SAMPLE_BUFFER_SIZE)]
+# === HELPERS ==========================================================================================================
+def getStateTrajectoryFromLoggingSamples(samples: dict) -> list[BILBO_DynamicState]:
+    """
+    Build a list of BILBO_DynamicState from flat-list logging samples.
 
-        _ = from_dict(BILBO_Sample, self._sample_buffer[0])
+    Expected keys (lists of equal length ideally):
+      - 'lowlevel.estimation.state.v'
+      - 'lowlevel.estimation.state.theta'
+      - 'lowlevel.estimation.state.theta_dot'
+      - 'lowlevel.estimation.state.psi'
+      - 'lowlevel.estimation.state.psi_dot'
 
-        self._h5Logger.init(sample)
-        self._h5Logger.start('w')
+    Missing keys (or those explicitly set to None) are treated as zeros.
+    If series have differing lengths, the longest length is used and shorter
+    series are padded with zeros.
+    """
+    # Mapping from dataclass field -> logging key
+    keymap = {
+        "v": 'lowlevel.estimation.state.v',
+        "theta": 'lowlevel.estimation.state.theta',
+        "theta_dot": 'lowlevel.estimation.state.theta_dot',
+        "psi": 'lowlevel.estimation.state.psi',  # psi_key from your prep is None -> leave default if missing
+        "psi_dot": 'lowlevel.estimation.state.psi_dot',
+        # x_key, y_key are intentionally None -> default to 0.0
+        "x": None,
+        "y": None,
+    }
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _get_last_samples(self, n: int) -> list:
-        start = self._index_sample_buffer - n
-        if start < 0:
-            # Take the tail of the list and then the beginning
-            return self._sample_buffer[start:] + self._sample_buffer[:self._index_sample_buffer]
+    # Pull series from samples; normalize to lists or None
+    series: dict[str, list | None] = {}
+    for field, key in keymap.items():
+        if key is None:
+            series[field] = None
         else:
-            return self._sample_buffer[start:self._index_sample_buffer]
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _get_value_by_path(self, sample: dict, path: str):
-        """
-        Retrieves a value from a nested dictionary using a dot-separated path.
-        """
-        keys = path.split('.')
-        value = sample
-        for key in keys:
-            if isinstance(value, dict):
-                value = value.get(key, None)
+            seq = samples.get(key, None)
+            # Accept both list and tuple; otherwise treat as missing
+            if isinstance(seq, (list, tuple)):
+                series[field] = list(seq)
             else:
-                return None
-        return value
+                series[field] = None
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _sample_timeout_callback(self, *args, **kwargs):
-        logger.error("Sample timeout")
+    # Determine trajectory length (use the longest available series)
+    lengths = [len(seq) for seq in series.values() if isinstance(seq, list)]
+    n = max(lengths) if lengths else 0
+    if n == 0:
+        return []
+
+    def get_val(field: str, i: int) -> float:
+        seq = series.get(field)
+        if isinstance(seq, list) and i < len(seq):
+            try:
+                return float(seq[i])
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
+    traj: list[BILBO_DynamicState] = []
+    for i in range(n):
+        state = BILBO_DynamicState(
+            x=get_val("x", i),  # will be 0.0 since key is None
+            y=get_val("y", i),  # will be 0.0 since key is None
+            v=get_val("v", i),
+            theta=get_val("theta", i),
+            theta_dot=get_val("theta_dot", i),
+            psi=get_val("psi", i),  # 0.0 if key missing/None
+            psi_dot=get_val("psi_dot", i),
+        )
+        traj.append(state)
+
+    return traj

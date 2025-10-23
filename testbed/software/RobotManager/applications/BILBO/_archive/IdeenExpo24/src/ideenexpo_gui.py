@@ -1,4 +1,4 @@
-from extensions.gui.nodejs_gui.nodejs_gui import NodeJSGui
+from extensions.gui._archive.nodejs_gui.nodejs_gui import NodeJSGui
 from extensions.joystick._archive.joystick_manager import Joystick
 
 

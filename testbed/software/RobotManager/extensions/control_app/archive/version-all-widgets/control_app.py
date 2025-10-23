@@ -1324,14 +1324,14 @@ class ControlApp:
                         # New: Handle page change requests.
                         if "page" in data:
                             new_page = int(data.get("page"))
-                            if 0 <= new_page < self.current_group.pages:
+                            if 0 <= new_page < self.current_group.groups:
                                 self.current_group.current_page = new_page
                         else:
                             direction = data.get("direction")
                             if direction == "up":
                                 self.current_group.current_page = max(0, self.current_group.current_page - 1)
                             elif direction == "down":
-                                self.current_group.current_page = min(self.current_group.pages - 1,
+                                self.current_group.current_page = min(self.current_group.groups - 1,
                                                                       self.current_group.current_page + 1)
                         await self.broadcast_current_group()
 

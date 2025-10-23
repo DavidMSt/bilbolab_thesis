@@ -12,7 +12,6 @@
 #include "core.h"
 #include "robot-control_std.h"
 
-#define SIMPLEXMOTION_CAN_REMOTE_TIMEOUT 5
 
 #define SIMPLEXMOTION_RS485_REG_NAME 9
 #define SIMPLEXMOTION_RS485_REG_SW_REV 1

@@ -7,13 +7,16 @@ import threading
 DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 64
 
+
 class Display:
+
+    thread: threading.Thread | None = None
+
     def __init__(self, i2c_port=1, i2c_address=0x3C, fps=2, page_display_duration=2, page_border_thickness=3):
         """
         Initialize the SH1106 OLED display with multi-page support and optimized threading.
         """
         self.serial = i2c(port=i2c_port, address=i2c_address)
-        x = spi()
         self.device = sh1106(self.serial)
         self.width = self.device.width
         self.height = self.device.height
@@ -139,13 +142,15 @@ class Display:
     def stop(self):
         """Stop the display thread."""
         self.running = False
+        self.device.clear()
+        self.device.cleanup()
 
     def _run(self):
         """Thread function to update the display at the specified FPS."""
         while self.running:
             start_time = time.time()
             self.update()
-            time.sleep(max(0, 1 / self.fps - (time.time() - start_time)))
+            time.sleep(max(0.0, 1 / self.fps - (time.time() - start_time)))
 
     def displayText(self, text, return_time=2):
         """Display the given text on the TextPage and switch to it."""

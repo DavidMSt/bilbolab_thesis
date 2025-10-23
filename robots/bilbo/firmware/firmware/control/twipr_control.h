@@ -117,6 +117,8 @@ typedef enum control_event_t {
 	CONTROL_EVENT_ERROR = 0,
 	CONTROL_MODE_CHANGED = 1,
 	CONTROL_CONFIG_CHANGED = 2,
+	VIC_CHANGED = 3,
+	TIC_CHANGED = 4,
 } control_event_t;
 
 typedef struct control_event_message_data_t {

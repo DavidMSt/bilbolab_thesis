@@ -3,7 +3,7 @@ import logging
 import time
 import orjson
 
-from core.communication.protocol import Protocol, Message
+from core.communication.wifi.udp.protocols.protocol import Protocol, Message
 from .udp_base_protocol import UDP_Base_Protocol
 
 
@@ -11,11 +11,11 @@ from .udp_base_protocol import UDP_Base_Protocol
 @dataclasses.dataclass
 class UDP_JSON_Message(Message):
     data: dict = dataclasses.field(default_factory=dict)
-    address: (str, dict) = None
-    source: str = None
-    type: str = None
+    address: str | dict = None
+    source: str | None = None
+    type: str | None = None
     meta: dict = dataclasses.field(default_factory=dict)
-    event: str = None
+    event: str | None = None
 
     def __init__(self):
         self.meta = {

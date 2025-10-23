@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 from os import environ
+from typing import Callable
 
 environ['SDL_JOYSTICK_HIDAPI_PS4_RUMBLE'] = '1'
 environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
@@ -13,12 +14,12 @@ import pygame
 # === CUSTOM PACKAGES ==================================================================================================
 from extensions.joystick.joystick_mappings import joystick_mappings
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback, CallbackGroup
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event, EventFlag
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 
+
 # ======================================================================================================================
-logger = Logger(name='Joysticks')
 
 
 # ======================================================================================================================
@@ -194,6 +195,8 @@ class JoystickManager:
 
         self.callbacks = JoystickManager_Callbacks()
 
+        self.logger = Logger(name='Joysticks')
+
         self._exit = False
         self._event_thread = threading.Thread(target=self._eventThreadFunction, daemon=True)
         self._joystick_thread = threading.Thread(target=self._joystickThreadFunction, daemon=True)
@@ -214,7 +217,7 @@ class JoystickManager:
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        logger.info(f"Joystick manager started. Accept unmapped joysticks: {self.accept_unmapped_joysticks}")
+        self.logger.info(f"Joystick manager started. Accept unmapped joysticks: {self.accept_unmapped_joysticks}")
         self._event_thread.start()
         self._joystick_thread.start()
 
@@ -237,7 +240,7 @@ class JoystickManager:
                 # self._process.terminate()
                 self._process.join()
 
-        logger.info("Close joystick manager")
+        self.logger.info("Close joystick manager")
 
     # ------------------------------------------------------------------------------------------------------------------
     def rumbleJoystick(self, device_id, strength=0.4, duration=200):
@@ -253,14 +256,14 @@ class JoystickManager:
     # ------------------------------------------------------------------------------------------------------------------
     def getJoystickById(self, id):
         if id not in self.joysticks.keys():
-            logger.info(f"Joystick with ID {id} not connected")
+            self.logger.info(f"Joystick with ID {id} not connected")
             return None
 
         return self.joysticks[id]
 
     # ------------------------------------------------------------------------------------------------------------------
     def waitForJoystick(self, already_connected=False, timeout=None):
-        joystick: Joystick = None
+        joystick: Joystick | None = None
 
         if already_connected and len(self.joysticks) > 0:
             joystick = next(iter(self.joysticks.values()))
@@ -278,7 +281,7 @@ class JoystickManager:
         self.callbacks.new_joystick.remove(callback_obj)
 
         if joystick is None:
-            logger.warning(f"Wait for joystick timeout ({timeout} s). No joystick connected")
+            self.logger.warning(f"Wait for joystick timeout ({timeout} s). No joystick connected")
             return None
 
         joystick.rumble(strength=0.5, duration=500)
@@ -290,12 +293,12 @@ class JoystickManager:
         joystick.register(data)
 
         if joystick.name not in joystick_mappings and not self.accept_unmapped_joysticks:
-            logger.debug(f"Joystick {joystick.name} not found in mapping. Discarding.")
+            self.logger.debug(f"Joystick {joystick.name} not found in mapping. Discarding.")
             del joystick
             return
 
         self.joysticks[joystick.id] = joystick
-        logger.info(f"New Joystick connected. Type: {joystick.name}. ID: {joystick.id}")
+        self.logger.info(f"New Joystick connected. Type: {joystick.name}. ID: {joystick.id}")
 
         for callback in self.callbacks.new_joystick:
             callback(joystick)
@@ -304,7 +307,7 @@ class JoystickManager:
     def _removeJoystick(self, data):
         joystick = self.joysticks[(data['device_id'])]
         self.joysticks.pop(joystick.id)
-        logger.info(f"Joystick disconnected. Type: {joystick.name}. ID: {joystick.id}")
+        self.logger.info(f"Joystick disconnected. Type: {joystick.name}. ID: {joystick.id}")
         for callback in self.callbacks.joystick_disconnected:
             callback(joystick)
 
@@ -376,7 +379,7 @@ class JoystickManager:
 # ======================================================================================================================
 @event_definition
 class JoystickEvents:
-    button: ConditionEvent = ConditionEvent(flags=[('button', (str, int))])
+    button: Event = Event(flags=EventFlag('button', list))
 
 
 @callback_definition
@@ -403,7 +406,7 @@ class Joystick:
     axis: list
 
     num_axes: int
-    mapping: (dict, None)
+    mapping: dict | None
     events: JoystickEvents
     button_callbacks: list['JoystickButtonCallback']
 
@@ -419,6 +422,8 @@ class Joystick:
         self.axis = []
         self.button_callbacks = []
         # self.joyhat_callbacks = []
+
+        self.logger = Logger('Joystick')
 
         self.events = JoystickEvents()
         self.callbacks = JoystickCallbacks()
@@ -441,10 +446,10 @@ class Joystick:
         self.num_axes = data['num_axes']
 
         if self.name in joystick_mappings:
-            logger.debug(f"Joystick mapping found for {self.name}")
+            self.logger.debug(f"Joystick mapping found for {self.name}")
             self.mapping = joystick_mappings[self.name]
         else:
-            logger.debug(f"No mapping found for {self.name}")
+            self.logger.debug(f"No mapping found for {self.name}")
             self.mapping = None
 
         self.axis = [0] * self.num_axes
@@ -452,7 +457,7 @@ class Joystick:
         self.rumble(strength=0.2, duration=200)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setButtonCallback(self, button: (int, str), function: callable, event: str = 'down', parameters: dict = None,
+    def setButtonCallback(self, button: int | str, function: Callable, event: str = 'down', parameters: dict = None,
                           lambdas: dict = None):
 
         if isinstance(button, list):
@@ -467,7 +472,7 @@ class Joystick:
         self.callbacks.clearAllCallbacks()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setJoyHatCallback(self, direction: str, function: callable, parameters: dict = None, lambdas: dict = None):
+    def setJoyHatCallback(self, direction: str, function: Callable, parameters: dict = None, lambdas: dict = None):
         raise NotImplementedError("setJoyHatCallback not implemented for joystick")
         # if isinstance(direction, list):
         #     for dir in direction:
@@ -484,7 +489,7 @@ class Joystick:
         self.manager.rumbleJoystick(self.instance_id, strength, duration)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getAxis(self, axis: (int, str)):
+    def getAxis(self, axis: int | str):
 
         value = 0
 
@@ -494,10 +499,10 @@ class Joystick:
         elif isinstance(axis, str):
             if self.mapping is not None:
                 if axis in self.mapping['AXES']:
-                    axis_num = self.mapping['AXES'][axis]
+                    axis_num: int = self.mapping['AXES'][axis]
                     value = self.axis[axis_num]
             else:
-                logger.debug(f"No mapping found for {self.name} while reading axis {axis}")
+                self.logger.debug(f"No mapping found for {self.name} while reading axis {axis}")
 
         return value
 
@@ -506,7 +511,7 @@ class Joystick:
         callbacks_num = [callback for callback in self.button_callbacks if
                          callback.button == button and callback.event == 'down']
 
-        logger.debug(f"Joystick: {self.id}, Event: Button {button} down")
+        self.logger.debug(f"Joystick: {self.id}, Event: Button {button} down")
 
         for callback in callbacks_num:
             callback(joystick=self, button=button, event='down')
@@ -526,7 +531,7 @@ class Joystick:
                     callback_container: CallbackContainer = getattr(self.callbacks, button_name)
                     callback_container.call()
 
-        self.events.button.set(resource=button, flags={'button': [button, button_name]})
+        self.events.button.set(data=button, flags={'button': [button, button_name]})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buttonUp(self, button):
@@ -551,7 +556,7 @@ class JoyHatCallback:
     callback: Callback
     direction: str
 
-    def __init__(self, direction, function: callable, parameters: dict = None, lambdas: dict = None):
+    def __init__(self, direction, function: Callable, parameters: dict = None, lambdas: dict = None):
         self.direction = direction
         self.callback = Callback(function, parameters, lambdas)
 
@@ -570,7 +575,7 @@ class JoystickButtonCallback:
     callback: Callback
     event: str
 
-    def __init__(self, button: (str, int), event, function: callable, parameters: dict = None, lambdas: dict = None):
+    def __init__(self, button: str | int, event, function: Callable, parameters: dict = None, lambdas: dict = None):
         """
 
         :param button:
@@ -596,7 +601,7 @@ def main():
     jm.init()
     jm.start()
 
-    logger.setLevel('DEBUG')
+    # logger.setLevel('DEBUG')
 
     joystick = jm.waitForJoystick(timeout=2)
 

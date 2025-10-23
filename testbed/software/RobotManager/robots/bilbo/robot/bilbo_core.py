@@ -1,10 +1,14 @@
-from core.communication.wifi.tcp.protocols.tcp_json_protocol import TCP_JSON_Message
-from core.device import Device
+import time
+
+from core.communication.protocol import JSON_Message
+from core.communication.device_server import Device
+from core.utils.archives.events import pred_flag_key_equals
+from robots.bilbo.robot.bilbo_data import BILBO_Sample, bilboSampleFromDict
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import event_definition, ConditionEvent
+from core.utils.events import event_definition, Event, EventFlag
 from core.utils.logging_utils import Logger, LOG_LEVELS
-from core.utils.sound.sound import speak
+from core.utils.sound.sound import speak, playSound
 
 
 @callback_definition
@@ -15,19 +19,29 @@ class BILBO_Core_Callbacks:
 # ======================================================================================================================
 @event_definition
 class BILBO_Core_Events:
-    control_mode_changed: ConditionEvent = ConditionEvent(flags=[('mode', BILBO_Control_Mode)])
-    control_configuration_changed: ConditionEvent
-    control_error: ConditionEvent
-    stream: ConditionEvent
+    control_mode_changed: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
+    control_configuration_changed: Event
+    control_error: Event
+
+    stream: Event = Event(data_type=BILBO_Sample)
+    initialized: Event = Event(data_type=BILBO_Sample)
 
 
 @event_definition
 class BILBO_Interface_Events:
-    resume: ConditionEvent
-    revert: ConditionEvent
+    resume: Event
+    revert: Event
+    stop: Event
+    start: Event
 
 
 class BILBO_Core:
+    device: Device
+
+    _last_stream_time: float = None
+    initialized: bool = False
+    tick: int | None = None
+    data: BILBO_Sample | None = None
 
     # ==================================================================================================================
     def __init__(self, robot_id: str, device: Device):
@@ -39,21 +53,56 @@ class BILBO_Core:
         self.events = BILBO_Core_Events()
         self.interface_events = BILBO_Interface_Events()
 
-        self.device.events.event.on(self._handleLogMessage, flags={'event': 'log'}, input_resource=True)
-        self.device.events.event.on(self._handleSpeakEventMessage, flags={'event': 'speak'}, input_resource=True)
-        self.device.events.stream.on(self._handleStream, input_resource=True)
+        self.device.events.event.on(self._handleLogMessage,
+                                    predicate=pred_flag_key_equals('event', 'log'),
+                                    input_data=True)
+
+        self.device.events.event.on(self._handleSpeakEventMessage,
+                                    predicate=pred_flag_key_equals('event', 'speak'),
+                                    input_data=True)
+
+        # self.device.events.stream.on(self._handleStream, input_data=True)
+        self.device.callbacks.stream.register(self._handleStream)
 
     # ------------------------------------------------------------------------------------------------------------------
     def beep(self, frequency=1000, time_ms=250, repeats=1):
-        self.device.function(function='beep', data={'frequency': frequency, 'time_ms': time_ms, 'repeats': repeats})
+        self.device.executeFunction(function_name='beep',
+                                    arguments={'frequency': frequency, 'time_ms': time_ms, 'repeats': repeats})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def speakOnHost(self, text):
+        speak(f"{self.id}: {text}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def playSound(self, sound_id):
+        playSound(sound_id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def speak(self, text):
-        self.device.function(function='speak', data={'message': text})
+        self.device.executeFunction(function_name='speak', arguments={'message': text})
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleLogMessage(self, log_message: TCP_JSON_Message):
+    def setResumeEvent(self):
+        self.logger.info(f"Set Resume Event")
+        self.interface_events.resume.set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def setRevertEvent(self):
+        self.logger.info(f"Set Revert Event")
+        self.interface_events.revert.set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def setStopEvent(self):
+        self.logger.info(f"Set Stop Event")
+        self.interface_events.stop.set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handleLogMessage(self, log_message: JSON_Message):
         log_data = log_message.data
+
+        if 'level' not in log_data or 'message' not in log_data or 'logger' not in log_data:
+            self.logger.error(f"Invalid log message: {log_data}")
+            return
 
         if log_data['level'] == LOG_LEVELS['ERROR']:
             self.logger.error(f"({log_data['logger']}): {log_data['message']}")
@@ -68,11 +117,38 @@ class BILBO_Core:
             speak(f"{self.id}: {log_data['message']}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleSpeakEventMessage(self, message: TCP_JSON_Message):
+    def _handleSpeakEventMessage(self, message: JSON_Message):
         data = message.data
         if data.get('message', None) is not None:
             speak(f"{self.id}: {data['message']}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleStream(self, data):
-        self.events.stream.set(data)
+    def _handleStream(self, stream: JSON_Message):
+        current_time = time.monotonic()
+
+        samples = stream.data['data']
+
+        self.data = bilboSampleFromDict(samples[0])
+        tick = self.data.general.tick
+
+        if self.tick is not None:
+            if (tick - self.tick) != 10:
+                self.logger.warning(
+                    f"Tick difference: {tick - self.tick}. Last tick: {self.tick}, current tick: {tick}.")
+
+        if self._last_stream_time is not None:
+            time_between_streams = current_time - self._last_stream_time
+            if time_between_streams > 0.3:
+                self.logger.warning(
+                    f"Time between two streams: {time_between_streams:.2f} seconds. "
+                    f"Last tick: {self.tick}, current tick: {tick}.")
+
+        self._last_stream_time = current_time
+        self.tick = tick
+
+        if not self.initialized:
+            self.initialized = True
+            self.logger.info(f"First sample received.")
+            self.events.initialized.set(data=self.data)
+
+        self.events.stream.set(data=self.data)

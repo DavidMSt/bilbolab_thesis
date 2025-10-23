@@ -29,7 +29,7 @@ def example_1():
     # Get Environment by type
     o3 = w.getObjectsByType(world.Object)
 
-    w.removeObject(obj)
+    w.removeWidget(obj)
 
     pass
 

@@ -1,0 +1,5 @@
+discard = b'\x00\x00'
+local = b'\x00\x01'
+echo = b'\x00\x02'
+server = b'\x00\x03'
+broadcast = b'\x00\x04'

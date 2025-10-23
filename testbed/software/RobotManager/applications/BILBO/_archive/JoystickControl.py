@@ -95,10 +95,10 @@ class SimpleTwiprJoystickControl:
         Prints the ID of the new robot to the GUI.
         """
         if ENABLE_SPEECH_OUTPUT:
-            speak(f"Robot {robot.id} connected")
+            speak(f"Robot {robot.column_id} connected")
         else:
             playSound('robot_connected')
-        self.gui.print(f"New Robot connected: {robot.id}")
+        self.gui.print(f"New Robot connected: {robot.column_id}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _robotDisconnected_callback(self, robot, *args, **kwargs):
@@ -107,10 +107,10 @@ class SimpleTwiprJoystickControl:
         Prints the ID of the disconnected robot to the GUI.
         """
         if ENABLE_SPEECH_OUTPUT:
-            speak(f"Robot {robot.id} disconnected")
+            speak(f"Robot {robot.column_id} disconnected")
         else:
             playSound('robot_disconnected')
-        self.gui.print(f"Robot disconnected: {robot.id}")
+        self.gui.print(f"Robot disconnected: {robot.column_id}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _newJoystickConnected_callback(self, joystick, *args, **kwargs):
@@ -157,7 +157,7 @@ class SimpleTwiprJoystickControl:
 
                     # Check if it is assigned to another robot in the list of robots
                     if joystick_id in self.joystick_control.assignments.keys():
-                        connected_robot_id = self.joystick_control.assignments[joystick_id].robot.id
+                        connected_robot_id = self.joystick_control.assignments[joystick_id].robot.column_id
 
                         if connected_robot_id == robot_id:
                             # Do nothing, we have already assigned this robot

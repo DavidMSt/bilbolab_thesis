@@ -1,237 +1,240 @@
-from core.device_manager import DeviceManager
-from core.device import Device
-from robots.bilbo.manager.bilbo_manager_cli import BILBO_Manager_CommandSet
+from core.communication.device_server import DeviceServer, Device
+from core.communication.protocol import JSON_Message
+from core.utils.archives.events import pred_flag_key_equals
 from core.utils.callbacks import callback_definition, CallbackContainer
-from robots.bilbo.robot.bilbo import BILBO
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, TWIPR_IDS, TWIPR_PASSWORD, TWIPR_REMOTE_START_COMMAND, \
-    TWIPR_USER_NAME, TWIPR_REMOTE_STOP_COMMAND
-from robots.bilbo.manager.robotscanner import RobotScanner
-from core.utils.time import delayed_execution
+from core.utils.dataclass_utils import from_dict
+from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
-from core.utils.network.ssh import executeCommandOverSSH
+from core.utils.network.network import getHostIP
+from core.utils.network.ssh import isScriptRunningViaSSH, executePythonViaSSH, stopPythonViaSSH
+from extensions.cli.cli import CommandSet
+from robots.bilbo.manager.bilbo_manager_cli import BILBO_Manager_CommandSet
+from robots.bilbo.manager.bilbo_scanner import BILBO_NetworkScanner
+from robots.bilbo.robot.bilbo import BILBO
+from robots.bilbo.robot.bilbo_definitions import (BILBO_Information, BILBO_HOST_NAMES, BILBO_USER_NAME,
+                                                  BILBO_PASSWORD, PATH_TO_MAIN, PYENV_SHIM_PATH)
 
-# === GLOBAL VARIABLES =================================================================================================
-logger = Logger('ROBOT MANAGER')
-logger.setLevel('INFO')
 
-
-# ======================================================================================================================
+# === BILBO MANAGER ====================================================================================================
 @callback_definition
-class TWIPR_Manager_Callbacks:
+class BILBO_Manager_Callbacks:
     new_robot: CallbackContainer
     robot_disconnected: CallbackContainer
     stream: CallbackContainer
 
 
-# ======================================================================================================================
-class BILBO_Manager:
-    """
-    Manages the connection and control of BILBO robots using the DeviceManager.
-    Handles device events and provides methods to interact with connected robots.
-    """
+@event_definition
+class BILBO_Manager_Events:
+    new_robot: Event = Event(copy_data_on_set=False)
+    robot_disconnected: Event = Event(copy_data_on_set=False)
+    stream: Event
 
-    deviceManager: DeviceManager
-    callbacks: TWIPR_Manager_Callbacks
+
+class BILBO_Manager:
+    device_server: DeviceServer
+    callbacks: BILBO_Manager_Callbacks
+    events: BILBO_Manager_Events
+
     robots: dict[str, BILBO]
 
-    robot_auto_start: bool
-    network_scanner: RobotScanner = None
+    bilbo_scanner: BILBO_NetworkScanner | None
 
-    def __init__(self, robot_auto_start=True):
-        """
-        Initializes the TWIPR_Manager instance by setting up the device manager,
-        registering callbacks, and initializing internal dictionaries for robots and callbacks.
-        """
-        self.deviceManager = DeviceManager()
-        self.deviceManager.callbacks.new_device.register(self._newDevice_callback)
-        self.deviceManager.callbacks.device_disconnected.register(self._deviceDisconnected_callback)
-        self.deviceManager.callbacks.stream.register(self._deviceStream_callback)
+    _devices: dict[str, Device]
 
+    cli: CommandSet
+
+    # === INIT =========================================================================================================
+    def __init__(self, host: str | None = None, enable_scanner: bool = False, autostop_robots: bool = True,):
+        if host is None:
+            host = getHostIP()
+
+        self.host = host
+
+        self.callbacks = BILBO_Manager_Callbacks()
+        self.events = BILBO_Manager_Events()
+
+        self.autostop_robots = autostop_robots
+
+        # Devices. Holds all 'bilbo' devices. After sending the correct identification we will append it to BILBOs
+        self._devices = {}
+
+        # Robots
         self.robots = {}
 
-        self.callbacks = TWIPR_Manager_Callbacks()
+        # Device Server
+        self.device_server = DeviceServer(host)
+        # self.device_server.events.new_device.on(flags={'type': 'bilbo'}, callback=self._newDevice_event)
 
-        self.scanner = None
-        self.robot_auto_start = robot_auto_start
-        if self.robot_auto_start:
-            self.scanner = RobotScanner(TWIPR_IDS)
-            self.scanner.callbacks.found.register(self._scannerRobotFound_callback)
-            self.scanner.callbacks.lost.register(self._scannerRobotLost_callback)
+        self.device_server.events.new_device.on(callback=self._newDevice_event,
+                                                predicate=pred_flag_key_equals('type', 'bilbo'))
 
-        # Command Set
-        self.cli_command_set = BILBO_Manager_CommandSet(self)
+        self.device_server.events.device_disconnected.on(callback=self._deviceDisconnected_event,
+                                                         predicate=pred_flag_key_equals('type', 'bilbo'))
+
+        # Scanner
+        if enable_scanner:
+            self.bilbo_scanner = BILBO_NetworkScanner(BILBO_HOST_NAMES)
+            self.bilbo_scanner.events.found.on(self._scannerFoundRobot_event)
+        else:
+            self.bilbo_scanner = None
+
+        # CLI
+        self.cli = BILBO_Manager_CommandSet(self)
+
+        # Logger
+        self.logger = Logger("BILBO Manager", "DEBUG")
 
         # Exit Handler
-        register_exit_callback(self.close)
+        register_exit_callback(self.close, priority=10)
 
-    @property
-    def connected_robots(self):
-        """
-        Returns the number of connected robots.
-        :return: Number of connected robots
-        """
-        return len(self.robots)
-
-    # ------------------------------------------------------------------------------------------------------------------
+    # === METHODS ======================================================================================================
     def init(self):
-        """
-        Initializes the twipr manager.
-        """
-        self.deviceManager.init()
+        self.device_server.init()
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        """
-        Starts the BILBO Manager by initiating the device manager.
-        """
-        logger.info('Starting BILBO Manager')
-        self.deviceManager.start()
-        if self.scanner is not None:
-            self.scanner.start()
+        self.logger.info("Starting Bilbo Manager")
+        self.device_server.start()
+
+        if self.bilbo_scanner is not None:
+            self.bilbo_scanner.start()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def close(self, *args, **kwargs):
-        logger.info("Close BILBO Manager")
-        if self.scanner is not None:
-            active_robots = self.scanner.active_robots
-            for name, address in active_robots.items():
-                self._stopTWIPRRemote(name, address)
+    def close(self) -> None:
+        self.logger.info("Closing Bilbo Manager")
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def getRobotById(self, robot_id):
-        """
-        Retrieves a robot instance by its ID.
-
-        :param robot_id: ID of the robot to retrieve
-        :return: BILBO robot instance if found, None otherwise
-        """
-        if robot_id not in self.robots.keys():
-            logger.warning(f"No robot with id {robot_id} is connected.")
-            return None
-
-        return self.robots[robot_id]
+        if self.autostop_robots:
+            for robot in self.robots.values():
+                self._stopBilboRemotely(robot.information.id, robot.information.address)
 
     # ------------------------------------------------------------------------------------------------------------------
     def emergencyStop(self):
-        """
-        Issues an emergency stop command to all connected robots.
-        """
-        logger.warning("Emergency Stop")
+        self.logger.warning("Emergency Stop")
         for robot in self.robots.values():
-            robot.control.setControlMode(BILBO_Control_Mode.OFF)
+            robot.stop()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setRobotControlMode(self, robot, mode):
-        """
-        Sets the control mode of a specified robot.
-
-        :param robot: Robot instance or robot ID
-        :param mode: Control mode to set (either as a string or an integer)
-        """
-        if isinstance(robot, str):
-            if robot in self.robots.keys():
-                robot = self.robots[robot]
-            else:
-                return
-
-        if isinstance(mode, str):
-            control_mode_dict = {"off": 0, "direct": 1, "balancing": 2, "speed": 3}
-            if mode in control_mode_dict.keys():
-                mode = control_mode_dict[mode]
-            else:
-                return
-
-        robot.setControlMode(mode)
+    def getRobotById(self, robot_id):
+        if robot_id in self.robots:
+            return self.robots[robot_id]
+        else:
+            return None
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _newDevice_callback(self, device: Device, *args, **kwargs):
-        """
-        Callback for handling new device connections.
+    # === PRIVATE METHODS ==============================================================================================
 
-        :param device: The newly connected device
-        """
-        # Check if the device has the correct class and type
-        if not (device.information.device_class == 'robot' and device.information.device_type == 'bilbo'):
+    def _newDevice_event(self, device: Device):
 
-            if device.information.device_class == 'robot':
-                logger.warning(f"Robot attempted to connect with type {device.information.device_type}")
+        if device.information.device_id in self._devices:
+            self.logger.warning(f"Device with id {device.information.device_id} already exists")
             return
 
-        robot = BILBO(device)
-
-        # Check if this robot ID is already used
-        if robot.device.information.device_id in self.robots.keys():
-            logger.warning(f"New Robot connected, but ID {robot.device.information.device_id} is already in use")
-
-        self.robots[robot.device.information.device_id] = robot
-
-        self.cli_command_set.addChild(robot.interfaces.cli_command_set)
-
-        logger.info(f"New Robot connected with ID: \"{robot.device.information.device_id}\"")
-
-        for callback in self.callbacks.new_robot:
-            callback(robot, *args, **kwargs)
+        self._devices[device.information.device_id] = device
+        self.logger.info(f"New bilbo device connected: {device.information.device_id}")
+        device.callbacks.event.register(self._deviceEvent_callback, inputs={'device': device})
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _deviceDisconnected_callback(self, device, *args, **kwargs):
-        """
-        Callback for handling device disconnections.
+    def _deviceDisconnected_event(self, device: Device):
+        # Go through all robots and check if this device is one of them
+        for robot in self.robots.values():
+            if robot.device == device:
+                self._removeBilbo(robot)
+                break
 
-        :param device: The disconnected device
-        """
-        if device.information.device_id not in self.robots:
+    # ------------------------------------------------------------------------------------------------------------------
+    def _deviceEvent_callback(self, event_message: JSON_Message, device: Device):
+        # Check if the event is a BILBO handshake. Only then do we accept it as a BILBO
+        if event_message.event == 'bilbo_handshake':
+            try:
+                bilbo_information = from_dict(BILBO_Information, event_message.data)
+            except Exception as e:
+                self.logger.error(f"Error in bilbo handshake: {e}. Message: {event_message}")
+                return
+
+            # Check if this device is already registered
+            if bilbo_information.id in self.robots:
+                self.logger.warning(f"Device with ID {bilbo_information.id} already registered")
+                return
+
+            self._addNewBilbo(device, bilbo_information)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _addNewBilbo(self, device: Device, information: BILBO_Information):
+
+        # Remove the callback for the event
+        device.callbacks.event.remove(self._deviceEvent_callback)
+
+        # Create a new BILBO robot
+        new_robot = BILBO(device, information)
+        self.robots[information.id] = new_robot
+
+        # Add the robot's CLI command set
+        self.cli.addChild(new_robot.interfaces.cli_command_set)
+
+        # Call the callbacks and events for a new robot
+        self.callbacks.new_robot.call(new_robot)
+        self.events.new_robot.set(data=new_robot)
+
+        self.logger.info(f"New Bilbo \"{information.id}\" connected")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _removeBilbo(self, robot: BILBO):
+        self.robots.pop(robot.id)
+        self._devices.pop(robot.device.information.device_id)
+
+        # Remove the robot's CLI command set
+        self.cli.removeChild(robot.interfaces.cli_command_set)
+
+        self.callbacks.robot_disconnected.call(robot)
+        self.events.robot_disconnected.set(data=robot)
+
+        self.logger.info(f"Bilbo \"{robot.id}\" disconnected")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _scannerFoundRobot_event(self, data, *args, **kwargs):
+
+        name = data[0]
+        ip_address = data[1]
+
+        # Check if this robot is already connected
+        if name in self.robots:
             return
 
-        robot = self.robots[device.information.device_id]
-        self.robots.pop(device.information.device_id)
-
-        logger.warning(f"Robot {device.information.device_id} disconnected")
-
-        # Remove the CLI Command Set
-        self.cli_command_set.removeChild(robot.interfaces.cli_command_set)
-
-        for callback in self.callbacks.robot_disconnected:
-            callback(robot, *args, **kwargs)
+        self._startBilboRemotely(name, ip_address)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _deviceStream_callback(self, stream, device, *args, **kwargs):
-        """
-        Callback for handling data streams from devices.
+    def _startBilboRemotely(self, name, ip_address, *args, **kwargs):
+        self.logger.info(f"Starting {name} remotely via ssh")
 
-        :param stream: The data stream
-        :param device: The device sending the stream
-        """
-        if device.information.device_id in self.robots.keys():
-            for callback in self.callbacks.stream:
-                callback(stream, self.robots[device.information.device_id], *args, **kwargs)
+        # 1. Check if the main script is already running
+        is_running, _ = isScriptRunningViaSSH(hostname=ip_address,
+                                              username=BILBO_USER_NAME,
+                                              password=BILBO_PASSWORD,
+                                              path_to_script=PATH_TO_MAIN
+                                              )
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _scannerRobotFound_callback(self, name, ip_address, *args, **kwargs):
-        logger.info(f"Scanner found robot {name} with IP address {ip_address}")
-        self._startTWIPRRemote(name, ip_address)
+        if is_running:
+            self.logger.warning(f"Main script is already running on {name}")
+            return
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _scannerRobotLost_callback(self, name, ip_address, *args, **kwargs):
-        logger.info(f"Scanner lost robot {name} with IP address {ip_address}")
+        # 2. Start the main script
+        started = executePythonViaSSH(ip_address,
+                                      BILBO_USER_NAME,
+                                      BILBO_PASSWORD,
+                                      PATH_TO_MAIN,
+                                      pyenv_shim_path=PYENV_SHIM_PATH,
+                                      use_pyenv=True)
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _startTWIPRRemote(self, name, ip_address, *args, **kwargs):
-        logger.info(f"Starting {name} remotely via ssh")
-        delayed_execution(executeCommandOverSSH, delay=0.25, hostname=ip_address,
-                          username=TWIPR_USER_NAME,
-                          password=TWIPR_PASSWORD,
-                          command=TWIPR_REMOTE_STOP_COMMAND)
-
-        delayed_execution(executeCommandOverSSH, delay=2, hostname=ip_address,
-                          username=TWIPR_USER_NAME,
-                          password=TWIPR_PASSWORD,
-                          command=TWIPR_REMOTE_START_COMMAND)
+        if started:
+            self.logger.info(f"Started main script on {name}")
+        else:
+            self.logger.error(f"Failed to start main script on {name}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _stopTWIPRRemote(self, name, ip_address, *args, **kwargs):
-        logger.info(f"Stopping {name} remotely via ssh")
-        executeCommandOverSSH(hostname=ip_address,
-                              username=TWIPR_USER_NAME,
-                              password=TWIPR_PASSWORD,
-                              command=TWIPR_REMOTE_STOP_COMMAND)
+    def _stopBilboRemotely(self, name, ip_address, *args, **kwargs):
+        self.logger.info(f"Stopping {name} remotely via ssh")
+        stopped = stopPythonViaSSH(ip_address,
+                                   BILBO_USER_NAME,
+                                   BILBO_PASSWORD,
+                                   PATH_TO_MAIN)

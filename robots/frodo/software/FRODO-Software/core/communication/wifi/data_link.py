@@ -1,5 +1,7 @@
-from utils.callbacks import Callback
-from utils.logging_utils import Logger
+from typing import Any
+
+from core.utils.callbacks import Callback
+from core.utils.logging_utils import Logger
 import dataclasses
 import inspect
 
@@ -154,7 +156,7 @@ class CommandArgument:
     description: str
     type: type
     optional: bool = False
-    default: any = None
+    default: Any = None
 
 
 # ----------------------------------------------------------------------------------------------------------------------

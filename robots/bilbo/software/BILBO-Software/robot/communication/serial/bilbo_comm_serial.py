@@ -6,7 +6,7 @@ from robot.communication.serial.bilbo_serial_messages import BILBO_SERIAL_MESSAG
 from robot.lowlevel.stm32_general import twipr_firmware_revision
 from core.utils.callbacks import callback_definition, CallbackContainer, OPTIONAL
 from core.utils.ctypes_utils import CType
-from core.utils.events import ConditionEvent, event_definition
+from core.utils.events import Event, event_definition, EventFlag
 from core.utils.logging_utils import Logger
 
 logger = Logger("BILBO SERIAL")
@@ -26,10 +26,10 @@ class BILBO_Serial_Communication_Callbacks:
 # === EVENTS ===========================================================================================================
 @event_definition
 class BILBO_Serial_Communication_Events:
-    rx: ConditionEvent
-    event = ConditionEvent(flags=[('type', type)])
-    error: ConditionEvent
-    debug: ConditionEvent
+    rx: Event
+    event = Event(flags=EventFlag('type', type))
+    error: Event
+    debug: Event
 
 
 # === BILBO_Serial_Communication =======================================================================================
@@ -59,7 +59,7 @@ class BILBO_Serial_Communication:
         self.interface.close()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def writeValue(self, module: int = 0, address: (int, list) = None, value=None, type=ctypes.c_uint8):
+    def writeValue(self, module: int = 0, address: int | list = None, value=None, type=ctypes.c_uint8):
         self.interface.write(module, address, value, type)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -107,4 +107,4 @@ class BILBO_Serial_Communication:
             else:
                 callback(message)
 
-        self.events.event.set(resource=message, flags={'type': type(message)})
+        self.events.event.set(data=message, flags={'type': type(message)})

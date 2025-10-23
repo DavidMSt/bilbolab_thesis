@@ -23,7 +23,6 @@ uint32_t tick_global = 0;
 
 /* Register Entries */
 
-
 core_utils_RegisterEntry<bool, void> reg_f_reset(&register_map,
 REG_ADDRESS_F_FIRMWARE_RESET, &twipr_firmware, &TWIPR_Firmware::reset);
 
@@ -58,6 +57,10 @@ REG_ADDRESS_RW_MAX_WHEEL_SPEED,
 core_utils_RegisterEntry<void, rgb_color_struct_t> reg_set_ext_led(
 		&register_map, REG_ADDRESS_F_EXTERNAL_LED, &extender,
 		&RobotControl_Extender::rgbLEDStrip_extern_setColor);
+
+core_utils_RegisterEntry<void, external_led_colors_struct_t> reg_set_all_ext_led(
+		&register_map, REG_ADDRESS_F_ALL_EXTERNAL_LEDS, &extender,
+		&RobotControl_Extender::rgbLEDStrip_extern_setAllColors);
 
 /* Debug 1 Flag Register Entry */
 core_utils_RegisterEntry<uint8_t, uint8_t> reg_debug1(&register_map,
@@ -133,32 +136,26 @@ core_utils_RegisterEntry<void, void> reg_abort_seq(&register_map,
 REG_ADDRESS_F_SEQUENCE_STOP, &twipr_firmware.sequencer,
 		&TWIPR_Sequencer::abortSequence);
 
-
-core_utils_RegisterEntry<bool, twipr_control_configuration_t> reg_set_control_config(&register_map,
+core_utils_RegisterEntry<bool, twipr_control_configuration_t> reg_set_control_config(
+		&register_map,
 		REG_ADDRESS_F_CONTROL_SET_CONFIGURATION, &twipr_firmware.control,
 		&TWIPR_ControlManager::setControlConfiguration);
 
-
 core_utils_RegisterEntry<bool, bool> reg_enable_vel_int_cont(&register_map,
-		REG_ADRESS_F_ENABLE_VELOCITY_INTEGRAL_CONTROL, &twipr_firmware.control,
+REG_ADRESS_F_ENABLE_VELOCITY_INTEGRAL_CONTROL, &twipr_firmware.control,
 		&TWIPR_ControlManager::enableVIC);
 
-
 core_utils_RegisterEntry<bool, float> reg_set_theta_offset(&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_THETA_OFFSET, &twipr_firmware.estimation,
+REG_ADDRESS_F_ESTIMATION_SET_THETA_OFFSET, &twipr_firmware.estimation,
 		&TWIPR_Estimation::setThetaOffset);
 
-
 core_utils_RegisterEntry<bool, bool> reg_enable_tic(&register_map,
-		REG_ADRESS_F_ENABLE_TIC, &twipr_firmware.control,
+REG_ADRESS_F_ENABLE_TIC, &twipr_firmware.control,
 		&TWIPR_ControlManager::enableTIC);
-
-
-
 
 /* Thread Attributes for Firmware and Control Tasks */
 const osThreadAttr_t firmware_task_attributes = { .name = "firmware",
-		.stack_size = 2560 * 4, .priority = (osPriority_t) osPriorityNormal, };
+		.stack_size = 4000 * 4, .priority = (osPriority_t) osPriorityNormal, };
 
 const osThreadAttr_t control_task_attributes = { .name = "control",
 		.stack_size = 2560 * 4, .priority = (osPriority_t) osPriorityNormal, };
@@ -229,7 +226,7 @@ void TWIPR_Firmware::helperTask() {
 	rc_rgb_led_side_1.setColor(0, 0, 0);
 	rc_rgb_led_side_1.state(1);
 
-	extender.rgbLEDStrip_extern_setColor( { .red = 2, .green = 2, .blue = 2 });
+	extender.rgbLEDStrip_extern_setColor( { .red = 10, .green = 0, .blue = 10 });
 
 	elapsedMillis debug_timer;
 
@@ -293,7 +290,7 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 
 	// Estimation module configuration
 	twipr_estimation_config_t twipr_estimation_config = { .drive = &this->drive,
-			.sensors = &this->sensors};
+			.sensors = &this->sensors };
 	this->estimation.init(twipr_estimation_config);
 
 	// Control module initialization
@@ -323,24 +320,15 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 
 	// ------------------------------------------------------------------
 #ifdef BILBO_DRIVE_SIMPLEXMOTION_RS485
-    simplexmotion_rs485_config_t config_motor_right =  {
-        		.modbus = &this->comm.modbus,
-    			.id = 2,
-    			.direction = 1,
-    			.torque_limit = 0.4
-        };
-    this->motor_right.init(config_motor_right);
+	simplexmotion_rs485_config_t config_motor_right = { .modbus =
+			&this->comm.modbus, .id = 2, .direction = 1, .torque_limit = 0.4 };
+	this->motor_right.init(config_motor_right);
 
-    simplexmotion_rs485_config_t config_motor_left =  {
-    		.modbus = &this->comm.modbus,
-			.id = 1,
-			.direction = -1,
-			.torque_limit = 0.4
-    };
-    this->motor_left.init(config_motor_left);
+	simplexmotion_rs485_config_t config_motor_left = { .modbus =
+			&this->comm.modbus, .id = 1, .direction = -1, .torque_limit = 0.4 };
+	this->motor_left.init(config_motor_left);
 
-
-	#endif
+#endif
 
 	// ------------------------------------------------------------------
 
@@ -506,7 +494,6 @@ void TWIPR_Firmware::task() {
 			rc_rgb_led_status.setColor(120, 0, 0);
 			break;
 		}
-
 
 		}
 

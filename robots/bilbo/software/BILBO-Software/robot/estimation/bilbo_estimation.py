@@ -2,22 +2,14 @@ import ctypes
 import dataclasses
 import enum
 
+import numpy as np
+
 import robot.lowlevel.stm32_addresses as addresses
+from robot.bilbo_definitions import BILBO_DynamicState
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.hardware import get_hardware_definition
+from robot.hardware import readHardwareDefinition
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 from core.utils.logging_utils import Logger
-
-
-@dataclasses.dataclass
-class TWIPR_Estimation_State:
-    x: float = 0.0
-    y: float = 0.0
-    v: float = 0.0
-    theta: float = 0.0
-    theta_dot: float = 0.0
-    psi: float = 0.0
-    psi_dot: float = 0.0
 
 
 class TWIPR_Estimation_Status(enum.IntEnum):
@@ -33,7 +25,7 @@ class TWIPR_Estimation_Mode(enum.IntEnum):
 @dataclasses.dataclass(frozen=True)
 class TWIPR_Estimation_Sample:
     status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.ERROR
-    state: TWIPR_Estimation_State = dataclasses.field(default_factory=TWIPR_Estimation_State)
+    state: BILBO_DynamicState = dataclasses.field(default_factory=BILBO_DynamicState)
     mode: TWIPR_Estimation_Mode = TWIPR_Estimation_Mode.TWIPR_ESTIMATION_MODE_VEL
 
 
@@ -42,7 +34,7 @@ class TWIPR_Estimation_Sample:
 class BILBO_Estimation:
     _comm: BILBO_Communication
 
-    state: TWIPR_Estimation_State
+    state: BILBO_DynamicState
     status: TWIPR_Estimation_Status
 
     mode: TWIPR_Estimation_Mode
@@ -50,18 +42,18 @@ class BILBO_Estimation:
     def __init__(self, comm: BILBO_Communication):
         self._comm = comm
 
-        self.state = TWIPR_Estimation_State()
+        self.state = BILBO_DynamicState()
         self.status = TWIPR_Estimation_Status.NORMAL
         self.mode = TWIPR_Estimation_Mode.TWIPR_ESTIMATION_MODE_VEL
-        self._comm.callbacks.rx_stm32_sample.register(self._onSample)
+        # self._comm.callbacks.rx_stm32_sample.register(self._onSample)
 
         self.logger = Logger('Estimation')
         self.logger.setLevel('DEBUG')
 
     # ==================================================================================================================
     def init(self):
-        hardware_definition = get_hardware_definition()
-        theta_offset = hardware_definition.get('settings', {}).get('theta_offset', 0.0)
+        hardware_definition = readHardwareDefinition()
+        theta_offset = hardware_definition.model.theta_offset
         self.setThetaOffset(theta_offset)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -80,7 +72,7 @@ class BILBO_Estimation:
 
     # ------------------------------------------------------------------------------------------------------------------
     def setThetaOffset(self, offset: float):
-        self.logger.info(f'Setting theta offset to {offset}')
+        self.logger.info(f'Setting theta offset to {np.rad2deg(offset):.2f} deg')
         success = self._comm.serial.executeFunction(
             module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
             address=addresses.TWIPR_EstimationAddresses.SET_THETA_OFFSET,

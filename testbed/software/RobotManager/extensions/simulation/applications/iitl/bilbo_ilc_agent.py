@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 
 from extensions.simulation.src import core
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
-from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, bilbo_eigenstructure_assignment_eigenvectors, \
-    bilbo_eigenstructure_assignment_poles, DEFAULT_BILBO_MODEL, BILBO_2D_Linear
+from extensions.simulation._archive.bilbo import BILBO_DynamicAgent, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS, \
+    BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, DEFAULT_BILBO_MODEL, BILBO_Dynamics_2D_Linear
 from extensions.simulation.src.utils import lib_control
 
 
@@ -42,9 +42,9 @@ class BILBO_ILC_Agent(BILBO_DynamicAgent):
                  *args,
                  **kwargs):
         if poles is None:
-            poles = bilbo_eigenstructure_assignment_poles
+            poles = BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES
 
-        eigenvectors = bilbo_eigenstructure_assignment_eigenvectors
+        eigenvectors = BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
 
         if model is None:
             model = DEFAULT_BILBO_MODEL
@@ -71,9 +71,9 @@ class BILBO_ILC_Agent(BILBO_DynamicAgent):
         self.e_j = np.zeros_like(self.reference)
 
         # Generate the 2D Dynamics for Learning
-        self.dynamics_2d_linear = BILBO_2D_Linear(model=self.model,
-                                                  Ts=self.Ts,
-                                                  poles=[self.poles[0], self.poles[1], self.poles[2], self.poles[3]])
+        self.dynamics_2d_linear = BILBO_Dynamics_2D_Linear(model=self.model,
+                                                           Ts=self.Ts,
+                                                           poles=[self.poles[0], self.poles[1], self.poles[2], self.poles[3]])
 
         # Initialize Learning Parameters
         self.L_j, self.Q_j = self.calculateLearningMatrices(self.r, self.s)
@@ -87,7 +87,7 @@ class BILBO_ILC_Agent(BILBO_DynamicAgent):
     # ==================================================================================================================
     def calculateLearningMatrices(self, r, s):
         # Calculate the transition matrix using the discrete-time linear model.
-        P = lib_control.calc_transition_matrix(self.dynamics_2d_linear.sys_disc, self.N)
+        P = lib_control.calc_transition_matrix(self.dynamics_2d_linear.sys, self.N)
         Qw = np.eye(self.N)
         Rw = r * np.eye(self.N)
         Sw = s * np.eye(self.N)

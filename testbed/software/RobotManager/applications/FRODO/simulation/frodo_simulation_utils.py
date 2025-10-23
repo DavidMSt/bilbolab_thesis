@@ -29,8 +29,43 @@ def get_fov_vectors(psi, fov):
 
 
 def is_in_fov(pos, psi, fov, radius, other_agent_pos):
+    pos = np.asarray(pos)
+    other_agent_pos = np.asarray(other_agent_pos)
     v1, v2 = get_fov_vectors(psi, fov)
     if vector_is_between(other_agent_pos - pos, v1, v2) and np.linalg.norm(other_agent_pos-pos) <= radius:
         return True
     else:
         return False
+
+
+
+def is_view_obstructed(observer_pos: np.ndarray,
+                       target_pos: np.ndarray,
+                       obstacles: list[tuple[np.ndarray, float]],
+                       epsilon: float = 1e-6) -> bool:
+    """
+    Determine whether the straight-line view from observer_pos to target_pos is obstructed
+    by any circular obstacle (center, radius) in `obstacles`. Radii should already reflect
+    object sizes (e.g., size/2 when size is a diameter).
+
+    The check computes the minimum distance from each obstacle center to the segment,
+    and flags an obstruction if that distance <= radius (with a tiny epsilon).
+    """
+    p = np.asarray(observer_pos, dtype=float).reshape(2)
+    q = np.asarray(target_pos, dtype=float).reshape(2)
+    seg = q - p
+    seg_len2 = float(seg @ seg)
+    if seg_len2 <= epsilon:
+        # Degenerate segment; treat as unobstructed
+        return False
+
+    for c, r in obstacles:
+        c = np.asarray(c, dtype=float).reshape(2)
+        # Project center onto the segment, clamp t to [0,1]
+        t = float(np.dot(c - p, seg) / seg_len2)
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        proj = p + t * seg
+        dist = np.linalg.norm(c - proj)
+        if dist <= (r + epsilon):
+            return True
+    return False

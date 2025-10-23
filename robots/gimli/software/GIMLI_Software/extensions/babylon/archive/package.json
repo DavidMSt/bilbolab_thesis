@@ -1,0 +1,20 @@
+{
+  "name": "pysim-visualization",
+  "version": "1.0.0",
+  "description": "BabylonJS environment for Pysim visualization",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^6.0.0",
+    "@babylonjs/gui": "^6.0.0"
+  },
+  "type": "module",
+  "devDependencies": {
+    "events": "^3.3.0",
+    "parcel": "^2.0.0",
+    "vite": "^6.3.5"
+  }
+}

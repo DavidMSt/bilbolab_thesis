@@ -7,6 +7,7 @@ from core.utils.ctypes_utils import STRUCTURE
 class BILBO_AddressTables(enum.IntEnum):
     REGISTER_TABLE_GENERAL = 0x01
 
+
 class BILBO_GeneralAddresses(enum.IntEnum):
     ADDRESS_FIRMWARE_STATE = 0x01
     ADDRESS_FIRMWARE_TICK = 0x02
@@ -15,6 +16,8 @@ class BILBO_GeneralAddresses(enum.IntEnum):
     ADDRESS_FIRMWARE_BEEP = 0x05
     ADDRESS_BOARD_REVISION = 0x06
     ADDRESS_FIRMWARE_EXTERNAL_LED = 0x07
+    ADDRESS_FIRMWARE_ALL_EXTERNAL_LED = 0x09
+
 
 @STRUCTURE
 class bilbo_external_rgb_struct:
@@ -22,6 +25,13 @@ class bilbo_external_rgb_struct:
         'red': ctypes.c_uint8,
         'green': ctypes.c_uint8,
         'blue': ctypes.c_uint8,
+    }
+
+
+@STRUCTURE
+class bilbo_all_external_leds_struct:
+    FIELDS = {
+        'colors': bilbo_external_rgb_struct * 16  # type: ignore
     }
 
 

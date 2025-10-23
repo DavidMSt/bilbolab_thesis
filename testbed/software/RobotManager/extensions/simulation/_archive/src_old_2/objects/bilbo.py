@@ -660,9 +660,9 @@ class BILBO_DynamicAgent(BILBO_Agent, core.agents.DynamicAgent):
             self.input = input
         if self.controller_v is not None and self.controller_psidot is not None:
             e_v = self.input['v'] - self.dynamics.state['v']
-            u_v = self.controller_v.update(e_v.value)
+            u_v = self.controller_v.updateConfig(e_v.value)
             e_psidot = self.input['psi_dot'] - self.dynamics.state['psi_dot']
-            u_psidot = self.controller_psidot.update(e_psidot.value)
+            u_psidot = self.controller_psidot.updateConfig(e_psidot.value)
             input_dynamics = self.dynamics.input_space.map([u_v + u_psidot, u_v - u_psidot])
         else:
             input_dynamics = self.input

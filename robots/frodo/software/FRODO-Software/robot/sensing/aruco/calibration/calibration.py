@@ -9,15 +9,15 @@ import yaml
 
 # ======================================================================================================================
 from robot.sensing.camera.pycamera import PyCameraType, PyCamera, PyCameraStreamer
-from utils.files import dirExists, makeDir, removeDir
+from core.utils.files import dirExists, makeDir, removeDir
 from robot.sensing.aruco.calibration.calibration_utils.chess_calibration import chessboard_calibration
-from paths import calibrations_path as global_calibration_dir
+from robot.settings import calibrations_path as global_calibration_dir
 
 
 @dataclasses.dataclass
 class CameraCalibrationData:
-    camera_matrix: np.array
-    dist_coeff: np.array
+    camera_matrix: np.ndarray
+    dist_coeff: np.ndarray
     resolution: tuple[int, int]
 
 
@@ -32,7 +32,7 @@ class ArucoCalibration:
     _camera_lock: threading.Lock
     _exit: bool = False
 
-    def __init__(self, camera_version: PyCameraType, resolution: tuple):
+    def __init__(self, camera_version: PyCameraType, resolution: tuple, gain=10, exposure_time=4000, image_format="gray"):
         self.camera_version = camera_version
         self.resolution = resolution
 
@@ -44,7 +44,8 @@ class ArucoCalibration:
         self.calibration_file = self._getCalibrationFilePath(self.calibration_name)
         self._makeCalibrationDir(self.calibration_name)
 
-        self.camera = PyCamera(version=camera_version, resolution=resolution)
+        self.camera = PyCamera(version=camera_version, resolution=resolution, exposure_time=exposure_time, gain=gain,
+                               image_format=image_format)
 
         self._streamer = PyCameraStreamer(pycamera=self.camera)
 
@@ -154,12 +155,10 @@ class ArucoCalibration:
 
 
 if __name__ == '__main__':
-    calib = ArucoCalibration(camera_version=PyCameraType.V3,
-                             resolution=(960, 540))
+    calib = ArucoCalibration(camera_version=PyCameraType.GS,
+                             resolution=(728, 544),
+                             gain=10,
+                             exposure_time=4000, )
 
     calib.start()
-    # ArucoCalibration.runChessBoardCalibration(images_path='/home/admin/robot/calibration/camera/V3_960x540/images',
-    #                                           calibration_file='/home/admin/robot/calibration/camera/V3_960x540'
-    #                                                            '/V3_960x540.yaml',
-    #                                           camera=PyCameraType.V3,
-    #                                           resolution=(960, 540))
+

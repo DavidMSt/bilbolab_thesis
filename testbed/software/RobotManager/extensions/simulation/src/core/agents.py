@@ -12,9 +12,6 @@ class Agent(environment.Object):
                  space: spaces.Space = None, *args, **kwargs):
         super().__init__(object_id=agent_id, group=None, space=space, *args, **kwargs)
 
-        # self.collision.settings.check = True
-        # self.collision.settings.collidable = True
-
         self.agent_id = agent_id
 
     def _getParameters(self):

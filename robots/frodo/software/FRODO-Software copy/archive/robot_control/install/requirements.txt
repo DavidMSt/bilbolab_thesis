@@ -1,0 +1,9 @@
+cobs==1.2.1
+evdev==1.7.1
+flask==3.1.0
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+orjson==3.10.10
+picamera2==0.3.12
+PyYAML==6.0.2
+rpi.gpio==0.7.1

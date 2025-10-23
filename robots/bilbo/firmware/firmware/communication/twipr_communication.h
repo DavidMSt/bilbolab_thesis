@@ -37,6 +37,8 @@
 extern core_utils_RegisterMap<256> register_map;
 
 
+
+
 /**
  * @brief Structure for communication callbacks.
  *
@@ -244,9 +246,7 @@ private:
     void _uartResponseError(core_comm_SerialMessage *incoming_message, uint8_t error_code);
 
     // Private buffers for sample data and debug messages.
-    twipr_logging_sample_t _sample_buffer_hold[TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE]; ///< Buffer for sample data transmission.
 
-    twipr_logging_sample_t _sample_buffer_tx[TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE]; ///< Buffer for sample data transmission.
     BILBO_Debug_Message _debug_message; ///< Debug message object for logging.
 };
 

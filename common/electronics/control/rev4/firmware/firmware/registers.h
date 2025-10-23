@@ -182,6 +182,8 @@ extern uint8_t firmware_registers[255];
 
 
 
+#define REG_BATTERY_VOLTAGE 0xB0
+
 
 
 #endif /* REGISTERS_H_ */

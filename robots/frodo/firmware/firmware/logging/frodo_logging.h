@@ -42,6 +42,7 @@ typedef struct frodo_general_sample_t {
 	uint32_t tick;
 	uint8_t state;
 	float update_time;
+	float battery_voltage;
 } frodo_general_sample_t;
 
 typedef struct frodo_sample_t {

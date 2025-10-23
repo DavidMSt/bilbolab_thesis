@@ -14,11 +14,17 @@
 #include <cstdio>   // For sprintf and vsnprintf
 #include <cstring>  // For strlen
 
+
 /**
  * Global register map instance with 255 entries initialized with the general register map.
  */
 core_utils_RegisterMap<256> register_map = core_utils_RegisterMap<256>(TWIPR_REGISTER_MAP_GENERAL);
 
+
+//twipr_logging_sample_t _sample_buffer_hold[TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE]; ///< Buffer for sample data transmission.
+
+twipr_logging_sample_t _sample_buffer_tx[TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE]; ///< Buffer for sample data transmission.
+twipr_logging_sample_t _sample_buffer_dummy[TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE]; ///< Buffer for sample data transmission.
 /**
  * Static buffer for outgoing serial messages used for communication responses.
  */
@@ -93,7 +99,8 @@ void TWIPR_CommunicationManager::init(twipr_communication_config_t config) {
     // ---------------------------
     twipr_spi_comm_config_t spi_config = {
         .hspi = this->config.hspi,
-        .sample_buffer = this->_sample_buffer_tx,
+        .sample_buffer = _sample_buffer_tx,
+		.sample_buffer_dummy = _sample_buffer_dummy,
         .len_sample_buffer = TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE,
         .sequence_buffer = this->config.sequence_rx_buffer,
         .len_sequence_buffer = this->config.len_sequence_buffer
@@ -350,7 +357,7 @@ void TWIPR_CommunicationManager::sampleBufferDMATransfer_callback() {
     // Toggle the GPIO to notify that sample data has been transferred.
     this->config.sample_notification_gpio.toggle();
 
-    if (this->_sample_buffer_tx[0].general.tick > 0){
+    if (_sample_buffer_tx[0].general.tick > 0){
         rc_status_led_2.toggle();
     }
 }
@@ -392,7 +399,7 @@ void TWIPR_CommunicationManager::provideSampleData(twipr_logging_sample_t *buffe
     HAL_DMA_Start_IT(
         TWIPR_FIRMWARE_SAMPLE_DMA_STREAM,
         (uint32_t) buffer,
-        (uint32_t) &this->_sample_buffer_tx,
+        (uint32_t) &_sample_buffer_tx,
         TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE * sizeof(twipr_logging_sample_t)
     );
 

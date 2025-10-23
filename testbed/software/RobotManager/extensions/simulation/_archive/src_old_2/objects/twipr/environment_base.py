@@ -1,7 +1,7 @@
 from extensions.simulation.src import core as core
 
 from extensions.simulation.src.objects.twipr import EnvironmentTWIPR_objects
-from extensions.babylon.babylon import BabylonVisualization
+from extensions.babylon.src.babylon import BabylonVisualization
 
 
 class EnvironmentBase(core.environment.Environment):

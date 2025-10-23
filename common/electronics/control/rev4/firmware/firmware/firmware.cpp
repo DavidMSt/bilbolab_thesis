@@ -11,6 +11,7 @@
 
 WS2812_Strand neopixel_intern(FIRMWARE_NEOPIXEL_INTERN_TIM,
 FIRMWARE_NEOPIXEL_INTERN_CHANNEL, 2);
+
 WS2812_Strand neopixel_extern(FIRMWARE_NEOPIXEL_EXTERN_TIM,
 FIRMWARE_NEOPIXEL_EXTERN_CHANNEL, 16);
 
@@ -23,6 +24,7 @@ EEPROM eeprom_config(FIRMWARE_I2C_INTERN, BOARD_EEPROM_CONFIG_ADDRESS);
 
 elapsedMillis timer_check = 1000;
 elapsedMillis timer_led_update;
+elapsedMillis timer_buzzer;
 
 elapsedMillis timer_led_register_read;
 
@@ -30,10 +32,21 @@ uint8_t register_map[255] = { 0 };
 I2C_Slave i2c_slave_cm4(&hi2c2, 0x02, register_map, 255);
 I2C_Slave i2c_slave_intern(&hi2c1, 0x02, register_map, 255);
 
+Battery_ADC battery_adc;
+
 elapsedMillis timer_test = 10000;
+elapsedMillis timer_battery_adc = 0;
 
 /* ================================================================================= */
 void firmware_init() {
+
+	battery_adc_config_t battery_adc_config = {
+			.hadc = FIRMWARE_ADC,
+			.channel = ADC_CHANNEL_8
+	};
+
+	battery_adc.init(battery_adc_config);
+	battery_adc.start();
 
 	neopixel_intern.init();
 	neopixel_extern.init();
@@ -51,7 +64,6 @@ void firmware_init() {
 	i2c_slave_intern.start();
 
 	HAL_GPIO_WritePin(ENABLE_CM4_GPIO_Port, ENABLE_CM4_Pin, GPIO_PIN_SET);
-
 
 	neopixel_intern.led[1].continious_output = 1;
 	neopixel_intern.led[1].setColor(0, 0, 100);
@@ -90,17 +102,30 @@ void firmware_update() {
 
 	}
 
-	if (timer_led_update >= 10) {
+	if (timer_battery_adc >= 500) {
+		timer_battery_adc = 0;
+		battery_adc.startConversion();
+		store_battery_voltage_in_registers(battery_adc.battery_voltage);
+	}
+
+	if (timer_led_update >= 50) {
 		timer_led_update = 0;
 		updateInternRGBLEDsFromRegisters();
 		updateStatusLEDFromRegisters();
-		updateBuzzerFromRegisters();
+
 		neopixel_extern.update();
 		neopixel_extern.send();
+		HAL_Delay(10);
 		neopixel_intern.update();
 		neopixel_intern.send();
 
+	}
+
+	if (timer_buzzer >= 10) {
+		timer_buzzer = 0;
+		updateBuzzerFromRegisters();
 		rc_buzzer.update();
+
 	}
 
 	if (timer_test >= 70) {
@@ -165,9 +190,7 @@ void updateInternRGBLEDsFromRegisters() {
 			register_map[REG_STATUS_RGB_LED_3_BLINK_TIME],
 			register_map[REG_STATUS_RGB_LED_3_BLINK_COUNTER]);
 
-	set_external_rgb_led(register_map[REG_EXTERNAL_RGB_GLOBAL_RED],
-			register_map[REG_EXTERNAL_RGB_GLOBAL_GREEN],
-			register_map[REG_EXTERNAL_RGB_GLOBAL_BLUE]);
+	set_external_rgb_led();
 
 	register_map[REG_STATUS_RGB_LED_1_BLINK_COUNTER] = 0;
 	register_map[REG_STATUS_RGB_LED_2_BLINK_COUNTER] = 0;
@@ -191,10 +214,15 @@ void updateBuzzerFromRegisters() {
 
 }
 
-void set_external_rgb_led(uint8_t red, uint8_t green, uint8_t blue) {
-	for (int i = 0; i < 16; i++) {
-		neopixel_extern.led[i].continious_output = 1;
-		neopixel_extern.led[i].setColor(red, green, blue);
+void set_external_rgb_led() {
+	for (int i = 0; i < 16; ++i) {
+		uint16_t base = REG_EXTERNAL_RGB_LED_1_CONFIG + (i * 6);
+		uint8_t r = register_map[base + 1]; // RED
+		uint8_t g = register_map[base + 2]; // GREEN
+		uint8_t b = register_map[base + 3]; // BLUE
+
+		neopixel_extern.led[i].continious_output = 1; // color only, no blinking
+		neopixel_extern.led[i].setColor(r, g, b);
 	}
 }
 
@@ -238,5 +266,15 @@ void set_rgb_led_data(WS2812_LED *led, uint8_t reg_config, uint8_t reg_red,
 		}
 	}
 
+}
+
+
+void store_battery_voltage_in_registers(float voltage){
+
+	// Store the 4 Float bytes in the register map, starting with REG_BATTERY_VOLTAGE
+	uint8_t* p = (uint8_t*) &voltage;
+	for (int i = 0; i < 4; i++) {
+		register_map[REG_BATTERY_VOLTAGE + i] = *(p + i);
+	}
 }
 

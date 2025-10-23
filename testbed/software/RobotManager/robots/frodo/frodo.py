@@ -1,108 +1,61 @@
-from core.device import Device
-from core.utils.callbacks import callback_definition, CallbackContainer
+import time
+
+from core.communication.device_server import Device
+from core.utils.callbacks import callback_definition
+from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
+from core.utils.time import delayed_execution, setTimeout
+from robots.frodo.frodo_control import FRODO_Control
+from robots.frodo.frodo_core import FRODO_Core
+from robots.frodo.frodo_definitions import FRODO_Information, FRODO_ControlMode
+from robots.frodo.frodo_interfaces import FRODO_Interfaces
 
 
 # ======================================================================================================================
 @callback_definition
-class Frodo_Callbacks:
-    stream: CallbackContainer
+class FRODO_Callbacks:
+    ...
 
 
-# ======================================================================================================================
-class Frodo:
+@event_definition
+class FRODO_Events:
+    ...
+
+
+# === FRODO ============================================================================================================
+class FRODO:
+    id: str
     device: Device
-    callbacks: Frodo_Callbacks
 
-    def __init__(self, device: Device):
+    callbacks: FRODO_Callbacks
+    events: FRODO_Events
+
+    # === INIT =========================================================================================================
+    def __init__(self, device: Device, information: FRODO_Information):
         self.device = device
-        self.device.callbacks.stream.register(self._onStream_callback)
-        self.callbacks = Frodo_Callbacks()
-
+        self.information = information
         self.logger = Logger(f"{self.id}")
+        self.core = FRODO_Core(robot_id=self.id, device=self.device, information=information)
+        self.control = FRODO_Control(device=self.device, information=information)
+        self.interfaces = FRODO_Interfaces(core=self.core, control=self.control)
+        self.callbacks = FRODO_Callbacks()
+        self.events = FRODO_Events()
 
-    # ------------------------------------------------------------------------------------------------------------------
+
+    # === PROPERTIES ===================================================================================================
     @property
     def id(self):
-        return self.device.information.device_id
+        return self.information.id
+
+    # === METHODS ======================================================================================================
+    def setLEDs(self, red, green, blue):
+        self.device.executeFunction('setLEDs', arguments={'red': red, 'green': green, 'blue': blue})
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setSpeed(self, speed_left, speed_right):
-        self.device.function(function='setSpeed',
-                             data={
-                                 'speed_left': speed_left,
-                                 'speed_right': speed_right
-                             })
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def beep(self):
-        self.device.function(function='beep', data={'frequency': 250, 'time_ms': 250, 'repeats': 1})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def getData(self, timeout=0.05):
-        try:
-            data = self.device.function(function='getData',
-                                        data=None,
-                                        return_type=dict,
-                                        request_response=True,
-                                        timeout=timeout)
-        except TimeoutError:
-            data = None
-        return data
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def test(self, input, timeout=1):
-        try:
-            data = self.device.function(function='test',
-                                        data={'input': input},
-                                        return_type=dict,
-                                        request_response=True,
-                                        timeout=timeout)
-        except TimeoutError:
-            data = None
-        return data
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def addMovement(self, dphi, radius, time):
-        self.device.function(function='addNavigationMovement', data={'dphi': dphi, 'radius': radius, 
-                                                                        'vtime': time})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def startNavigationMovement(self):
-        self.device.function(function='startNavigationMovement', data={})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def stopNavigationMovement(self):
-        self.device.function(function='stopNavigationMovement', data={})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def pauseNavigationMovement(self):
-        self.device.function(function='pauseNavigationMovement', data={})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def continueNavigationMovement(self):
-        self.device.function(function='continueNavigationMovement', data={})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def clearNavigationMovementQueue(self):
-        self.device.function(function='clearNavigationMovementQueue', data={})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setControlMode(self, mode):
-        self.device.function(function='setControlMode', data={'mode': mode})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setExternalLEDs(self, color):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def runSensingStep(self):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def runControlStep(self):
-        ...
+    def beep(self, frequency=1000, time_ms=250, repeats=1):
+        self.device.executeFunction(function_name='beep',
+                                    arguments={'frequency': frequency, 'time_ms': time_ms, 'repeats': repeats})
 
     # === PRIVATE METHODS ==============================================================================================
-    def _onStream_callback(self, message, *args, **kwargs):
-        ...
+
+    # ------------------------------------------------------------------------------------------------------------------

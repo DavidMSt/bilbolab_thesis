@@ -1,3 +1,5 @@
+from typing import Any
+
 import board
 from RPi import GPIO
 
@@ -5,20 +7,19 @@ from RPi import GPIO
 # ======================================================================================================================
 class SPI_Interface:
     notification_pin: int
-    spi: board.SPI
+    spi: Any
 
     # ------------------------------------------------------------------------------------------------------------------
-    def __init__(self, notification_pin: int = None, baudrate: int = 40_000_000):
+    def __init__(self, notification_pin: int = None, baudrate: int = 20_000_000):
         self.notification_pin = notification_pin
 
         self.spi = board.SPI()
         while not self.spi.try_lock():
             pass
-        self.spi.configure(baudrate=baudrate)
+        self.spi.configure(baudrate=baudrate, phase=0, polarity=0)
 
     # ------------------------------------------------------------------------------------------------------------------
     def send(self, data: bytearray):
-        # print(f'SPI: Sending {len(data)} bytes: {data}')
         if isinstance(data, list):
             data = bytearray(data)
 

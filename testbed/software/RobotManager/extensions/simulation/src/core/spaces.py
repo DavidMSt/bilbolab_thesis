@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import abc
 import copy as cp
 from math import pi
+from typing import Callable
 
 import numpy as np
 import qmt
@@ -78,6 +81,9 @@ class ScalarValue(StateValue):
         if value is None:
             self.value = None
             return
+
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
 
         if isinstance(value, ScalarValue):
             value = value.value
@@ -938,7 +944,7 @@ class Space:
     parent: 'Space'
     origin: 'State'
 
-    def __init__(self, dimensions: (int, list) = None, parent: 'Space' = None, origin=None):
+    def __init__(self, dimensions: int | list = None, parent: 'Space' = None, origin=None):
         if not hasattr(self, 'dimensions'):
             self.dimensions = []
 
@@ -969,7 +975,7 @@ class Space:
         return State(space=self, value=value)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def map(self, value: ('State', list, np.ndarray, int, float)):
+    def map(self, value: State | list | np.ndarray | int | float):
 
         if value is None:
             return None
@@ -997,8 +1003,8 @@ class Space:
             elif self.hasMapping(space_to=self, space_from=value.space):
                 mapping = next((mapping for mapping in self.mappings if
                                 (mapping.space_to == self or isinstance(self, mapping.space_to)) and (
-                                            mapping.space_from == value.space or isinstance(value.space,
-                                                                                            mapping.space_from))))
+                                        mapping.space_from == value.space or isinstance(value.space,
+                                                                                        mapping.space_from))))
                 return mapping.map(value, self)
 
         # Condition 3: value is a list of the correct length
@@ -1176,11 +1182,11 @@ class Space:
 
 # ======================================================================================================================
 class SpaceMapping:
-    space_from: (Space, type) = Space
-    space_to: (Space, type) = Space
-    mapping: callable
+    space_from: Space | type = Space
+    space_to: Space | type = Space
+    mapping: Callable
 
-    def __init__(self, space_from: (Space, type) = None, space_to: (Space, type) = None, mapping=None):
+    def __init__(self, space_from: Space | type = None, space_to: Space | type = None, mapping=None):
         if not (hasattr(self, 'space_from')):
             assert (space_from is not None)
             self.space_from = space_from
@@ -1243,7 +1249,7 @@ class State:
             self.set(value)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def set(self, value, index: (int, str) = None):
+    def set(self, value, index: int | str = None):
         if index is None:
             if len(self.space.dimensions) > 1:
                 if isinstance(value, list):
