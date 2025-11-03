@@ -1,3 +1,0 @@
-[submodule "aruco_detection"]
-	path = aruco_detection
-	url = git@github.com:harke42/aruco_detection.git

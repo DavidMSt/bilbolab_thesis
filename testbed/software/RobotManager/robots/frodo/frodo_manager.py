@@ -1,6 +1,6 @@
 from core.communication.device_server import DeviceServer, Device
 from core.communication.protocol import JSON_Message
-from core.utils.archives.events import pred_flag_key_equals
+from core.utils.events import pred_flag_equals
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.dataclass_utils import from_dict, from_dict_auto
 from core.utils.events import event_definition, Event
@@ -51,10 +51,10 @@ class FRODO_Manager:
         self.device_server = DeviceServer(host)
 
         self.device_server.events.new_device.on(callback=self._newDevice_event,
-                                                predicate=pred_flag_key_equals('type', 'frodo'))
+                                                predicate=pred_flag_equals('type', 'frodo'))
 
         self.device_server.events.device_disconnected.on(callback=self._deviceDisconnected_event,
-                                                         predicate=pred_flag_key_equals('type', 'frodo'))
+                                                         predicate=pred_flag_equals('type', 'frodo'))
 
         # CLI
         self.cli = FRODO_Manager_CommandSet(self)
@@ -136,11 +136,11 @@ class FRODO_Manager:
         # Add the robot's CLI command set
         self.cli.addChild(new_robot.interfaces.cli_command_set)
 
+        self.logger.info(f"New FRODO \"{information.id}\" connected")
+
         # Call the callbacks and events for a new robot
         self.callbacks.new_robot.call(new_robot)
         self.events.new_robot.set(data=new_robot)
-
-        self.logger.info(f"New FRODO \"{information.id}\" connected")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _removeBilbo(self, robot: FRODO):
@@ -154,7 +154,6 @@ class FRODO_Manager:
         self.events.robot_disconnected.set(data=robot)
 
         self.logger.info(f"FRODO \"{robot.id}\" disconnected")
-
 
 
 # ======================================================================================================================

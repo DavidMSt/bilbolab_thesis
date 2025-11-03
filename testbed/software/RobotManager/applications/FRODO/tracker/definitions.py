@@ -10,9 +10,11 @@ import numpy as np
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import Event, event_definition
 from core.utils.orientation.orientation_2d import calculate_projection, calculate_rotation_angle
+from core.utils.states import State
 from core.utils.time import setInterval
 from extensions.optitrack.optitrack import RigidBodySample
-from robots.frodo.frodo_definitions import TrackedOrigin_Definition, FRODO_DEFINITIONS, STATIC_DEFINITIONS
+from robots.frodo.frodo_definitions import TrackedOrigin_Definition, FRODO_DEFINITIONS, STATIC_DEFINITIONS, \
+    ORIGIN_FRODO_DEFINITION
 
 
 @dataclasses.dataclass
@@ -369,7 +371,7 @@ class TrackedStatic_Definition:
 
 
 @dataclasses.dataclass
-class TrackedStatic_State:
+class TrackedStatic_State(State):
     x: float
     y: float
     psi: float
@@ -516,11 +518,7 @@ FRODO_TRACKED_OBJECTS = {
 }
 
 ORIGIN_FRODO = TrackedOrigin(id='origin_frodo',
-                             definition=TrackedOrigin_Definition(points=[1, 2, 3, 4, 5],
-                                                                 origin=1,
-                                                                 x_axis_end=2,
-                                                                 y_axis_end=5
-                                                                 ))
+                             definition=ORIGIN_FRODO_DEFINITION)
 
 ORIGINS = {
     'origin_frodo': ORIGIN_FRODO,

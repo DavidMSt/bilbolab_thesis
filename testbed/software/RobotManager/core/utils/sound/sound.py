@@ -20,7 +20,7 @@ from core.utils.logging_utils import Logger
 
 # Initialize logger
 logger = Logger('Sound')
-logger.setLevel('DEBUG')
+logger.setLevel('INFO')
 
 active_sound_system = None
 

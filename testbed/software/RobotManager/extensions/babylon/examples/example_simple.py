@@ -41,7 +41,7 @@ def example_simple_1():
     babylon.addObject(bilbo1)
 
     bilbo1.setPosition(y=1)
-    bilbo1.setState(theta=np.pi / 4, psi=np.pi / 4)
+    bilbo1.set_state(theta=np.pi / 4, psi=np.pi / 4)
 
     bilbo2 = BabylonBilbo('bilbo2', color=[100 / 255, 125 / 255, 156 / 255], text='2', y=-0.5)
     babylon.addObject(bilbo2)

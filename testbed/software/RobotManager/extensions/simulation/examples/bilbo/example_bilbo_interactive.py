@@ -304,10 +304,10 @@ class BILBO_InteractiveExample:
         for robot in self.robots.values():
             try:
                 state = robot['robot'].state
-                robot['babylon'].setState(x=state.x,
-                                          y=state.y,
-                                          theta=state.theta,
-                                          psi=state.psi)
+                robot['babylon'].set_state(x=state.x,
+                                           y=state.y,
+                                           theta=state.theta,
+                                           psi=state.psi)
             except Exception as e:
                 self.logger.error(f'Error updating robot {robot["robot"].agent_id}: {e}')
 

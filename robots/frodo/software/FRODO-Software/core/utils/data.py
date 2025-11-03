@@ -15,8 +15,9 @@ def limit(value, high, low=None):
     return value
 
 
-def clamp(value, high, low=None):
+def clamp(value, low=None, high=None):
     return limit(value, high, low)
+
 
 def are_lists_approximately_equal(K1, K2, rel_tol=1e-6, abs_tol=1e-6):
     """
@@ -126,4 +127,3 @@ def generate_random_input(t_vector, f_cutoff, sigma_I):
 
     start_idx = idx_candidates[0]
     return u[start_idx:start_idx + N]
-

@@ -135,7 +135,7 @@ class Command:
 
         self.callbacks = Command_Callbacks()
 
-        self.logger = Logger(f"Command \"{self.name}\"")
+        self.logger = Logger(f"Command \"{self.name}\"", "WARNING")
 
         if not hasattr(self, 'arguments') or self.arguments is None:
             self.arguments = {}
@@ -234,13 +234,28 @@ class Command:
             log_parts.append(f"**kwargs: {mapped_kwargs}")
         self.logger.debug(f"Execute command: {self.name} ({', '.join(log_parts)})")
 
-        # 7. Execute the command and handle exceptions
+        # 7. Execute the command and handle exceptions (with full traceback info)
         try:
             return self.call(*pos_values, **mapped_kwargs)
         except Exception as e:
-            self.logger.error(f"Error executing command: {e}")
-            return None
+            import traceback
 
+            tb = e.__traceback__
+            frames = traceback.extract_tb(tb)
+            last = frames[-1] if frames else None
+            location = (
+                f"{last.filename}:{last.lineno} in {last.name}"
+                if last else "unknown location"
+            )
+
+            # Full chained traceback (includes __cause__/__context__)
+            full_tb = "".join(traceback.format_exception(type(e), e, tb))
+
+            # Include command name, where it failed, and the full traceback
+            self.logger.error(
+                f"Error executing command '{self.name}' at {location}: {e}\n{full_tb}"
+            )
+            return None
 
     def _parseCommandString(self, command_string: str | None) -> dict | None:
         """
@@ -469,7 +484,7 @@ class CommandSet:
 
         self.callbacks = CommandSet_Callbacks()
 
-        self.logger = Logger(f"CommandSet {name}", "DEBUG")
+        self.logger = Logger(f"CommandSet {name}", "WARNING")
 
         # Loop through the commands and children and add them to the CommandSet
         if commands is not None:
@@ -716,7 +731,7 @@ class CLI:
         assert isinstance(id, str) and id != ''
         self.id = id
         self.callbacks = CLI_Callbacks()
-        self.logger = Logger(f"CLI {id}", "DEBUG")
+        self.logger = Logger(f"CLI {id}", "WARNING")
         self.current_set = None
         self.allow_set_change = allow_set_change
 

@@ -135,7 +135,7 @@ class Device:
         if request_response and request is not None:
             if request.event.wait(timeout=timeout):
                 self._readRequests.pop(request.id)
-                data = request.event.getData()
+                data = request.event.get_data()
                 success = data['success']
                 return success
             else:
@@ -159,7 +159,7 @@ class Device:
         self._send(message=message)
         if request.event.wait(timeout=timeout):
             self._readRequests.pop(request.id)
-            data = request.event.getData()
+            data = request.event.get_data()
             success = data['success']
             if success:
                 return data['output']
@@ -206,7 +206,7 @@ class Device:
                     self.logger.debug(
                         f"Got response for function \"{function_name}\"! Response time: {response_time:.0f} ms")
 
-                data = request.event.getData()
+                data = request.event.get_data()
                 success = data.get('success', None)
                 self._readRequests.pop(request.id)
 

@@ -32,4 +32,7 @@ class FRODO_Communication:
     def sendSample(self, sample):
         self.wifi.sendStream(data=sample, stream_id="sample")
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def send_event(self, event_name: str, event_data=None):
+        self.wifi.sendEvent(event=event_name, data=event_data)
     # === PRIVATE METHODS ==============================================================================================

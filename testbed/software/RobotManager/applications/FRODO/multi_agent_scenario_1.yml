@@ -1,0 +1,64 @@
+plan:
+  id: ma_plan_scenario1
+  actions:
+    - type: group
+      id: group1
+      blocking: false
+      finished_emit_signal: group1_finished
+      conditions: [ ]
+      actions:
+        - type: move
+          id: m_a1_wp1
+          agent_id: agent1
+          blocking: true
+          conditions: [signal/start]
+          element:
+            type: CoordinatedMoveTo
+            x: -1
+            y: -1
+
+        - type: wait
+          id: sleep2
+          blocking: true
+          finished_emit_signal: sigA
+          seconds: 2
+          conditions: [ ]
+
+        - type: move
+          id: m_a1_wp2
+          agent_id: agent1
+          blocking: true
+          conditions: [ ]
+          element:
+            type: MoveTo
+            x: 0
+            y: 0
+
+    - type: group
+      id: group2
+      blocking: false
+      conditions: [ ]
+      actions:
+        - type: wait
+          id: wait_sigA
+          blocking: true
+          conditions:
+            - signal/sigA
+
+        - type: move
+          id: m_a2_wp1
+          agent_id: agent3
+          blocking: false
+          conditions: [ ]
+          element:
+            type: CoordinatedMoveTo
+            x: 1.5
+            y: -0.5
+
+    - type: group
+      id: group3
+      actions:
+        - type: wait
+          id: wait_to_start
+          seconds: 5
+          finished_emit_signal: start

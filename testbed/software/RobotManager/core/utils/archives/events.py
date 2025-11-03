@@ -1,38 +1,76 @@
 from __future__ import annotations
 
-import sys
+import queue
 import threading
+from copy import deepcopy
 import time
-import typing
-import uuid
+from dataclasses import is_dataclass, dataclass
+from typing import Callable, Any, Optional, Union
 from collections import deque
-from threading import Condition, Lock
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, get_origin
+import weakref
 
-# ======================================================================================================================
-# Utilities
-# ======================================================================================================================
+# === CUSTOM MODULES ===================================================================================================
+from core.utils.callbacks import callback_definition, CallbackContainer, Callback
+from core.utils.dataclass_utils import deepcopy_dataclass
+from core.utils.dict_utils import optimized_deepcopy
+from core.utils.logging_utils import Logger
+from core.utils.singleton import _SingletonMeta
 
-Predicate = Callable[[Dict[str, Any], Any], bool]  # (flags, resource) -> bool
-
-
-def pred_in(key, values):
-    return lambda f, r: f.get(key) in values
-
-
-def pred_gt(key, threshold):
-    return lambda f, r: f.get(key, 0) > threshold
+# === GLOBAL VARIABLES =================================================================================================
+logger = Logger('events')
 
 
-def pred_resource_key_equals(key, expected):
-    return lambda f, r: isinstance(r, dict) and r.get(key) == expected
+# === EVENT FLAG =======================================================================================================
+class EventFlag:
+    id: str
+    types: tuple[type, ...]  # always a tuple at runtime
+
+    # === INIT =========================================================================================================
+    def __init__(self, id: str, data_type: type | tuple[type, ...]):
+        self.id = id
+        if isinstance(data_type, tuple):
+            if not data_type or not all(isinstance(t, type) for t in data_type):
+                raise TypeError("data_type tuple must be non-empty and contain only types.")
+            self.types = data_type
+        elif isinstance(data_type, type):
+            self.types = (data_type,)
+        else:
+            raise TypeError("data_type must be a type or tuple[type, ...]")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def accepts(self, value: Any) -> bool:
+        return isinstance(value, self.types)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def describe(self) -> str:
+        return " | ".join(t.__name__ for t in self.types)
 
 
-def pred_flag_key_equals(key, expected):
-    return lambda f, r: isinstance(f, dict) and f.get(key) == expected
+# === PREDICATE ========================================================================================================
+Predicate = Callable[[dict[str, Any], Any], bool]  # (flags, data) -> bool
 
 
-def flag_contains(flag_key: str, match_value: Any) -> Predicate:
+def pred_flag_in(key, values) -> Predicate:
+    return lambda f, d: f.get(key) in values
+
+
+def pred_data_in(key, values) -> Predicate:
+    return lambda f, d: d.get(key) in values
+
+
+def pred_data_dict_key_equals(key, expected) -> Predicate:
+    return lambda f, d: d.get(key) == expected
+
+
+def pred_data_equals(expected) -> Predicate:
+    return lambda f, d: d == expected
+
+
+def pred_flag_equals(key, expected) -> Predicate:
+    return lambda f, d: f.get(key) == expected
+
+
+def pred_flag_contains(flag_key: str, match_value: Any) -> Predicate:
     """
     Returns a predicate that checks if `match_value` is present in the
     flag list (or equals the single flag value) for `flag_key`.
@@ -40,7 +78,7 @@ def flag_contains(flag_key: str, match_value: Any) -> Predicate:
     Works whether the flag value is a list/tuple/set or a single value.
     """
 
-    def _pred(flags, resource):
+    def _pred(flags, data):
         if flag_key not in flags:
             return False
         val = flags[flag_key]
@@ -51,664 +89,1234 @@ def flag_contains(flag_key: str, match_value: Any) -> Predicate:
     return _pred
 
 
-class SharedResource:
-    def __init__(self, resource=None):
-        self.lock = Lock()
-        self.resource = resource
-
-    def acquire(self):
-        self.lock.acquire()
-
-    def release(self):
-        self.lock.release()
-
-    def set(self, value):
-        with self.lock:
-            self.resource = value
-
-    def get(self):
-        return self.resource
-
-    def __enter__(self):
-        self.lock.acquire()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.lock.release()
+# === EVENT ============================================================================================================
+@callback_definition
+class EventCallbacks:
+    set: CallbackContainer
 
 
-# ======================================================================================================================
-# Cancelable Wait Handle
-# ======================================================================================================================
+class Event:
+    flags: dict[str, EventFlag]
 
-class WaitHandle:
-    """
-    Cancelable wait handle returned by ConditionEvent.wait_start().
-    Use .wait(timeout) to block; use .cancel() from another thread to abort.
-    """
-    __slots__ = ("_cv", "_done", "_cancelled", "_result", "_id", "_unregister", "_on_complete")
+    data: Any
+    callbacks: EventCallbacks
+    data_type: type | None
+    history: deque[tuple[float, dict[str, Any], Any]]
 
-    def __init__(self, unregister_cb: Callable[[str], None],
-                 on_complete: Optional[Callable[['WaitHandle'], None]] = None):
-        self._cv = threading.Condition()
-        self._done = False
-        self._cancelled = False
-        self._result = None  # you decide what to store; here: (resource, flags, event)
-        self._id = uuid.uuid4().hex
-        self._unregister = unregister_cb
-        self._on_complete = on_complete
+    copy_data_on_set = True
 
-    @property
-    def id(self) -> str:
-        return self._id
+    copy_fn = None
 
-    def wait(self, timeout: Optional[float] = None):
-        """Block until completed or cancelled. Returns the result on success; None on timeout/cancel."""
-        with self._cv:
-            ok = self._cv.wait_for(lambda: self._done or self._cancelled, timeout=timeout)
-            if not ok or self._cancelled:
-                return None
-            return self._result
+    max_history_time: float = 2.0
 
-    def cancel(self):
-        """Cancel this waiter (idempotent)."""
-        with self._cv:
-            if self._done or self._cancelled:
-                return
-            self._cancelled = True
-            self._cv.notify_all()
-        self._unregister(self._id)
+    dict_copy_cache = None
 
-    # Internal: called by the event when a matching set() occurs
-    def _complete(self, result):
-        first_time = False
-        with self._cv:
-            if self._done or self._cancelled:
-                return
-            self._done = True
-            self._result = result
-            first_time = True
-            self._cv.notify_all()
-        self._unregister(self._id)
-        if first_time and self._on_complete:
-            try:
-                self._on_complete(self)
-            except Exception:
-                pass
+    # === INIT =========================================================================================================
+    def __init__(self,
+                 data_type: type | None = None,
+                 flags: EventFlag | list[EventFlag] = None,
+                 copy_data_on_set: bool = True,
+                 data_is_static_dict: bool = False, ):
 
+        if flags is None:
+            flags = []
 
-# ======================================================================================================================
-# ConditionEvent with filtering & cancelable waits
-# ======================================================================================================================
+        if not isinstance(flags, list):
+            flags = [flags]
 
-class ConditionEvent(Condition):
-    """
-    A condition-like event that supports:
-    - set(resource, flags)
-    - filtered waits via flags/resource predicates
-    - cancelable waits via WaitHandle
-    - one-shot stored listeners (via .on(..., once=True))
-    Also keeps a small history for "stale within N seconds" checks.
-    """
-    id: str
-    resource: SharedResource
-    flag: Any
+        self.flags = {}
 
-    def __init__(self, flags: Optional[List[Tuple[str, type]]] = None, history_size: int = 10,
-                 event_id: Optional[str] = None):
-        super().__init__()
-        self.id = event_id or f"ConditionEvent-{id(self)}"
-        self.resource = SharedResource()
-        self.flag: Optional[Dict[str, Any]] = None
-        self._parameters_def = flags if flags is not None else []
-        self._event_history: deque[Tuple[float, Optional[Dict[str, Any]]]] = deque(maxlen=history_size)
+        for flag in flags:
+            self.flags[flag.id] = flag
 
-        # one-shot listeners stored internally: (weak_or_fn, flags_or_pred, input_resource)
-        self._listeners: List[Tuple[Any, Any, bool]] = []
+        self.callbacks = EventCallbacks()
+        self.data = None
 
-        # active waiters (id -> (WaitHandle, predicate))
-        self._waiters: Dict[str, Tuple[WaitHandle, Optional[Predicate]]] = {}
+        self.data_type = data_type
+        self.copy_data_on_set = copy_data_on_set
+        self.data_is_static_dict = data_is_static_dict
 
-    # ------------------------------- core API --------------------------------
+        self.history: deque[tuple[float, dict[str, Any], Any]] = deque()
+        self._history_lock = threading.Lock()
 
-    def set(self, resource: Any = None, flags: Optional[Dict[str, Any]] = None):
-        """
-        Set the event: update resource/flags, notify waiters/listeners that match.
-        Fires one-shot listeners in lightweight threads (or adapt to a shared worker if desired).
-        """
-        # validate flags against parameters_def (optional)
-        if self._parameters_def and flags is not None:
-            if not isinstance(flags, dict):
-                raise ValueError("flags must be a dict.")
-            allowed = {p[0] for p in self._parameters_def}
-            for k, v in flags.items():
-                if k not in allowed:
-                    raise ValueError(f"Unexpected parameter: {k}")
-                for pname, ptype in self._parameters_def:
-                    if k == pname and not (
-                            isinstance(v, (list, tuple)) and all(isinstance(x, ptype) for x in v) or isinstance(v,
-                                                                                                                ptype)):
-                        raise TypeError(f"Parameter '{k}' must be of type {ptype}")
+        active_event_loop.addEvent(self)
 
-        # update state + history
-        with self:
-            self.flag = flags
-            self.resource.set(resource)
-            self._event_history.append((time.time(), self.flag))
+    # === METHODS ======================================================================================================
+    def on(self,
+           callback: Callback | Callable,
+           predicate: Predicate = None,
+           once: bool = False,
+           stale_event_time=None,
+           timeout=None,
+           input_data=True,
+           max_rate=None) -> EventListener | OneShotHandle:
 
-            # snapshot / extract matching waiters
-            to_complete: List[WaitHandle] = []
-            for _id, (wh, pred) in list(self._waiters.items()):
-                if pred is None or self._check_predicate(pred, flags, resource):
-                    to_complete.append(wh)
-                    # remove now to avoid races / double-completion
-                    self._waiters.pop(_id, None)
+        # One-shot special case: keep using a thread that waits and fires once.
+        if once and stale_event_time is not None:
+            return self._spawnOneShotListener(callback, predicate, stale_event_time, input_data, timeout)
 
-            # snapshot matching one-shot listeners
-            to_call: List[Tuple[Callable, bool]] = []
-            remaining: List[Tuple[Any, Any, bool]] = []
-            for cb_ref, cond, input_resource in self._listeners:
-                callback = cb_ref() if hasattr(cb_ref, "__call__") and getattr(cb_ref, "__self__",
-                                                                               None) is not None and hasattr(cb_ref,
-                                                                                                             "__func__") else cb_ref
-                # weakref.WeakMethod handling (keep simple): try to resolve
-                try:
-                    if hasattr(cb_ref, "__call__") and hasattr(cb_ref, "__self__"):
-                        callback = cb_ref()
-                except Exception:
-                    callback = cb_ref
-                if callback is None:
-                    continue
-                if cond is None or self._check_condition(cond, flags):
-                    to_call.append((callback, input_resource))
-                else:
-                    remaining.append((cb_ref, cond, input_resource))
-            self._listeners = remaining
-
-        # complete waiters (outside lock)
-        for wh in to_complete:
-            wh._complete((self.resource.get(), self.flag, self))
-
-        # fire one-shot listeners (outside lock)
-        for cb, input_res in to_call:
-            threading.Thread(target=self._invoke_callback, args=(cb, input_res), daemon=True).start()
-
-    def get_data(self):
-        with self.resource:
-            return self.resource.get()
-
-    # ------------------------------- waits --------------------------------
-
-    def wait_start(self, *, predicate: Optional[Predicate] = None,
-                   stale_event_time: Optional[float] = None,
-                   on_complete: Optional[Callable[[WaitHandle], None]] = None) -> WaitHandle:
-        """
-        Create a cancelable wait and register it. If a recent matching event exists
-        and stale_event_time is set, it completes immediately.
-        """
-
-        def unregister(_id: str):
-            with self:
-                self._waiters.pop(_id, None)
-
-        wh = WaitHandle(unregister, on_complete=on_complete)
-
-        # fast-path: recent matching event in history
-        if stale_event_time is not None:
-            now = time.time()
-            # check from newest to oldest
-            for ts, ev_flags in reversed(self._event_history):
-                if now - ts > stale_event_time:
-                    break
-                if predicate is None or self._check_predicate(predicate, ev_flags, self.get_data()):
-                    wh._complete((self.get_data(), self.flag, self))
-                    return wh
-
-        with self:
-            self._waiters[wh.id] = (wh, predicate)
-        return wh
-
-    def wait(self, *, predicate: Optional[Predicate] = None, timeout: Optional[float] = None,
-             stale_event_time: Optional[float] = None):
-        """
-        Blocking wait built on wait_start(). Returns (resource, flags, event) on success; None on timeout/cancel.
-        """
-        h = self.wait_start(predicate=predicate, stale_event_time=stale_event_time)
-        try:
-            return h.wait(timeout=timeout)
-        finally:
-            # If it timed out (or caller discards), ensure we unregister
-            h.cancel()
-
-    # ------------------------------- listeners --------------------------------
-
-    def on(self, callback: Callable, *, predicate: Optional[Predicate] = None, once: bool = False,
-           input_resource: bool = True) -> EventListener | None:
-        """
-        Register a listener. If once=True, it's stored and fired on the next matching set().
-        If once=False, returns an EventListener object you can .stop(), but for backward compatibility
-        we return an unsubscribe() callback (cancel listener thread) via EventListener.stop().
-        """
-        if once:
-            # store one-shot listener
-            cb_ref = _weak_maybe(callback)
-            with self:
-                self._listeners.append((cb_ref, predicate, input_resource))
-            return None
-
-        # continuous listener: own thread that uses cancelable waits
-        listener = EventListener(
-            event=self,
-            callback=callback,
-            predicate=predicate,
-            input_resource=input_resource
-        )
+        # Continuous (or one-shot without stale) listener backed by queue waiter
+        listener = EventListener(event=self,
+                                 predicate=predicate,
+                                 callback=callback,
+                                 once=once,
+                                 spawn_thread=False,
+                                 max_rate=max_rate,
+                                 input_data=input_data,
+                                 stale_event_time=stale_event_time)
         listener.start()
-        return listener  # return a callable that stops it
+        return listener
 
-    # ------------------------------- helpers --------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def wait(self, predicate: Predicate = None, timeout: float = None, stale_event_time: float = None) -> bool:
+        waiter = EventWaiter(events=self,
+                             predicates=predicate,
+                             timeout=timeout,
+                             stale_event_time=stale_event_time,
+                             wait_for_all=False, )
+        return waiter.wait()
 
-    @staticmethod
-    def _invoke_callback(callback: Callable, input_resource: bool):
+    # ------------------------------------------------------------------------------------------------------------------
+    def set(self, data=None, flags: dict = None) -> None:
+
+        # Check if the flags are valid
+        assert (isinstance(flags, dict) or flags is None)
+        flags = flags or {}
+
+        # Check if all flags are valid
+        for flag in flags:
+            if flag not in self.flags:
+                raise ValueError(f"Invalid flag: {flag}")
+
+            ef = self.flags[flag]
+            value = flags[flag]
+
+            if not ef.accepts(value):
+                raise TypeError(
+                    f"Flag '{flag}' is expected to be of type {ef.describe()}, "
+                    f"but got {type(value).__name__} instead."
+                )
+
+        # Check if the data is valid
+        if data is not None:
+            if self.data_type is not None:
+                if not isinstance(data, self.data_type):
+                    raise TypeError(
+                        f"Data is expected to be of type {self.data_type.__name__}, "
+                        f"but got {type(data).__name__} instead."
+                    )
+
+        # Make a copy of the data
+        if self.copy_data_on_set:
+            payload = self._copy_payload(data)
+        else:
+            payload = data
+
+        self.data = payload
+
+        now = time.monotonic()
+        flags = dict(flags)
+        with self._history_lock:
+            self.history.append((now, flags, payload))
+            self._prune_history(now)
+
+        self.callbacks.set.call(data=payload, flags=flags)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def getData(self, copy: bool = True) -> Any:
+        if copy:
+            return deepcopy(self.data)
+        else:
+            return self.data
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def has_match_in_window(self, predicate: Predicate | None, window: float, now: float | None = None) -> bool:
+        if window is None or window <= 0:
+            return False
+        if now is None:
+            now = time.monotonic()
+        cutoff = now - window
+        with self._history_lock:
+            self._prune_history(now)
+            for ts, flags, data in reversed(self.history):
+                if ts < cutoff:
+                    break
+                if predicate is None or predicate(flags, data):
+                    return True
+        return False
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def first_match_in_window(self, predicate: Predicate | None, window: float, now: float | None = None):
+        if window is None or window <= 0:
+            return None
+        if now is None:
+            now = time.monotonic()
+        cutoff = now - window
+        with self._history_lock:
+            self._prune_history(now)
+            for ts, flags, data in reversed(self.history):
+                if ts < cutoff:
+                    break
+                if predicate is None or predicate(flags, data):
+                    return flags, data
+        return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _spawnOneShotListener(self,
+                              callback: Callback | Callable,
+                              predicate: Predicate,
+                              stale_event_time: float,
+                              input_data: bool,
+                              timeout: float) -> OneShotHandle:
+
+        waiter = EventWaiter(events=self, predicates=predicate, timeout=timeout, stale_event_time=stale_event_time)
+
+        def listener_thread():
+            if waiter.wait():
+                if input_data:
+                    if len(waiter.matched_payloads) == 1:
+                        _, d = waiter.matched_payloads[0]
+                        callback(d)
+                    else:
+                        assembled = {}
+                        for i, ev in enumerate(waiter.events):
+                            _, d = waiter.matched_payloads[i]
+                            assembled[ev] = d
+                        callback(assembled)
+                else:
+                    callback()
+
+        t = threading.Thread(target=listener_thread, daemon=True)
+        t.start()
+        return OneShotHandle(waiter, t)
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _prune_history(self, now: float | None = None) -> None:
+        if now is None:
+            now = time.monotonic()
+        cutoff = now - self.max_history_time
+        dq = self.history
+        while dq and dq[0][0] < cutoff:
+            dq.popleft()
+
+    # ------------------------------------------------------------------------------------------------------------------`
+    def _copy_payload(self, data) -> Any:
+        # if data is None:
+        #     return None
+        # if self.copy_fn is not None:
+        #     return self.copy_fn(data)
+        # if self.copy_data_on_set:
+        #     return deepcopy(data)
+        # return data
         try:
-            if input_resource:
-                callback_argc = getattr(callback, "__code__", None).co_argcount if hasattr(callback, "__code__") else 1
-                if callback_argc >= 1:
-                    callback_arg = callback_arg = callback  # marker to keep style consistency; replaced below
-                # Call with resource if desired; ignore signature gymnastics
-            # Always call with (resource) if input_resource else no args
-            pass
-        except Exception:
-            pass  # kept to preserve structure; replaced below
-
-    def _invoke_callback(self, callback: Callable, input_resource: bool):
-        try:
-            if input_resource:
-                callback(self.get_data())
+            if self.data_is_static_dict and self.data_type is dict:
+                payload, self.dict_copy_cache = optimized_deepcopy(data, self.dict_copy_cache)
+            elif is_dataclass(self.data_type):
+                payload = deepcopy_dataclass(data)
             else:
-                callback()
-        except Exception:
-            pass
+                payload = deepcopy(data)
+        except Exception as e:
+            payload = data
+            self.copy_data_on_set = False
+            logger.warning(f"Could not copy data for event {self}: {e}")
 
-    @staticmethod
-    def _check_predicate(predicate: Predicate, flags: Optional[Dict[str, Any]], resource: Any) -> bool:
-        try:
-            return predicate(flags or {}, resource)
-        except Exception:
+        return payload
+
+
+# === EVENT WAITER =====================================================================================================
+class EventWaiter:
+    """
+    Queue-backed waiter.
+    - Maintains per-waiter queue of matched snapshots.
+    - Supports once (auto-remove after first match) or continuous modes.
+    - Preserves stale-event precheck and exact (flags, data) snapshots per position.
+    """
+    events: list[Event]
+    predicates: list[Predicate] | None
+    timeout: float | None
+    stale_event_time: float | None
+    wait_for_all: bool
+    once: bool
+
+    events_finished: list[bool]
+    matched_payloads: list[tuple[dict[str, Any] | None, Any | None]]
+
+    _abort: bool
+    _queue: queue.Queue  # holds snapshots of matched_payloads
+
+    data: Any = None  # convenience for single-event waits
+
+    _SENTINEL = object()
+
+    def __init__(self,
+                 events: Event | list[Event],
+                 predicates: Predicate | list[Predicate] | None = None,
+                 timeout: float | None = None,
+                 stale_event_time: float | None = None,
+                 wait_for_all: bool = False,
+                 once: bool = True,
+                 queue_maxsize: int = 0):
+        """
+        queue_maxsize: 0 => unbounded; else bounded with drop-oldest policy on overflow.
+        """
+        if not isinstance(events, list):
+            events = [events]
+        if predicates is not None and not isinstance(predicates, list):
+            predicates = [predicates]
+
+        self.events = events
+        self.predicates = predicates
+        self.timeout = timeout
+        self.stale_event_time = stale_event_time
+        self.wait_for_all = wait_for_all
+        self.once = once
+
+        n = len(self.events)
+        self.events_finished = [False] * n
+        self.matched_payloads = [(None, None)] * n
+
+        self._abort = False
+        self._queue = queue.Queue(maxsize=queue_maxsize)
+
+        # Register with the active loop immediately (not in wait())
+        active_event_loop.addWaiter(self)
+
+    # --- Public API ------------------------------------------------------------
+    def wait(self, timeout: float | None = None) -> bool:
+        """
+        Block until a matched snapshot is available or timed out/aborted.
+        Returns True if a snapshot was delivered into matched_payloads; False otherwise.
+        """
+        if timeout is None:
+            timeout = self.timeout
+
+        # If already aborted and nothing to consume, return immediately
+        if self._abort and self._queue.empty():
             return False
 
-    def _check_condition(self, condition: Any, event_flags: Optional[Dict[str, Any]]) -> bool:
-        """Back-compat: allow dict-based filters or callables."""
-        if condition is None:
-            return True
-        if callable(condition):
-            return bool(condition(event_flags or {}))
-        if not isinstance(event_flags, dict) or not isinstance(condition, dict):
+        try:
+            snap = self._queue.get(timeout=timeout) if timeout is not None else self._queue.get()
+        except queue.Empty:
             return False
-        for key, expected in condition.items():
-            if key not in event_flags:
-                return False
-            actual = event_flags[key]
-            if isinstance(expected, (list, tuple, set)):
-                if actual not in expected:
-                    return False
-            elif callable(expected):
-                if not expected(actual):
-                    return False
-            else:
-                if actual != expected:
-                    return False
+
+        # Wake-up sentinel injected by stop()
+        if snap is self._SENTINEL:
+            return False
+
+        # Snap is a list of (flags, data) matching positions
+        self.matched_payloads = snap
+
+        # Convenience for single-event case
+        if len(snap) == 1:
+            _, d = snap[0]
+            self.data = d
+        else:
+            self.data = None
+
         return True
 
+    def stop(self):
+        """Abort future waiting, deregister from loop, and wake any blocking wait()."""
+        self._abort = True
+        active_event_loop.removeWaiter(self)
 
-def _weak_maybe(callback):
-    """Return a WeakMethod for bound methods; otherwise the function itself."""
-    import weakref
-    try:
-        if hasattr(callback, '__self__') and callback.__self__ is not None:
-            return weakref.WeakMethod(callback)
-    except Exception:
-        pass
-    return callback
+        # Push sentinel to wake any blocking .wait()
+        try:
+            self._queue.put_nowait(self._SENTINEL)
+        except queue.Full:
+            try:
+                _ = self._queue.get_nowait()  # drop oldest to make room
+            except queue.Empty:
+                pass
+            self._queue.put_nowait(self._SENTINEL)
+
+    # --- Called by EventLoop under lock ---------------------------------------
+    def _set_match(self, pos: int, flags: dict[str, Any], data: Any):
+        self.matched_payloads[pos] = (flags, data)
+
+    def _enqueue_snapshot_and_prepare_next(self):
+        """Enqueue a snapshot of current matches; reset or finish based on 'once'."""
+        # Snapshot current matched payloads
+        snap = list(self.matched_payloads)
+
+        # Non-blocking put with drop-oldest policy if bounded and full
+        try:
+            self._queue.put_nowait(snap)
+        except queue.Full:
+            try:
+                _ = self._queue.get_nowait()  # drop oldest
+            except queue.Empty:
+                pass
+            self._queue.put_nowait(snap)
+
+        if self.once:
+            # Mark for removal; EventLoop will remove us after returning from dispatch
+            self._abort = True
+            return "finish"
+        else:
+            # Reset for next round
+            self.events_finished = [False] * len(self.events)
+            self.matched_payloads = [(None, None)] * len(self.events)
+            return "continue"
 
 
-# ======================================================================================================================
-# EventListener using cancelable waits
-# ======================================================================================================================
+# === EVENT LISTENER ===================================================================================================
+class OneShotHandle:
+    def __init__(self, waiter: EventWaiter, thread: threading.Thread):
+        self._waiter = waiter
+        self._thread = thread
 
+    def cancel(self):
+        self._waiter.stop()
+
+    def join(self, timeout=None):
+        self._thread.join(timeout)
+
+
+# === FUNCTIONS ========================================================================================================
+
+
+# === EVENT LISTENER ===================================================================================================
 class EventListener:
     """
-    Persistent listener that runs a single background thread.
-    It waits via cancelable handles, so stop() cancels the in-flight wait immediately.
+    Continuous listener built on a single queue-backed EventWaiter.
+
+    Adds:
+      - max_rate (Hz) throttling: limits callback invocations to at most N times per second.
+      - Burst coalescing: when throttled, only the most recent snapshot is kept (queue size = 1).
+
+    Behavior:
+      - If max_rate is None or <= 0, no throttling and the queue is unbounded (legacy behavior).
+      - If max_rate > 0, the listener sleeps as needed between deliveries to enforce the rate.
+        While sleeping, the waiter's queue (size 1) drops older snapshots in favor of the newest,
+        so the next delivery after the sleep reflects the latest state.
     """
+    events: list[Event]
+    predicate: list[Predicate] | None
+    callback: Callback | Callable
+    once: bool
+    wait_for_all: bool
+    max_rate: float | None
+    input_data: bool
+    spawn_thread: bool
+    stale_event_time: float | None
 
-    def __init__(self, event: ConditionEvent, callback: Callable,
-                 predicate: Optional[Predicate] = None,
-                 input_resource: bool = True,
-                 max_rate: Optional[float] = None):
-        self.event = event
-        self.callback = callback
+    _waiter: EventWaiter | None
+    _exit: bool
+    thread: threading.Thread
+
+    # rate limiting fields
+    _min_interval: float
+    _last_emit: float
+
+    def __init__(self, event: Event | list[Event],
+                 predicate: Predicate | list[Predicate] | None = None,
+                 callback: Callback | Callable | None = None,
+                 once: bool = False,
+                 wait_for_all: bool = False,
+                 max_rate: float | None = None,
+                 spawn_thread: bool = False,
+                 input_data: bool = True,
+                 stale_event_time: float | None = 0.05,
+                 queue_maxsize: int | None = None):
+        if not isinstance(event, list):
+            event = [event]
+        if predicate is not None and not isinstance(predicate, list):
+            predicate = [predicate]
+
+        self.events = event
         self.predicate = predicate
-        self.input_resource = input_resource
+        self.callback = callback
+        self.input_data = input_data
         self.max_rate = max_rate
-        self._min_interval = (1.0 / max_rate) if (max_rate and max_rate > 0) else None
-        self._last_exec = 0.0
+        self.wait_for_all = wait_for_all
+        self.once = once
+        self.spawn_thread = spawn_thread
+        self.stale_event_time = stale_event_time
 
-        self._stop_ev = threading.Event()
-        self._thread = threading.Thread(target=self._run, name=f"EventListener-{event.id}", daemon=True)
-        self._current_handle: Optional[WaitHandle] = None
+        # --- Rate limiting setup ---
+        self._min_interval = (1.0 / max_rate) if (max_rate and max_rate > 0) else 0.0
+        self._last_emit = 0.0
+
+        # If the caller explicitly passed queue_maxsize, respect it; otherwise:
+        # - when throttling -> 1 (coalesce to latest)
+        # - when not throttling -> 0 (unbounded; legacy behavior)
+        if queue_maxsize is None:
+            effective_qsize = 1 if self._min_interval > 0.0 else 0
+        else:
+            effective_qsize = queue_maxsize
+
+        self._waiter = EventWaiter(
+            events=self.events,
+            predicates=self.predicate,
+            timeout=None,
+            stale_event_time=self.stale_event_time,
+            wait_for_all=self.wait_for_all,
+            once=self.once is True,  # one-shot listener → one-shot waiter
+            queue_maxsize=effective_qsize,  # <-- important for coalescing
+        )
+        self._exit = False
+        self.thread = threading.Thread(target=self._task, daemon=True)
 
     def start(self):
-        self._thread.start()
+        self.thread.start()
 
     def stop(self):
-        self._stop_ev.set()
-        h = self._current_handle
-        if h is not None:
-            h.cancel()
-        if self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+        self._exit = True
+        if self._waiter is not None:
+            self._waiter.stop()
+        if self.thread.is_alive():
+            self.thread.join()
 
-    def _run(self):
-        while not self._stop_ev.is_set():
-            # register a cancelable wait
-            self._current_handle = self.event.wait_start(predicate=self.predicate)
-            res = self._current_handle.wait(timeout=0.5)  # small slice for responsiveness to stop()
-            if res is None:
-                # timed out or cancelled; check stop and loop
-                continue
+    # --- Private ---------------------------------------------------------------
+    def _deliver_callback(self):
+        """Assemble data from the waiter's matched payloads and invoke callback."""
+        if len(self.events) == 1:
+            _, data = self._waiter.matched_payloads[0]
+            payload = data if self.input_data else None
+        else:
+            assembled = {}
+            for i, ev in enumerate(self.events):
+                _, d = self._waiter.matched_payloads[i]
+                assembled[ev] = d
+            payload = assembled if self.input_data else None
 
-            resource, flags, ev = res
-            # rate limiting
-            now = time.time()
-            if self._min_interval is not None and (now - self._last_exec) < self._min_interval:
-                continue
-            self._last_exec = now
+        if self.spawn_thread:
+            th = threading.Thread(
+                target=self.callback, args=(() if payload is None else (payload,)), daemon=True
+            )
+            th.start()
+        else:
+            self.callback() if payload is None else self.callback(payload)
 
-            try:
-                if self.input_resource:
-                    self.callback(resource)
-                else:
-                    self.callback()
-            except Exception:
-                pass
+    def _task(self):
+        while not self._exit:
+            ok = self._waiter.wait(timeout=None)
+            if not ok:
+                break
 
-        # ensure any outstanding handle is cancelled
-        h = self._current_handle
-        if h is not None:
-            h.cancel()
+            # --- Rate limiting: enforce minimum spacing between callback invocations
+            if self._min_interval > 0.0 and self._last_emit > 0.0:
+                now = time.monotonic()
+                remaining = self._min_interval - (now - self._last_emit)
+                if remaining > 0:
+                    # Sleep to enforce the interval. During this sleep, the waiter's queue
+                    # (size 1) will keep only the latest snapshot if more events arrive.
+                    time.sleep(remaining)
+
+            self._deliver_callback()
+            if self._min_interval > 0.0:
+                self._last_emit = time.monotonic()
+
+            if self.once:
+                break
 
 
-# ======================================================================================================================
-# wait_any / wait_all (no helper threads)
-# ======================================================================================================================
+@dataclass(frozen=True)
+class EventMatch:
+    """Snapshot describing which event matched and with what payload."""
+    event: Event
+    index: int  # position in the input 'events' list
+    flags: dict[str, Any]
+    data: Any  # deep-copied snapshot captured by the waiter
 
-def wait_any(specs: Iterable[Tuple[ConditionEvent, Optional[Predicate]]],
-             timeout: Optional[float] = None) -> Optional[
-    Tuple[ConditionEvent, Tuple[Any, Dict[str, Any], ConditionEvent]]]:
-    """
-    Wait until ANY event in specs fires and passes its predicate.
-    Returns (winning_event, result_tuple) where result_tuple = (resource, flags, event).
-    Returns None on timeout.
-    """
-    done = threading.Event()
-    winner: Dict[str, Any] = {"event": None, "result": None}
-    handles: List[WaitHandle] = []
 
-    def make_cb(ev: ConditionEvent):
-        def _cb(_wh: WaitHandle):
-            # record first winner, signal done
-            if not done.is_set():
-                winner["event"] = ev
-                winner["result"] = _wh.wait(0)  # already completed; get result immediately
-                done.set()
+@dataclass(frozen=True)
+class WaitResult:
+    """High-level result of waiting on one or more events."""
+    ok: bool  # True if condition satisfied (any or all)
+    timeout: bool  # True if we timed out
+    finished: list[bool]  # per-position matched booleans (like before)
+    matches: list[EventMatch]  # snapshots for all matched positions
+    first: Optional[EventMatch]  # convenience: first matched position or None
 
-        return _cb
-
-    # register all
-    for ev, pred in specs:
-        h = ev.wait_start(predicate=pred, on_complete=make_cb(ev))
-        handles.append(h)
-
-    # wait for first completion
-    finished = done.wait(timeout=timeout)
-    # cancel the rest
-    for h in handles:
-        h.cancel()
-    if not finished:
+    def matched(self, event: "Event") -> Optional[EventMatch]:
+        """Find the match for a specific Event (first occurrence) if present."""
+        for m in self.matches:
+            if m.event is event:
+                return m
         return None
-    return typing.cast(ConditionEvent, winner["event"]), typing.cast(Tuple[Any, Dict[str, Any], ConditionEvent],
-                                                                     winner["result"])
 
 
-def wait_all(specs: Iterable[Tuple[ConditionEvent, Optional[Predicate]]],
-             timeout: Optional[float] = None) -> Optional[List[Tuple[Any, Dict[str, Any], ConditionEvent]]]:
+def waitForEvents(
+        events: Event | list[Event],
+        predicates: Predicate | list[Predicate] = None,
+        *,
+        timeout: Optional[float] = None,
+        wait_for_all: bool = False,
+        stale_event_time: Optional[float] = None,
+) -> WaitResult:
     """
-    Wait until ALL events in specs fire (and pass predicates).
-    Returns list of result_tuples (resource, flags, event) in the same order as specs, or None on timeout.
+    Like waitForEvents, but:
+      - supports stale_event_time (catch events that fired just before waiting)
+      - returns a WaitResult with exact matched snapshots.
+
+    NOTE: Doesn't spawn threads; uses a one-shot EventWaiter internally.
     """
-    specs = list(specs)
-    remaining = len(specs)
-    done = threading.Event()
-    results: List[Optional[Tuple[Any, Dict[str, Any], ConditionEvent]]] = [None] * len(specs)
-    handles: List[WaitHandle] = []
+    if not isinstance(events, list):
+        events = [events]
+    if predicates is not None and not isinstance(predicates, list):
+        predicates = [predicates]
 
-    def make_cb(idx: int):
-        def _cb(_wh: WaitHandle):
-            nonlocal remaining
-            if results[idx] is None:
-                results[idx] = _wh.wait(0)
-                remaining -= 1
-                if remaining == 0:
-                    done.set()
+    waiter = EventWaiter(
+        events=events,
+        predicates=predicates,  # may be None or fewer than events
+        timeout=timeout,
+        stale_event_time=stale_event_time,  # <-- new goodness
+        wait_for_all=wait_for_all,
+        once=True,
+        queue_maxsize=0,
+    )
+    try:
+        ok = waiter.wait(timeout=None)  # waiter has its own timeout
+        finished = list(waiter.events_finished)
+        timeout_hit = not ok
 
-        return _cb
+        matches: list[EventMatch] = []
+        if ok:
+            for idx, done in enumerate(finished):
+                if done:
+                    flags, data = waiter.matched_payloads[idx]
+                    matches.append(EventMatch(
+                        event=events[idx], index=idx, flags=flags or {}, data=data
+                    ))
 
-    for idx, (ev, pred) in enumerate(specs):
-        h = ev.wait_start(predicate=pred, on_complete=make_cb(idx))
-        handles.append(h)
-
-    finished = done.wait(timeout=timeout)
-    for h in handles:
-        h.cancel()
-    if not finished:
-        return None
-    # type: ignore
-    return typing.cast(List[Tuple[Any, Dict[str, Any], ConditionEvent]], results)
+        return WaitResult(
+            ok=ok,
+            timeout=timeout_hit,
+            finished=finished,
+            matches=matches,
+            first=(matches[0] if matches else None),
+        )
+    finally:
+        waiter.stop()
 
 
-# ======================================================================================================================
-# Decorator: per-instance ConditionEvent fields
-# ======================================================================================================================
+# === EVENT LOOP =================================================================================================
+class EventLoop(metaclass=_SingletonMeta):
+    """
+    Scalable event dispatcher with:
+      - per-waiter queues (push on match)
+      - stale-window precheck on registration
+      - exact snapshot delivery
+    """
+
+    def __init__(self):
+        self.events = weakref.WeakSet()
+        self.waiters: list[EventWaiter] = []
+        self.waiters_by_event: dict[Event, set[EventWaiter]] = {}
+        self._waiters_lock = threading.RLock()
+
+    # -- Event registration -----------------------------------------------------
+    def addEvent(self, event: Event):
+        with self._waiters_lock:
+            if event in self.events:
+                return
+            self.events.add(event)
+            event.callbacks.set.register(Callback(
+                function=self._event_set,
+                inputs={'event': event}
+            ))
+
+    # -- Waiter registration/removal -------------------------------------------
+    def addWaiter(self, waiter: EventWaiter):
+        to_finish = []
+        with self._waiters_lock:
+            self.waiters.append(waiter)
+            for ev in waiter.events:
+                self.waiters_by_event.setdefault(ev, set()).add(waiter)
+
+            # Ensure history covers stale window
+            if waiter.stale_event_time and waiter.stale_event_time > 0:
+                for ev in waiter.events:
+                    if getattr(ev, "max_history_time", 0) < waiter.stale_event_time:
+                        ev.max_history_time = waiter.stale_event_time
+
+                # Pre-check recent history and enqueue immediately if satisfied
+                now = time.monotonic()
+                for i, ev in enumerate(waiter.events):
+                    pred = waiter.predicates[i] if (waiter.predicates and i < len(waiter.predicates)) else None
+                    match = ev.first_match_in_window(pred, waiter.stale_event_time, now=now)
+                    if match is not None:
+                        flags, data = match
+                        waiter.events_finished[i] = True
+                        waiter._set_match(i, flags, data)
+
+                satisfied = all(waiter.events_finished) if waiter.wait_for_all else any(waiter.events_finished)
+                if satisfied:
+                    state = waiter._enqueue_snapshot_and_prepare_next()
+                    if state == "finish":
+                        to_finish.append(waiter)
+
+        # Clean-up for one-shot satisfied during precheck
+        if to_finish:
+            with self._waiters_lock:
+                for w in to_finish:
+                    self._unsafe_removeWaiter(w)
+
+    def removeWaiter(self, waiter: EventWaiter):
+        with self._waiters_lock:
+            self._unsafe_removeWaiter(waiter)
+
+    def _unsafe_removeWaiter(self, waiter: EventWaiter):
+        if waiter in self.waiters:
+            self.waiters.remove(waiter)
+        for ev in getattr(waiter, "events", ()):
+            s = self.waiters_by_event.get(ev)
+            if s is not None:
+                s.discard(waiter)
+                if not s:
+                    self.waiters_by_event.pop(ev, None)
+
+    # -- Dispatch ---------------------------------------------------------------
+    def _event_set(self, data, event: Event, flags, *args, **kwargs):
+        to_finish = []
+        with self._waiters_lock:
+            watchers = list(self.waiters_by_event.get(event, ()))
+            for waiter in watchers:
+                if waiter._abort:
+                    continue
+
+                matched_any_pos = False
+                for pos, ev in enumerate(waiter.events):
+                    if ev is not event:
+                        continue
+                    pred = (waiter.predicates[pos]
+                            if (waiter.predicates and pos < len(waiter.predicates))
+                            else None)
+                    ok = pred(flags, data) if pred is not None else True
+                    if ok:
+                        matched_any_pos = True
+                        if not waiter.events_finished[pos]:
+                            waiter.events_finished[pos] = True
+                            waiter._set_match(pos, flags, data)
+
+                if not matched_any_pos:
+                    continue
+
+                satisfied = all(waiter.events_finished) if waiter.wait_for_all else any(waiter.events_finished)
+                if satisfied:
+                    state = waiter._enqueue_snapshot_and_prepare_next()
+                    if state == "finish":
+                        to_finish.append(waiter)
+
+            # Remove any finished one-shot waiters from indices
+            if to_finish:
+                for w in to_finish:
+                    self._unsafe_removeWaiter(w)
+
 
 def event_definition(cls):
     """
-    Decorator to make ConditionEvent fields independent per instance.
-    Works with and without `from __future__ import annotations`.
+    Decorator to make Event fields independent per instance.
+
+    - If an attribute is annotated as `Event` (or Optional[Event]/Union[..., Event, ...])
+      and the instance doesn't set it in __init__, create a fresh Event for the instance.
+    - If a class-level default value is an Event, clone it per instance, preserving flags.
     """
+    import sys
+    import typing
+    from typing import get_origin, get_args
+
     original_init = getattr(cls, "__init__", None)
 
-    # Try to resolve annotations to real types (not strings)
+    # Resolve annotations, supporting `from __future__ import annotations`
     try:
         module_globals = sys.modules[cls.__module__].__dict__
         hints = typing.get_type_hints(cls, globalns=module_globals, localns=dict(vars(cls)))
     except Exception:
         hints = getattr(cls, "__annotations__", {}) or {}
 
-    def _is_condition_event_type(t):
-        if t is ConditionEvent:
+    def _is_event_type(t) -> bool:
+        if t is Event:
             return True
         if isinstance(t, str):
-            return t == "ConditionEvent" or t.endswith(".ConditionEvent")
+            return t == "Event" or t.endswith(".Event")
         origin = get_origin(t)
-        if origin is typing.Union:
-            return any(_is_condition_event_type(arg) for arg in typing.get_args(t))
+        # typing.Union (Py3.8/3.9) and PEP 604 unions (a | b) use different origins
+        try:
+            import types as _types
+            is_union = (origin is typing.Union) or (origin is _types.UnionType)
+        except Exception:
+            is_union = (origin is typing.Union)
+        if is_union:
+            return any(_is_event_type(arg) for arg in get_args(t))
         if origin is typing.ClassVar:
             return False
         return False
+
+    def _clone_event_template(template: Event) -> Event:
+        # Preserve declared flag schema
+        flags = [EventFlag(ef.id, ef.types) for ef in template.flags.values()]
+        clone = Event(
+            data_type=template.data_type,
+            flags=flags,
+            copy_data_on_set=template.copy_data_on_set,
+        )
+        # Copy non-ctor attrs too
+        clone.copy_fn = template.copy_fn
+        clone.max_history_time = template.max_history_time
+        return clone
 
     def new_init(self, *args, **kwargs):
         if original_init:
             original_init(self, *args, **kwargs)
 
-        # clone defaults or create fresh per annotation
-        for attr_name, anno in (hints.items() if isinstance(hints, dict) else []):
-            default_event = getattr(cls, attr_name, None)
-            if isinstance(default_event, ConditionEvent):
-                setattr(self, attr_name, ConditionEvent(flags=default_event._parameters_def, event_id=attr_name))
-                continue
-            if _is_condition_event_type(anno):
-                setattr(self, attr_name, ConditionEvent(event_id=attr_name))
+        # Annotated attributes
+        if isinstance(hints, dict):
+            for attr_name, anno in hints.items():
+                default_val = getattr(cls, attr_name, None)
+                if isinstance(default_val, Event):
+                    # Replace class-level Event with a per-instance clone
+                    setattr(self, attr_name, _clone_event_template(default_val))
+                    continue
+                if _is_event_type(anno) and attr_name not in self.__dict__:
+                    # No default provided; create a fresh Event
+                    setattr(self, attr_name, Event())
 
-        # unannotated defaults fallback
+        # Unannotated class-level Event defaults
         for attr_name, value in vars(cls).items():
-            if isinstance(value, ConditionEvent) and not hasattr(self, attr_name):
-                setattr(self, attr_name, ConditionEvent(flags=value._parameters_def, event_id=attr_name))
+            if isinstance(value, Event) and attr_name not in self.__dict__:
+                setattr(self, attr_name, _clone_event_template(value))
 
     cls.__init__ = new_init
     return cls
 
 
-# ======================================================================================================================
-# Examples / basic tests
-# ======================================================================================================================
-
-def _pred_equals(key: str, expected: Any) -> Predicate:
-    return lambda flags, res: flags.get(key) == expected
+active_event_loop = EventLoop()
 
 
-def example_basic_wait_and_cancel():
-    print("\n--- example_basic_wait_and_cancel ---")
-    ev = ConditionEvent(flags=[("kind", str)])
+# === EXAMPLES =========================================================================================================
+def test_wait_for_flag_predicate():
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    fired = []
 
-    # Start a handle and cancel it from another thread
-    handle = ev.wait_start(predicate=_pred_equals("kind", "go"))
-
-    def canceller():
-        time.sleep(0.2)
-        handle.cancel()
-        print("canceller: cancelled wait")
-
-    threading.Thread(target=canceller, daemon=True).start()
-
-    res = handle.wait(timeout=1.0)
-    print("wait result (should be None):", res)
-
-    # Now actually emit the matching event
-    def emitter():
+    def setter():
         time.sleep(0.1)
-        ev.set(resource={"value": 123}, flags={"kind": "go"})
+        e.set(data={"v": 1}, flags={"level": "high"})
 
-    threading.Thread(target=emitter, daemon=True).start()
+    threading.Thread(target=setter, daemon=True).start()
+    ok = e.wait(predicate=pred_flag_equals("level", "high"), timeout=1.0)
+    assert ok is True, "Event.wait with flag predicate should succeed"
+    assert e.getData() == {"v": 1}, "Event data should be set"
 
-    res2 = ev.wait(predicate=_pred_equals("kind", "go"), timeout=1.0)
-    print("second wait (should be tuple):", res2)
+
+def test_wait_for_data_predicate():
+    e = Event()
+
+    def setter():
+        time.sleep(0.1)
+        e.set(data={"state": "ready"})
+
+    threading.Thread(target=setter, daemon=True).start()
+    ok = e.wait(predicate=pred_data_dict_key_equals("state", "ready"), timeout=1.0)
+    assert ok is True, "Event.wait with data predicate should succeed"
 
 
-def example_listener_once_and_persistent():
-    print("\n--- example_listener_once_and_persistent ---")
-    ev = ConditionEvent(flags=[("level", str)])
+def test_stale_event_wait_success():
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    e.set(data={"x": 1}, flags={"level": "high"})
+    time.sleep(0.2)  # event happened in the recent past
+    ok = e.wait(predicate=pred_flag_equals("level", "high"),
+                stale_event_time=1.0, timeout=5)
+    assert ok is True, "Stale-window wait should immediately succeed for recent event"
 
-    # one-shot listener
-    ev.on(lambda data: print("once got:", data), predicate=_pred_equals("level", "high"), once=True)
 
-    # persistent listener with stop()
-    got = []
+def test_stale_event_wait_timeout():
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    e.set(data={"x": 1}, flags={"level": "high"})
+    time.sleep(0.3)
+    ok = e.wait(predicate=pred_flag_equals("level", "high"),
+                stale_event_time=0.05, timeout=0.2)
+    assert ok is False, "Stale-window wait should fail if event is outside window"
+
+
+def test_multiple_events_wait_for_all():
+    e1 = Event(flags=[EventFlag(id="level", data_type=str)])
+    e2 = Event()
+
+    def setter():
+        time.sleep(0.05)
+        e1.set(data=1, flags={"level": "high"})
+        time.sleep(0.05)
+        e2.set(data=2)
+
+    threading.Thread(target=setter, daemon=True).start()
+
+    w = EventWaiter(events=[e1, e2],
+                    predicates=[pred_flag_equals("level", "high"), None],
+                    timeout=1.0, wait_for_all=True)
+    ok = w.wait()
+    assert ok is True, "Waiter across two events (wait_for_all) should succeed"
+    assert w.events_finished == [True, True]
+
+
+def test_event_listener_basic_once():
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    hit = threading.Event()
+    seen = []
 
     def cb(data):
-        print("listener got:", data)
-        got.append(data)
+        seen.append(data)
+        hit.set()
 
-    stop = ev.on(cb, predicate=lambda f, r: f.get("level") in {"high", "low"}, once=False, input_resource=True)
+    listener = e.on(callback=cb,
+                    predicate=pred_flag_equals("level", "high"),
+                    once=True,
+                    input_data=True)
 
-    ev.set(resource="A", flags={"level": "low"})
-    ev.set(resource="B", flags={"level": "high"})
-    ev.set(resource="C", flags={"level": "med"})  # filtered out
-
-    time.sleep(0.2)
-    stop()  # stop persistent listener
-    print("listener collected:", got)
-
-
-def example_wait_any_all():
-    print("\n--- example_wait_any_all ---")
-    a = ConditionEvent(flags=[("tag", str)], event_id="A")
-    b = ConditionEvent(flags=[("tag", str)], event_id="B")
-
-    # wait_any across two events
-    def emitters():
-        time.sleep(0.1)
-        a.set(resource=1, flags={"tag": "x"})
-        time.sleep(0.1)
-        b.set(resource=2, flags={"tag": "y"})
-
-    threading.Thread(target=emitters, daemon=True).start()
-
-    winner = wait_any([(a, None), (b, _pred_equals("tag", "y"))], timeout=1.0)
-    print("wait_any winner:", (winner[0].id if winner else None), "result:", (winner[1] if winner else None))
-
-    # wait_all across both
-    # emit again
-    threading.Thread(target=emitters, daemon=True).start()
-    all_results = wait_all([(a, None), (b, None)], timeout=1.0)
-    print("wait_all results:", all_results)
+    time.sleep(0.05)
+    e.set(data=42, flags={"level": "high"})
+    assert hit.wait(1.0) is True, "Listener should fire once"
+    # assert seen == [42], "Listener callback should receive event data"
 
 
-@event_definition
-class MyService:
-    # Annotated events will be instantiated per instance
-    started: ConditionEvent
-    progress: ConditionEvent = ConditionEvent(flags=[("pct", int)])
+def test_one_shot_listener_with_stale():
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    # Fire in the past
+    e.set(data=99, flags={"level": "high"})
+    time.sleep(0.1)
 
-    def do_work(self):
-        self.started.set(resource={"ts": time.time()}, flags={"state": "start"})
-        for i in range(0, 101, 20):
-            self.progress.set(resource={"i": i}, flags={"pct": i})
-            time.sleep(0.01)
+    hit = threading.Event()
 
+    def cb(data):
+        assert data == 99
+        hit.set()
 
-def example_decorator_usage():
-    print("\n--- example_decorator_usage ---")
-    s1 = MyService()
-    s2 = MyService()
-
-    # subscribe to s1 progress >= 40, once
-    s1.progress.on(lambda data: print("s1 first >=40 data:", data),
-                   predicate=lambda f, r: f.get("pct", 0) >= 40, once=True)
-
-    # persistent listener for s2 progress
-    stop2 = s2.progress.on(lambda data: print("s2 progress:", data), once=False)
-
-    threading.Thread(target=s1.do_work, daemon=True).start()
-    threading.Thread(target=s2.do_work, daemon=True).start()
-    time.sleep(0.3)
-    stop2()
+    # Should trigger immediately thanks to stale_event_time
+    e.on(callback=cb, predicate=pred_flag_equals("level", "high"),
+         once=True, stale_event_time=1.0, timeout=0.5)
+    assert hit.wait(0.2) is True, "One-shot listener should trigger immediately from stale window"
 
 
-def example_listener():
-    ev = ConditionEvent(flags=[("kind", str)])
+def test_duplicate_event_entries_different_predicates_wait_for_all():
+    # Same Event watched twice with different predicates
+    e = Event(flags=[EventFlag(id="a", data_type=str),
+                     EventFlag(id="b", data_type=str)])
 
-    listener = EventListener(event=ev, callback=lambda *args, **kwargs: print("Event received"),
-                             predicate=pred_flag_key_equals('kind', 'hello'))
+    # waiter waits for both conditions on the SAME event
+    w = EventWaiter(events=[e, e],
+                    predicates=[pred_flag_equals("a", "x"),
+                                pred_flag_equals("b", "y")],
+                    timeout=1.0, wait_for_all=True)
+
+    def setter():
+        # First satisfies only position 0
+        time.sleep(0.05)
+        e.set(flags={"a": "x"})
+        # Then satisfies only position 1
+        time.sleep(0.05)
+        e.set(flags={"b": "y"})
+
+    threading.Thread(target=setter, daemon=True).start()
+    ok = w.wait()
+    assert ok is True, "Waiter should satisfy after both predicates matched on same Event"
+    assert w.events_finished == [True, True]
+
+
+def test_immediate_notify_stale_precheck_with_predicate():
+    e = Event(flags=[EventFlag(id="mode", data_type=str)])
+    e.set(flags={"mode": "auto"})
+    time.sleep(0.05)  # still within stale window
+
+    start = time.monotonic()
+    w = EventWaiter(events=e,
+                    predicates=pred_flag_equals("mode", "auto"),
+                    stale_event_time=0.5, timeout=1.0)
+    ok = w.wait()
+    elapsed = time.monotonic() - start
+    assert ok is True, "Immediate notify via stale precheck should succeed"
+    assert elapsed < 0.1, "Wait should return almost immediately when satisfied by history"
+
+
+def test_event_definition_decorator():
+    @event_definition
+    class MyEvents:
+        event1: Event = Event(flags=EventFlag(id="level", data_type=str))
+        event2: Event
+
+    a = MyEvents()
+    b = MyEvents()
+    # Each instance gets distinct Event objects
+    assert a.event1 is not b.event1, "event1 should be unique per instance"
+    assert a.event2 is not b.event2, "event2 should be unique per instance"
+    # Flag schema preserved
+    assert "level" in a.event1.flags
+
+
+def test_invalid_flag_type_raises():
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    try:
+        e.set(flags={"level": 123})  # wrong type
+        assert False, "TypeError expected for wrong flag type"
+    except TypeError:
+        pass
+
+
+def test_history_pruning():
+    e = Event()
+    e.max_history_time = 0.01
+    e.set()
+    assert len(e.history) >= 1
+    # Force prune as-if lots of time passed
+    now_future = time.monotonic() + 10.0
+    e._prune_history(now=now_future)
+    assert len(e.history) == 0, "History should be pruned when outside max_history_time window"
+
+
+def test_wait_for_data_equals():
+    e = Event()
+    expected_payload = {"state": "ready", "count": 2}
+
+    def setter():
+        time.sleep(0.05)
+        # Use a fresh dict to ensure we're testing equality, not identity
+        e.set(data=dict(expected_payload))
+
+    threading.Thread(target=setter, daemon=True).start()
+    ok = e.wait(predicate=pred_data_equals(expected_payload), timeout=1.0)
+    assert ok is True, "Event.wait with pred_data_equals should succeed when entire data matches"
+    assert e.getData() == expected_payload, "Event data should equal the expected payload"
+
+
+def test_counting_event_waits_for_value():
+    e = Event()
+    target_value = 7
+
+    def counter():
+        # Count up to the target, emitting an event at each step
+        for i in range(target_value + 1):
+            time.sleep(0.02)
+            e.set(data=i)
+
+    threading.Thread(target=counter, daemon=True).start()
+    ok = e.wait(predicate=pred_data_equals(target_value), timeout=1.0)
+    assert ok is True, "Waiter should trigger when the counter reaches the target value"
+    assert e.getData() == target_value, "Event data should equal the target count when unblocked"
+
+
+def test_listener_sees_snapshot_under_back_to_back_sets():
+    """
+    Repro the original race: emit val1 then val2 quickly.
+    Listener predicate matches val1; it must receive the val1 payload,
+    not the later overwritten value.
+    """
+    e = Event(flags=[EventFlag(id="level", data_type=str)])
+    seen = []
+    hit = threading.Event()
+
+    def cb(data):
+        seen.append(data)
+        hit.set()
+
+    # Listener waits for level == "val1"
+    listener = e.on(callback=cb,
+                    predicate=pred_flag_equals("level", "val1"),
+                    once=True,
+                    input_data=True)
+
+    def producer():
+        e.set(data={"k": "v1"}, flags={"level": "val1"})
+        # Immediately overwrite with another event
+        e.set(data={"k": "v2"}, flags={"level": "val2"})
+
+    threading.Thread(target=producer, daemon=True).start()
+
+    assert hit.wait(1.0) is True, "Listener should fire"
+    assert seen == [{"k": "v1"}], "Listener must receive the snapshot that matched (val1), not the overwrite"
+    listener.stop()
+
+
+def test_stale_precheck_returns_exact_snapshot_single_event():
+    """
+    Fire an event, then attach a waiter with stale_event_time.
+    The waiter should trigger immediately and its snapshot should equal the payload at emit time.
+    """
+    e = Event(flags=[EventFlag(id="tag", data_type=str)])
+    payload = {"x": 42}
+    e.set(data=payload, flags={"tag": "past"})
+    time.sleep(0.05)  # within the stale window below
+
+    w = EventWaiter(events=e,
+                    predicates=pred_flag_equals("tag", "past"),
+                    stale_event_time=0.5,
+                    timeout=0.5)
+
+    start = time.monotonic()
+    ok = w.wait()
+    elapsed = time.monotonic() - start
+
+    assert ok is True, "Stale precheck waiter should trigger immediately"
+    assert elapsed < 0.1, "Should be nearly instantaneous"
+    # matched snapshot should be present
+    (flags, data) = w.matched_payloads[0]
+    assert flags == {"tag": "past"}
+    assert data == payload
+
+
+def test_stale_precheck_multi_events_positions_filled_correctly():
+    """
+    Two events; we emit only one first, then attach a waiter for both with wait_for_all=True.
+    Then we emit the second. Ensure each matched position contains its own snapshot.
+    """
+    e1 = Event(flags=[EventFlag(id="a", data_type=str)])
+    e2 = Event(flags=[EventFlag(id="b", data_type=str)])
+
+    p1 = {"p": 1}
+    p2 = {"p": 2}
+
+    # Fire e1 in the past
+    e1.set(data=p1, flags={"a": "x"})
+    time.sleep(0.05)  # inside stale window
+
+    w = EventWaiter(events=[e1, e2],
+                    predicates=[pred_flag_equals("a", "x"), pred_flag_equals("b", "y")],
+                    wait_for_all=True,
+                    stale_event_time=0.5,
+                    timeout=0.5)
+
+    # The stale precheck should mark position 0 true, position 1 false (until e2 fires)
+    # Now fire e2 live
+    def later():
+        time.sleep(0.05)
+        e2.set(data=p2, flags={"b": "y"})
+
+    threading.Thread(target=later, daemon=True).start()
+
+    ok = w.wait()
+    assert ok is True
+    assert w.events_finished == [True, True], "Both positions should be satisfied"
+
+    (f1, d1) = w.matched_payloads[0]
+    (f2, d2) = w.matched_payloads[1]
+    assert f1 == {"a": "x"} and d1 == p1, "Position 0 should come from stale snapshot of e1"
+    assert f2 == {"b": "y"} and d2 == p2, "Position 1 should come from live e2 dispatch"
+
+
+def test_same_event_twice_different_predicates_snapshots_preserved():
+    """
+    Watch the SAME event twice, different predicates. Emit two distinct payloads;
+    ensure each position captures the snapshot that matched its own predicate.
+    """
+    e = Event(flags=[EventFlag(id="mode", data_type=str)])
+    p_auto = {"src": "first"}
+    p_manual = {"src": "second"}
+
+    w = EventWaiter(events=[e, e],
+                    predicates=[pred_flag_equals("mode", "auto"),
+                                pred_flag_equals("mode", "manual")],
+                    wait_for_all=True,
+                    timeout=1.0)
+
+    def emit():
+        time.sleep(0.02)
+        e.set(data=p_auto, flags={"mode": "auto"})
+        time.sleep(0.02)
+        e.set(data=p_manual, flags={"mode": "manual"})
+
+    threading.Thread(target=emit, daemon=True).start()
+    ok = w.wait()
+    assert ok is True
+    (f0, d0) = w.matched_payloads[0]
+    (f1, d1) = w.matched_payloads[1]
+    assert f0 == {"mode": "auto"} and d0 == p_auto
+    assert f1 == {"mode": "manual"} and d1 == p_manual
+
+
+def test_listener_builds_from_matched_payloads_multi_event():
+    """
+    Listener over two events should deliver a dict mapping each Event -> its matched payload snapshot.
+    """
+    e1 = Event(flags=[EventFlag(id="kind", data_type=str)])
+    e2 = Event()
+
+    delivered = []
+    hit = threading.Event()
+
+    def cb(data):
+        # data: {e1: payload1, e2: payload2}
+        delivered.append(data)
+        hit.set()
+
+    listener = EventListener(event=[e1, e2],
+                             predicate=[pred_flag_equals("kind", "alpha"), None],
+                             callback=cb,
+                             once=True,
+                             input_data=True,
+                             wait_for_all=True)
+
     listener.start()
 
-    while True:
-        time.sleep(1)
-        ev.set(flags={"kind": "hello"}, resource="world")
+    def emitter():
+        e1.set(data={"v": "A"}, flags={"kind": "alpha"})
+        e2.set(data={"v": "B"})
+
+    threading.Thread(target=emitter, daemon=True).start()
+    assert hit.wait(1.0) is True
+    assert len(delivered) == 1
+    out = delivered[0]
+    assert out[e1] == {"v": "A"}
+    assert out[e2] == {"v": "B"}
+    listener.stop()
 
 
-def example_on():
-    ev = ConditionEvent()
-    handle = ev.on(lambda *args, **kwargs: print("Event received"), predicate=pred_flag_key_equals('kind', 'hello'))
+def test_copy_data_on_set_true_isolation_from_mutation():
+    """
+    With copy_data_on_set=True (default), mutating the producer's dict after set()
+    must NOT affect the stored payload nor the snapshot seen by listeners.
+    """
+    e = Event(copy_data_on_set=True)
+    src = {"k": ["a", "b"]}
+    e.set(data=src)
+    src["k"].append("c")  # mutate after set
 
-    while True:
-        time.sleep(1)
-        ev.set(flags={"kind": "hello2"}, resource="world")
+    # Access via getData(copy=False) to inspect stored payload
+    stored = e.getData(copy=False)
+    assert stored == {"k": ["a", "b"]}, "Stored payload should be isolated by deepcopy"
 
 
-if __name__ == "__main__":
-    # example_listener()
-    example_on()
-    # example_basic_wait_and_cancel()
-    # example_listener_once_and_persistent()
-    # example_wait_any_all()
-    # example_decorator_usage()
+def test_copy_data_on_set_false_allows_aliasing():
+    """
+    With copy_data_on_set=False, we alias the input. Mutating after set() will reflect
+    in the stored payload. (Useful test so behavior is explicit.)
+    """
+    e = Event(copy_data_on_set=False)
+    src = {"k": ["a"]}
+    e.set(data=src)
+    src["k"].append("b")
+    stored = e.getData(copy=False)
+    assert stored == {"k": ["a", "b"]}, "Aliasing expected when copy_data_on_set=False"
+
+
+def test_history_used_in_has_match_in_window_uses_stored_data_not_latest():
+    """
+    Ensure has_match_in_window evaluates predicate against the data from history,
+    not the latest event.data.
+    """
+    e = Event(flags=[EventFlag(id="lvl", data_type=str)])
+    e.set(data={"n": 1}, flags={"lvl": "x"})
+    time.sleep(0.02)
+    # overwrite with non-matching data
+    e.set(data={"n": 2}, flags={"lvl": "z"})
+
+    # Ask for a stale window covering the first event; predicate checks for n == 1
+    pred = lambda f, d: d.get("n") == 1 and f.get("lvl") == "x"
+    ok = e.has_match_in_window(pred, window=0.5)
+    assert ok is True, "Should match against stored snapshot in history even if latest is different"
+
+
+if __name__ == '__main__':
+    # Execute all test functions from above here
+    test_wait_for_data_equals()
+    test_counting_event_waits_for_value()
+    test_listener_sees_snapshot_under_back_to_back_sets()
+    test_stale_precheck_returns_exact_snapshot_single_event()
+    test_stale_precheck_multi_events_positions_filled_correctly()
+    test_same_event_twice_different_predicates_snapshots_preserved()
+    test_listener_builds_from_matched_payloads_multi_event()
+    test_copy_data_on_set_true_isolation_from_mutation()
+    test_copy_data_on_set_false_allows_aliasing()
+    test_history_used_in_has_match_in_window_uses_stored_data_not_latest()
+    test_event_definition_decorator()
+
+

@@ -4,26 +4,36 @@ import dataclasses
 import math
 
 import numpy as np
+from prompt_toolkit.history import ThreadedHistory
 
-from applications.FRODO.data_aggregator import FRODO_DataAggregator, TestbedObject, TestbedObject_FRODO, \
+from applications.FRODO.algorithm.algorithm import get_covariance_ellipse
+from applications.FRODO.definitions import get_simulated_agent_definition_by_id
+from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_VisionAgent, FRODO_Static
+from applications.FRODO.testbed_manager import FRODO_TestbedManager, TestbedObject, TestbedObject_FRODO, \
     TestbedObject_STATIC
 
 from applications.FRODO.tracker.definitions import TrackedFRODO, TrackedStatic
 from applications.FRODO.tracker.frodo_tracker import FRODO_Tracker
 from core.utils.callbacks import Callback
 from core.utils.colors import random_color_from_palette
+from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
 from core.utils.time import Timer
+from core.utils.video.camera_streamer import VideoStreamer
+from extensions.babylon.src.babylon import BabylonVisualization
+from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CLI
 from extensions.gui.src.app import App
 from extensions.gui.src.gui import GUI, Page, Category
 from extensions.gui.src.lib.map.map import MapWidget
 from extensions.gui.src.lib.map.map_objects import Agent, CoordinateSystem, VisionAgent, MapObjectGroup, Point, \
-    Line
-from extensions.gui.src.lib.objects.objects import Widget_Group
+    Line, Ellipse
+from extensions.gui.src.lib.objects.objects import Widget_Group, PagedWidgetGroup, GroupPageWidget
+from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWidget, ConnectionIndicator, \
     InternetIndicator, JoystickIndicator
 from extensions.gui.src.lib.objects.python.video import VideoWidget
+from extensions.gui.src.lib.objects.python.text import TextWidget
 from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode
 from robots.frodo.frodo import FRODO
 from robots.frodo.frodo_definitions import FRODO_DEFINITIONS, STATIC_DEFINITIONS, FRODO_Sample, TESTBED_SIZE, \
@@ -31,6 +41,7 @@ from robots.frodo.frodo_definitions import FRODO_DEFINITIONS, STATIC_DEFINITIONS
 from robots.frodo.frodo_manager import FRODO_Manager
 from core.utils.lipo import lipo_soc
 from robots.frodo.frodo_utilities import vector2GlobalFrame
+import applications.FRODO.agent_manager as agent_manager
 
 from typing import TYPE_CHECKING
 
@@ -55,8 +66,8 @@ class FRODO_Tracker_Page:
 
         # Build the map
         self.map_widget = MapWidget(widget_id='map_widget',
-                                    limits={"x": [-2, 2], "y": [-2, 2]},
-                                    initial_display_center=[0, 0],
+                                    limits={"x": [0, 3], "y": [0, 3]},
+                                    initial_display_center=[1.5, 1.5],
                                     tiles=False,
                                     show_grid=True,
                                     major_grid_size=0.5,
@@ -73,7 +84,7 @@ class FRODO_Tracker_Page:
     # === METHODS ======================================================================================================
 
     # === PRIVATE METHODS ==============================================================================================
-    def _onTrackerDescriptionReceived(self):
+    def _onTrackerDescriptionReceived(self, *args, **kwargs):
         for frodo_id, frodo_tracked_agent in self.tracker.robots.items():
 
             if not frodo_id in FRODO_DEFINITIONS:
@@ -185,9 +196,9 @@ class FRODO_Robots_Page:
         self.page.clear()
         self._num_robots = 0
         self.robots = {}
-        for robot in self.manager.robots.values():
-            self._addRobot(robot)
-            self._num_robots += 1
+        # for robot in list(self.manager.robots.values()):
+        #     self._addRobot(robot)
+        #     self._num_robots += 1
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onRobotUpdate(self, robot_id):
@@ -257,19 +268,6 @@ class FRODO_Robots_Page:
                                             columns=1,
                                             )
         robot_group.addWidget(control_status_group, column=1, width=9, height=3)
-
-        robot_tiny_map = MapWidget(widget_id=f"{robot.id}_tiny_map",
-                                   limits={"x": [0, TESTBED_SIZE[0]], "y": [0, TESTBED_SIZE[1]]},
-                                   initial_display_center=[TESTBED_SIZE[0] / 2, TESTBED_SIZE[0] / 2],
-                                   initial_display_zoom=0.6,
-                                   tiles=True,
-                                   tile_size=TESTBED_TILE_SIZE,
-                                   show_grid=False,
-                                   major_grid_size=0.5,
-                                   minor_grid_size=0.1,
-                                   server_port=8333 + self._num_robots,
-                                   )
-        robot_group.addWidget(robot_tiny_map, row=11, column=1, width=9, height=8)
 
     # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
@@ -437,35 +435,62 @@ class FRODO_Vision_Page:
 
 
 # === DATA PAGE ========================================================================================================
-class FRODO_Data_Page:
+class FRODO_TestbedData_Page:
     page: Page
     gui: GUI
     manager: FRODO_Manager
-    aggregator: FRODO_DataAggregator
+    testbed_manager: FRODO_TestbedManager
 
     agents: dict[str, AgentContainer]
     statics: dict[str, StaticContainer]
 
     # === INIT =========================================================================================================
-    def __init__(self, gui: GUI, manager: FRODO_Manager, data_aggregator: FRODO_DataAggregator):
+    def __init__(self, gui: GUI, manager: FRODO_Manager, testbed_manager: FRODO_TestbedManager):
         self.gui = gui
         self.manager = manager
-        self.aggregator = data_aggregator
-        self.page = Page(id='data_page', name='Data')
+        self.testbed_manager = testbed_manager
+        self.page = Page(id='data_page', name='Testbed Data')
+
+        # Start the camera stream from USB if possible
+        self.streamer = VideoStreamer(
+            camera_source=0,
+            host='0.0.0.0',
+            port=8000,
+            path='/video',
+            stream_type='mjpeg',
+            width=1280,
+            height=720,
+            fps=24
+        )
+        try:
+            self.streamer.start()
+        except KeyboardInterrupt:
+            self.streamer.stop()
+
         self._buildPage()
 
         self.agents = {}
         self.statics = {}
         self._add_listeners()
 
+        register_exit_callback(self.stop)
+
     # === CLASSES ======================================================================================================
+    @dataclasses.dataclass
+    class MeasurementContainer:
+        id: str
+        object_to: str
+        object: Agent
+        line: Line
+        covariance: Ellipse
+
     @dataclasses.dataclass
     class AgentContainer:
         object: TestbedObject_FRODO
         group: MapObjectGroup
-        map_agent: Agent
-        measurements: MapObjectGroup
-        lines: MapObjectGroup
+        map_object: Agent
+        measurements: dict[str, "FRODO_TestbedData_Page.MeasurementContainer"]
+        measurements_group: MapObjectGroup
 
     @dataclasses.dataclass
     class StaticContainer:
@@ -475,6 +500,8 @@ class FRODO_Data_Page:
     # === PROPERTIES ===================================================================================================
 
     # === METHODS ======================================================================================================
+    def stop(self, *args, **kwargs):
+        self.streamer.stop()
 
     # === PRIVATE METHODS ==============================================================================================
     def _buildPage(self):
@@ -489,57 +516,167 @@ class FRODO_Data_Page:
                                     )
         self.page.addWidget(self.map_widget, width=18, height=18)
 
+        # self.testbed_video = TextWidget(text='Testbed Video')
+        self.testbed_video = VideoWidget(widget_id='testbed_video',
+                                         path=f"http://localhost:8000/video",
+                                         title="Testbed Video",
+                                         )
+        self.page.addWidget(self.testbed_video, row=1, column=19, width=12, height=9)
+
+        self.agent_data = TextWidget(text='Agent Data')
+        self.page.addWidget(self.agent_data, row=10, column=19, width=12, height=9)
+
+        self.agent_video_1 = VideoWidget(widget_id=f'{'frodo1'}_video_widget',
+                                         path=f"http://frodo1.local:{FRODO_VIDEO_PORT}/video",
+                                         title="FRODO 1",
+                                         title_color=FRODO_DEFINITIONS['frodo1'].color, )
+        self.page.addWidget(self.agent_video_1, row=1, column=31, width=10, height=9)
+
+        self.agent_video_2 = VideoWidget(widget_id=f'{'frodo2'}_video_widget',
+                                         path=f"http://frodo2.local:{FRODO_VIDEO_PORT}/video",
+                                         title="FRODO 2",
+                                         title_color=FRODO_DEFINITIONS['frodo2'].color, )
+        self.page.addWidget(self.agent_video_2, row=1, column=41, width=10, height=9)
+
+        self.agent_video_3 = VideoWidget(widget_id=f'{'frodo3'}_video_widget',
+                                         path=f"http://frodo3.local:{FRODO_VIDEO_PORT}/video",
+                                         title="FRODO 3",
+                                         title_color=FRODO_DEFINITIONS['frodo3'].color, )
+        self.page.addWidget(self.agent_video_3, row=10, column=31, width=10, height=9)
+
+        self.agent_video_4 = VideoWidget(widget_id=f'{'frodo4'}_video_widget',
+                                         path=f"http://frodo4.local:{FRODO_VIDEO_PORT}/video",
+                                         title="FRODO 4",
+                                         title_color=FRODO_DEFINITIONS['frodo4'].color, )
+        self.page.addWidget(self.agent_video_4, row=10, column=41, width=10, height=9)
+
     # ------------------------------------------------------------------------------------------------------------------
+
     def _add_listeners(self):
-        self.aggregator.events.initialized.on(self._on_aggregator_initialized)
-        self.aggregator.events.update.on(self._on_aggregator_update)
+        self.testbed_manager.events.new_object.on(self._on_testbed_manager_new_object)
+        self.testbed_manager.events.update.on(self._on_testbed_manager_update)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_aggregator_initialized(self):
-        # Loop through the aggregators agents and statics and add them to the map
-        for agent in self.aggregator.robots.values():
-            self.addTestbedObject(agent)
-
+    def _on_testbed_manager_new_object(self,testbed_object, *args, **kwargs):
+        self.addTestbedObject(testbed_object)
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_aggregator_update(self):
+    def _on_testbed_manager_update(self, *args, **kwargs):
         for agent in list(self.agents.values()):
-            agent.map_agent.update(x=agent.object.state.x, y=agent.object.state.y, psi=agent.object.state.psi)
+            # 1) Update agent pose on map
+            agent.map_object.update(x=agent.object.state.x,
+                                    y=agent.object.state.y,
+                                    psi=agent.object.state.psi)
 
-            current_measurements = []
+            active_measurement_ids = set()
+            active_line_ids = set()
+
+            # 2) Handle all current measurements from this agent
             for measurement in agent.object.measurements:
                 measured_object_id = measurement.object_to.id
                 measurement_id = f"{agent.object.id} -> {measured_object_id}"
                 measurement_line_id = f"{agent.object.id}_to_{measured_object_id}_line"
 
-                if measurement_id in agent.measurements.objects:
-                    agent.measurements.objects[measurement_id].visible(True)
-                    agent.lines.objects[measurement_line_id].visible(True)
+                active_measurement_ids.add(measurement_id)
+                active_line_ids.add(measurement_line_id)
+
+                # Create map objects on first sight
+                if measurement_id not in agent.measurements:
+                    measurement_object = Agent(
+                        id=measurement_id,
+                        color=[0.8, 0.8, 0.8],
+                        size=0.05,
+                        opacity=0.5,
+                    )
+                    agent.measurements_group.addObject(measurement_object)
+                    measurement_line = Line(
+                        id=measurement_line_id,
+                        name=measurement_id,
+                        color=[0.8, 0.8, 0.8],
+                        start=agent.map_object,  # dynamic endpoint
+                        end=measurement_object,  # dynamic endpoint
+                    )
+                    covariance = Ellipse(
+                        id=f"{measurement_id}_covariance",
+                        opacity=0.2,
+                        color=[0.8, 0.8, 0.8],
+                    )
+
+                    # Store and add to the map group so they render
+                    agent.measurements[measurement_id] = self.MeasurementContainer(
+                        id=measurement_id,
+                        object_to=measured_object_id,
+                        object=measurement_object,
+                        line=measurement_line,
+                        covariance=covariance,
+                    )
+
+                    agent.measurements_group.addObject(measurement_line)
+                    agent.measurements_group.addObject(covariance)
                 else:
-                    measurement_object = Agent(id=measurement_id,
-                                               color=[0.8, 0.8, 0.8],
-                                               size=0.05,
-                                               opacity=0.5,
-                                               )
-                    agent.measurements.addObject(measurement_object)
+                    # Make visible again this tick
+                    agent.measurements[measurement_id].object.visible(True)
+                    agent.measurements[measurement_id].line.visible(True)
+                    agent.measurements[measurement_id].covariance.visible(True)
 
-                    measurement_line = Line(id=measurement_line_id,
-                                            name=measurement_id,
-                                            color=[0.8, 0.8, 0.8],
-                                            start=agent.map_agent,
-                                            end=measurement_object,
-                                            )
-                    agent.lines.addObject(measurement_line)
+                mc = agent.measurements[measurement_id]
 
-                # Set the measurement position
-                measurement_position_global = vector2GlobalFrame(np.asarray([measurement.relative.x,
-                                                                             measurement.relative.y]),
-                                                                 agent.object.state.psi)
-                measurement_position_global = [measurement_position_global[0] + agent.object.state.x,
-                                               measurement_position_global[1] + agent.object.state.y, ]
-                measurement_psi_global = measurement.relative.psi + agent.object.state.psi
-                agent.measurements.objects[measurement_id].update(x=measurement_position_global[0],
-                                                                  y=measurement_position_global[1],
-                                                                  psi=measurement_psi_global, )
+                # 3) Compute the global position for the measured object
+                rel_vec_agent = np.asarray([measurement.relative.x, measurement.relative.y])
+                rel_global = vector2GlobalFrame(rel_vec_agent, agent.object.state.psi)
+                meas_x = rel_global[0] + agent.object.state.x
+                meas_y = rel_global[1] + agent.object.state.y
+                meas_psi_global = measurement.relative.psi + agent.object.state.psi
+
+                mc.object.update(x=meas_x, y=meas_y, psi=meas_psi_global)
+
+                # 4) Update covariance ellipse
+                # measurement.covariance is in the measuring agent frame.
+                # We need a 2x2 position covariance in *global* frame.
+                P = measurement.covariance
+
+                # Normalize to a 2x2 (x,y) covariance in the agent frame
+                if isinstance(P, np.ndarray):
+                    if P.ndim == 2:
+                        if P.shape == (3, 3):
+                            P_xy_agent = P[:2, :2]
+                        elif P.shape == (2, 2):
+                            P_xy_agent = P
+                        else:
+                            # Fallback: try to interpret diagonal [var_x, var_y, ...]
+                            diag = np.diag(P)
+                            P_xy_agent = np.diag(diag[:2]) if diag.size >= 2 else np.eye(2) * 1e-6
+                    elif P.ndim == 1:  # diagonal provided as vector
+                        P_xy_agent = np.diag(P[:2]) if P.size >= 2 else np.eye(2) * 1e-6
+                    else:
+                        P_xy_agent = np.eye(2) * 1e-6
+                else:
+                    # Unknown type → tiny isotropic cov to stay robust
+                    P_xy_agent = np.eye(2) * 1e-6
+
+                # Rotate into global frame using the agent's current heading
+                c, s = np.cos(agent.object.state.psi), np.sin(agent.object.state.psi)
+                R = np.array([[c, -s],
+                              [s, c]], dtype=float)
+                P_xy_global = R @ (0.5 * (P_xy_agent + P_xy_agent.T)) @ R.T  # symmetrize for safety
+
+                # Convert 2x2 covariance to ellipse radii/orientation
+                rx, ry, psi_ellipse = get_covariance_ellipse(P_xy_global)
+
+                # 5) Push ellipse update (center at measured global position)
+                mc.covariance.update(
+                    x=meas_x,
+                    y=meas_y,
+                    rx=rx,
+                    ry=ry,
+                    psi=psi_ellipse,
+                )
+
+            # 6) Hide any measurements not present this tick
+            for mid, container in list(agent.measurements.items()):
+                if mid not in active_measurement_ids:
+                    container.object.visible(False)
+                    container.line.visible(False)
+                    container.covariance.visible(False)
 
     # ------------------------------------------------------------------------------------------------------------------
     def addTestbedObject(self, object: TestbedObject):
@@ -560,13 +697,13 @@ class FRODO_Data_Page:
 
             agent_container = self.AgentContainer(object=object,
                                                   group=group,
-                                                  map_agent=agent,
-                                                  measurements=MapObjectGroup(id=f'object_{object.id}_measurements'),
-                                                  lines=MapObjectGroup(id=f'object_{object.id}_lines'),
+                                                  map_object=agent,
+                                                  measurements_group=MapObjectGroup(
+                                                      id=f'object_{object.id}_measurements'),
+                                                  measurements={}
                                                   )
 
-            agent_container.group.addGroup(agent_container.measurements)
-            agent_container.group.addGroup(agent_container.lines)
+            agent_container.group.addGroup(agent_container.measurements_group)
 
             self.agents[object.id] = agent_container
 
@@ -582,6 +719,342 @@ class FRODO_Data_Page:
 
     # ------------------------------------------------------------------------------------------------------------------
 
+    # ------------------------------------------------------------------------------------------------------------------
+
+
+# === FRODO AGENTS PAGE ================================================================================================
+class FRODO_Agents_Page:
+    page: Page
+    gui: GUI
+    manager: agent_manager.FRODO_AgentManager
+
+    @dataclasses.dataclass
+    class AgentPage_AgentContainer:
+        id: str
+        agent: agent_manager.AgentContainer
+        map_group: MapObjectGroup
+        map_object: Agent
+        measurements: MapObjectGroup
+        lines: MapObjectGroup
+
+    @dataclasses.dataclass
+    class AgentPage_StaticContainer:
+        static: agent_manager.StaticContainer
+        map_group: MapObjectGroup
+        map_object: Point
+
+    agents: dict[str, AgentPage_AgentContainer]
+    statics: dict[str, AgentPage_StaticContainer]
+
+    # === INIT =========================================================================================================
+    def __init__(self, gui: GUI, manager: agent_manager.FRODO_AgentManager):
+        self.gui = gui
+        self.manager = manager
+        self.page = Page(id='agents_page', name='Agents')
+        self._buildPage()
+
+        self.manager.events.initialized.on(self._on_agent_manager_initialized)
+        self.manager.events.update.on(self._on_agent_manager_update)
+
+    def _buildPage(self):
+        self.map_widget = MapWidget(widget_id='agent_map_widget',
+                                    limits={"x": [0, TESTBED_SIZE[0]], "y": [0, TESTBED_SIZE[1]]},
+                                    initial_display_center=[TESTBED_SIZE[0] / 2, TESTBED_SIZE[1] / 2],
+                                    tiles=True,
+                                    tile_size=TESTBED_TILE_SIZE,
+                                    show_grid=False,
+                                    server_port=8107,
+                                    )
+        self.page.addWidget(self.map_widget, width=18, height=18)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _clear(self):
+        self.map_widget.map.clear()
+        self.agents = {}
+        self.statics = {}
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _add_agent(self, agent: agent_manager.AgentContainer):
+        agent_id = agent.id
+
+        color = FRODO_DEFINITIONS[agent_id].color if agent_id in FRODO_DEFINITIONS else [0.8, 0.8, 0.8]
+
+        group = MapObjectGroup(id=f'object_{agent_id}_group')
+
+        map_object = Agent(id=agent_id,
+                           color=color,
+                           size=0.07,
+                           arrow_length=0.3,
+                           arrow_width=0.05,
+                           opacity=0.5,
+                           )
+
+        group.addObject(map_object)
+
+        measurements_group = MapObjectGroup(id=f'object_{agent_id}_measurements')
+        lines_group = MapObjectGroup(id=f'object_{agent_id}_lines')
+        group.addGroup(measurements_group)
+        group.addGroup(lines_group)
+        self.map_widget.map.addGroup(group)
+
+        container = self.AgentPage_AgentContainer(id=agent_id,
+                                                  agent=agent,
+                                                  map_group=group,
+                                                  map_object=map_object,
+                                                  measurements=measurements_group,
+                                                  lines=lines_group,
+                                                  )
+
+        self.agents[agent_id] = container
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _add_static(self, static: agent_manager.StaticContainer):
+        static_id = static.id
+        map_object = Point(id=static_id,
+                           color=[0.8, 0.8, 0.8],
+                           size=0.05,
+                           )
+        group = MapObjectGroup(id=f'static_{static_id}_group')
+        group.addObject(map_object)
+        self.map_widget.map.addGroup(group)
+        container = self.AgentPage_StaticContainer(static=static,
+                                                   map_group=group,
+                                                   map_object=map_object,
+                                                   )
+        self.statics[static_id] = container
+
+    # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_agent_manager_initialized(self, *args, **kwargs):
+        self._clear()
+
+        for agent in self.manager.agents.values():
+            self._add_agent(agent)
+
+        for static in self.manager.statics.values():
+            self._add_static(static)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_agent_manager_update(self, *args, **kwargs):
+
+        # Update the agents
+        for agent_id, agent_container in self.agents.items():
+            # Update agent pose
+            agent_container.map_object.update(x=agent_container.agent.state.x,
+                                              y=agent_container.agent.state.y,
+                                              psi=agent_container.agent.state.psi)
+
+        # Update the statics
+        for static_id, static_container in self.statics.items():
+            static_container.map_object.update(x=static_container.static.state.x,
+                                               y=static_container.static.state.y,
+                                               psi=static_container.static.state.psi)
+
+
+# === FRODO SIMULATION PAGE ==============================================================================================
+class FRODO_Simulation_Page:
+    page: Page
+    gui: GUI
+    simulation: FRODO_Simulation
+
+    @dataclasses.dataclass
+    class SimulationAgentContainer:
+        id: str
+        agent: FRODO_VisionAgent
+        map_object: VisionAgent
+        group: MapObjectGroup
+        measurements: MapObjectGroup
+        lines: MapObjectGroup
+
+    @dataclasses.dataclass
+    class SimulationStaticContainer:
+        id: str
+        static: FRODO_Static
+        map_object: CoordinateSystem
+        group: MapObjectGroup
+
+    agents: dict[str, SimulationAgentContainer]
+    statics: dict[str, SimulationStaticContainer]
+
+    # === INIT =========================================================================================================
+    def __init__(self, gui: GUI, simulation: FRODO_Simulation):
+        self.gui = gui
+        self.simulation = simulation
+        self.agents = {}
+        self.statics = {}
+        self.page = Page(id='simulation_page', name='Simulation')
+        self.logger = Logger('Simulation Page')
+        self._buildPage()
+
+        self.simulation.events.initialized.on(self._on_simulation_initialized)
+        self.simulation.events.update.on(self._on_simulation_update, max_rate=20)
+        self.simulation.events.new_agent.on(self._on_simulation_new_agent)
+        self.simulation.events.removed_agent.on(self._on_simulation_removed_agent)
+        self.simulation.events.new_static.on(self._on_simulation_new_static)
+        self.simulation.events.removed_static.on(self._on_simulation_removed_static)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _buildPage(self):
+
+        group_2d = PagedWidgetGroup('2d', title='2D Map', rows=1, columns=1)
+
+        self.map_widget = MapWidget(widget_id='data_map_widget',
+                                    limits={"x": [0, TESTBED_SIZE[0]], "y": [0, TESTBED_SIZE[1]]},
+                                    initial_display_center=[TESTBED_SIZE[0] / 2, TESTBED_SIZE[1] / 2],
+                                    tiles=True,
+                                    tile_size=TESTBED_TILE_SIZE,
+                                    show_grid=False,
+                                    server_port=8109,
+                                    )
+
+        group_2d.addWidget(self.map_widget, width=1, height=1)
+        group_3d = PagedWidgetGroup('3d', title='3D Map', rows=1, columns=1)
+
+        self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
+        self.babylon = BabylonVisualization('babylon')
+
+        floor = SimpleFloor('floor', size_y=50, size_x=50, texture='carpet.png')
+        self.babylon.addObject(floor)
+
+        self.babylon.start()
+
+        self.babylon_widget.babylon = self.babylon
+        group_3d.addWidget(self.babylon_widget, width=1, height=1)
+
+        self.simulation_overview = TextWidget(text='Simulation Overview')
+        self.page.addWidget(self.simulation_overview, row=1, column=19, width=12, height=9)
+
+        self.simulation_agent_data = TextWidget(text='Simulation Agent Data')
+        self.page.addWidget(self.simulation_agent_data, row=10, column=19, width=12, height=9)
+
+        self.map_group = GroupPageWidget(group_id='maps')
+        self.page.addWidget(self.map_group, row=1, column=1, width=18, height=18)
+
+        self.map_group.addGroup(group_2d)
+        self.map_group.addGroup(group_3d)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _add_agent(self, agent: FRODO_VisionAgent):
+        agent_id = agent.agent_id
+        agent_definition = get_simulated_agent_definition_by_id(agent.agent_id)
+        if agent_definition is not None:
+            agent_color = agent_definition.color
+        else:
+            agent_color = [0.8, 0.8, 0.8]
+
+        map_object = VisionAgent(agent_id, name=agent_id, color=agent_color, fov=agent.config.fov,
+                                 vision_radius=agent.config.vision_radius, )
+
+        group = MapObjectGroup(id=f'object_{agent_id}_group')
+        group.addObject(map_object)
+        measurements_group = MapObjectGroup(id=f'object_{agent_id}_measurements')
+        lines_group = MapObjectGroup(id=f'object_{agent_id}_lines')
+        group.addGroup(measurements_group)
+        group.addGroup(lines_group)
+        self.map_widget.map.addGroup(group)
+        container = self.SimulationAgentContainer(
+            id=agent_id,
+            agent=agent,
+            map_object=map_object,
+            group=group,
+            measurements=measurements_group,
+            lines=lines_group,
+        )
+        self.agents[agent_id] = container
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _remove_agent(self, agent: SimulationAgentContainer | str):
+        if isinstance(agent, str):
+            agent_id = agent
+        else:
+            agent_id = agent.id
+        self.map_widget.map.removeGroup(self.agents[agent_id].group)
+        del self.agents[agent_id]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _add_static(self, static: FRODO_Static):
+        static_id = static.agent_id
+
+        map_object = CoordinateSystem(id=f"{static_id}",
+                                      x=static.state.x,
+                                      y=static.state.y,
+                                      psi=static.state.psi,
+                                      show_name=True)
+
+        group = MapObjectGroup(id=f'static_{static_id}_group')
+        group.addObject(map_object)
+        self.map_widget.map.addGroup(group)
+        container = self.SimulationStaticContainer(
+            id=static_id,
+            static=static,
+            map_object=map_object,
+            group=group,
+        )
+        self.statics[static_id] = container
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _remove_static(self, static: FRODO_Static):
+        static_id = static.agent_id
+        self.map_widget.map.removeGroup(f'static_{static_id}_group')
+        del self.statics[static_id]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_simulation_initialized(self, *args, **kwargs):
+        ...
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_simulation_update(self, *args, **kwargs):
+
+        # Update the agents
+        for agent_id, agent_container in self.agents.items():
+            # Update the agent object
+            agent_container.map_object.update(x=agent_container.agent.state.x,
+                                              y=agent_container.agent.state.y,
+                                              psi=agent_container.agent.state.psi)
+
+            # Update the measurements
+            # vnjkdfvnkdjfsnvkjfd
+            #
+            # ADD THIS
+            #
+            # ALSO ADD TITLES TO ALL PAGES SAYING IF THEY ARE INITIALIZED YET!
+
+        # Update the statics
+        for static_id, static_container in self.statics.items():
+            static_container.map_object.update(x=static_container.static.state.x,
+                                               y=static_container.static.state.y,
+                                               psi=static_container.static.state.psi)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_simulation_new_agent(self, agent: FRODO_VisionAgent, *args, **kwargs):
+        if agent.agent_id not in self.agents:
+            self._add_agent(agent)
+        else:
+            self.logger.warning(f"Agent {agent.agent_id} already exists in simulation page")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_simulation_removed_agent(self, agent: str, *args, **kwargs):
+        if agent in self.agents:
+            self._remove_agent(self.agents[agent])
+        else:
+            self.logger.warning(f"Agent {agent} does not exist in simulation page")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_simulation_new_static(self, static: FRODO_Static, *args, **kwargs):
+        if static.agent_id not in self.statics:
+            self._add_static(static)
+        else:
+            self.logger.warning(f"Static {static.agent_id} already exists in simulation page")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_simulation_removed_static(self, static: FRODO_Static, *args, **kwargs):
+        if static.agent_id in self.statics:
+            self._remove_static(static)
+        else:
+            self.logger.warning(f"Static {static.agent_id} does not exist in simulation page")
     # ------------------------------------------------------------------------------------------------------------------
 
 
@@ -669,8 +1142,10 @@ class FRODO_GUI:
     tracker: FRODO_Tracker
 
     # === INIT =========================================================================================================
-    def __init__(self, host, application, tracker: FRODO_Tracker, manager: FRODO_Manager,
-                 aggregator: FRODO_DataAggregator,
+    def __init__(self,
+                 host,
+                 application,
+                 testbed_manager: FRODO_TestbedManager,
                  cli: CLI = None):
         self.logger = Logger('FRODO GUI', 'DEBUG')
         self.gui = GUI(
@@ -684,9 +1159,9 @@ class FRODO_GUI:
         self.categories = {}
 
         self.application = application
-        self.tracker = tracker
-        self.manager = manager
-        self.aggregator = aggregator
+        self.testbed_manager = testbed_manager
+        self.tracker = self.testbed_manager.tracker
+        self.robot_manager = self.testbed_manager.robot_manager
 
         self._buildOverviewCategory()
         addLogRedirection(self._logRedirection, minimum_level='DEBUG')
@@ -704,7 +1179,7 @@ class FRODO_GUI:
         self.overview_category = Category(id='overview', name='FRODO App')
         self.gui.addCategory(self.overview_category)
 
-        self.robots_page = FRODO_Robots_Page(self.gui, self.manager)
+        self.robots_page = FRODO_Robots_Page(self.gui, self.robot_manager)
         self.overview_category.addPage(self.robots_page.page)
 
         self.tracker_page = FRODO_Tracker_Page(self.gui,
@@ -712,11 +1187,18 @@ class FRODO_GUI:
 
         self.overview_category.addPage(self.tracker_page.page)
 
-        self.vision_page = FRODO_Vision_Page(self.gui, manager=self.manager)
+        self.vision_page = FRODO_Vision_Page(self.gui, manager=self.robot_manager)
         self.overview_category.addPage(self.vision_page.page)
 
-        self.data_page = FRODO_Data_Page(self.gui, manager=self.manager, data_aggregator=self.aggregator)
+        self.data_page = FRODO_TestbedData_Page(self.gui, manager=self.robot_manager,
+                                                testbed_manager=self.testbed_manager)
         self.overview_category.addPage(self.data_page.page)
+
+        self.simulation_page = FRODO_Simulation_Page(self.gui, self.application.simulation)
+        self.overview_category.addPage(self.simulation_page.page)
+
+        self.agents_page = FRODO_Agents_Page(self.gui, manager=self.application.agent_manager)
+        self.overview_category.addPage(self.agents_page.page)
 
         self.algorithm_page = FRODO_Algorithm_Page(self.application)
         self.overview_category.addPage(self.algorithm_page.page)

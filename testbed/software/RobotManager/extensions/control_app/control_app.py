@@ -1082,7 +1082,7 @@ class JoystickWidget(Widget):
 
 # ======================================================================================================================
 class TextWidget(Widget):
-    def __init__(self, widget_id, title, text, color: (str, list) = None, textcolor: (str, list) = "#fff",
+    def __init__(self, widget_id=None, title='', text='', color: (str, list) = None, textcolor: (str, list) = "#fff",
                  size=None, position=None, lockable=False, locked=False):
 
         super(TextWidget, self).__init__(widget_id, position=position, size=size, lockable=lockable, locked=locked)

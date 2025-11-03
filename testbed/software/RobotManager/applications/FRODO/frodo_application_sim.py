@@ -12,14 +12,20 @@ from applications.FRODO.algorithm.algorithm_centralized_alternative import Centr
 from applications.FRODO.algorithm.algorithm_distributed import AlgorithmAgent, AlgorithmAgentState, \
     AlgorithmAgentMeasurement, DistributedAlgorithm, DistributedUpdateType, DistributedAgent
 from applications.FRODO.frodo_application import AlgorithmState
+from applications.FRODO.navigation.multi_agent_navigator import MultiAgentNavigator, NavigatorPlan, ActionGroup, Move, \
+    Wait
+from applications.FRODO.navigation.navigator import CoordinatedMoveTo, MoveTo
+from applications.FRODO.navigation.utilities import FRODO_Sim_NavigatedObject
 
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_VisionAgent, \
     FRODO_VisionAgent_Interactive, FRODO_Static, FRODO_ENVIRONMENT_ACTIONS
 from core.utils.colors import random_color_from_palette, get_color_from_palette, LIGHT_GREEN, LIGHT_RED, NamedColor
 from core.utils.exit import register_exit_callback
+from core.utils.files import relativeToFullPath
 from core.utils.logging_utils import Logger, LOGGING_COLORS, addLogRedirection
 from core.utils.network.network import getHostIP
 from core.utils.sound.sound import SoundSystem
+from core.utils.time import setTimeout
 from extensions.babylon.src.babylon import BabylonVisualization
 from extensions.babylon.src.lib.objects.box.box import WallFancy
 from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
@@ -126,6 +132,8 @@ class FRODO_App_Standalone:
     algorithm_state = AlgorithmState.STOPPED
     algorithm_display_states = AlgorithmDisplayStates(distributed=True, centralized=True)
 
+    navigator: MultiAgentNavigator
+
     # === INIT =========================================================================================================
     def __init__(self):
         host = 'localhost'
@@ -150,9 +158,10 @@ class FRODO_App_Standalone:
         self.simulation.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(
             self._inputStep)
 
+        self.navigator = MultiAgentNavigator()
+
         self.gui = GUI('frodo_simulation_standalone_gui', host=host, run_js=True)
         self.cli = CLI(id='frodo_simulation_standalone_cli', root=FRODO_Simulation_CLI(self))
-
 
         self.algorithm_centralized = CentralizedAlgorithm(Ts=TS)
         self.algorithm_distributed = DistributedAlgorithm(Ts=TS, update_method=DistributedUpdateType.CI)
@@ -272,7 +281,7 @@ class FRODO_App_Standalone:
         if position is None:
             position = [0, 0]
 
-        agent = self.simulation.addSimulatedAgent(agent_id, fov, vision_radius, interactive)
+        agent = self.simulation.add_agent(agent_id, fov, vision_radius, interactive)
 
         agent.state.x = position[0]
         agent.state.y = position[1]
@@ -401,7 +410,7 @@ class FRODO_App_Standalone:
         agent = self.agents[agent]
 
         # Remove the agent from the simulation
-        self.simulation.removeSimulatedAgent(agent.agent)
+        self.simulation.remove_agent(agent.agent)
 
         # Remove the agent from the GUI
         self.map.removeGroup(agent.map.group)
@@ -431,7 +440,7 @@ class FRODO_App_Standalone:
             self.logger.warning(f'Object with ID {object_id} already exists')
             return
 
-        static_obj = self.simulation.addSimulatedStatic(object_id)
+        static_obj = self.simulation.add_static(object_id)
         static_obj.state.x = position[0]
         static_obj.state.y = position[1]
         static_obj.state.psi = psi
@@ -485,7 +494,7 @@ class FRODO_App_Standalone:
         static = self.statics[static]
 
         # Remove the static from the simulation
-        self.simulation.removeSimulatedStatic(static.object)
+        self.simulation.remove_static(static.object)
 
         # Remove the static from the GUI
         self.map.removeObject(static.map)
@@ -864,6 +873,101 @@ class FRODO_App_Standalone:
         time.sleep(0.05)
         self.addStatic('static1', [0.5, -1], 0)
 
+    def run_singleagent_demo(self):
+        self.logger.info("Single-agent demo plan for scenario1...")
+        adapters = [FRODO_Sim_NavigatedObject(cont.agent) for _, cont in self.agents.items()]
+        self.navigator.initialize(adapters)
+        # self.navigator.start()  # tick the MAN in the background
+
+        plan = NavigatorPlan(
+            id="demo_plan_scenario1",
+            actions=[
+                Move(id="m_a1_wp1", agent_id="agent1", element=CoordinatedMoveTo(x=-0.50, y=-0.50), blocking=True),
+                Wait(id="sleep2", seconds=2),
+                Move(id="m_a1_wp2", conditions=['signal/test'], agent_id="agent1", element=MoveTo(x=0, y=0),
+                     blocking=True),
+            ],
+        )
+        self.navigator.load_plan(plan, start=True)
+
+        setTimeout(lambda: self.navigator.bus.publish("signal/test", "test"), 15)
+
+    def multi_agent_demo(self):
+        self.logger.info("Multi-agent demo plan for scenario1...")
+        adapters = [FRODO_Sim_NavigatedObject(cont.agent) for _, cont in self.agents.items()]
+        self.navigator.initialize(adapters)
+
+        plan = NavigatorPlan(
+            id="ma_plan_scenario1",
+            actions=[
+                ActionGroup(
+                    'group1',
+                    actions=[
+                        Move(id="m_a1_wp1", agent_id="agent1", element=CoordinatedMoveTo(x=-2, y=-2),
+                             blocking=True),
+                        Wait(id="sleep2", seconds=2, finished_emit_signal="sigA"),
+                        Move(id="m_a1_wp2", conditions=[], agent_id="agent1", element=MoveTo(x=0, y=0),
+                             blocking=True),
+                    ],
+                    blocking=False,
+                    finished_emit_signal='group1_finished'
+                ),
+                ActionGroup(
+                    'group2',
+                    actions=[
+                        Wait(id="wait_sigA", conditions=["signal/sigA"]),
+                        Move(id="m_a2_wp1", agent_id="agent3", element=CoordinatedMoveTo(x=1.5, y=-0.50),
+                             blocking=True),
+                    ],
+                )
+            ]
+        )
+
+        self.navigator.load_plan(plan, start=True)
+
+    def multi_agent_demo_2(self):
+        self.logger.info("Multi-agent demo plan for scenario1...")
+        adapters = [FRODO_Sim_NavigatedObject(cont.agent) for _, cont in self.agents.items()]
+        self.navigator.initialize(adapters)
+
+        plan = NavigatorPlan(
+            id="ma_plan_scenario1",
+            actions=[
+                ActionGroup(
+                    'group1',
+                    actions=[
+                        Move(id="m_a1_wp1",
+                             agent_id="agent1",
+                             abort_signal='signal/abort_move_1',
+                             element=CoordinatedMoveTo(x=-2, y=-2),
+                             blocking=True),
+                        Move(id="m_a1_wp2", conditions=[], agent_id="agent1", element=MoveTo(x=0, y=0),
+                             blocking=True),
+                    ],
+                    blocking=False,
+                    finished_emit_signal='group1_finished'
+                ),
+                ActionGroup(
+                    'group2',
+                    actions=[
+                        Wait(id="wait_sigA", seconds=3, finished_emit_signal='abort_move_1'),
+                        Move(id="m_a2_wp1", agent_id="agent3", element=CoordinatedMoveTo(x=1.5, y=-0.50),
+                             blocking=True),
+                    ],
+                )
+            ]
+        )
+
+        self.navigator.load_plan(plan, start=True)
+
+    def multi_agent_demo_yaml(self):
+
+        file = relativeToFullPath('./multi_agent_scenario_1.yml')
+        adapters = [FRODO_Sim_NavigatedObject(cont.agent) for _, cont in self.agents.items()]
+        self.navigator.initialize(adapters)
+        plan = NavigatorPlan.from_yaml(file)
+        self.navigator.load_plan(plan, start=True)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _is_agent_deadreckoning(self, agent_id):
         # Check if this agent is involved in any measurements
@@ -1014,6 +1118,14 @@ class FRODO_Simulation_CLI(CommandSet):
                                                             )
                                         ])
 
+        navigator_test_command = Command(name='nav',
+                                         function=self.app.run_singleagent_demo,
+                                         arguments=[])
+
+        navigator_ma_test_command = Command(name='nav_ma',
+                                            function=self.app.multi_agent_demo_yaml,
+                                            arguments=[])
+
         self.addCommand(command_display_state)
         self.addCommand(command_add_agent)
         self.addCommand(command_remove_agent)
@@ -1026,6 +1138,8 @@ class FRODO_Simulation_CLI(CommandSet):
         self.addCommand(command_stop_algorithm)
         self.addCommand(command_reset_algorithm)
         self.addCommand(command_scenario1)
+        self.addCommand(navigator_test_command)
+        self.addCommand(navigator_ma_test_command)
 
     def _add_agent(self, agent_id, fov, vision_radius, position, psi, interactive=False):
         self.app.addAgent(agent_id, fov, vision_radius, position, psi, interactive)

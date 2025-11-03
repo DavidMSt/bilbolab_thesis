@@ -127,7 +127,7 @@ class ArucoDetector:
         # Runtime state
         self.measurements = []
         self.loop_time = 0.0
-        self.timer = IntervalTimer(self.Ts)
+        self.timer = IntervalTimer(self.Ts, raise_race_condition_error=False)
         self.callbacks = ArucoDetector_Callbacks()
         self.events = ArucoDetector_Events()
 

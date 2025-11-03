@@ -14,9 +14,9 @@ from core.utils.logging_utils import Logger
 from core.utils.time import TimeoutTimer
 from robot.common import FRODO_Common, ErrorSeverity
 from robot.definitions import get_all_aruco_ids
-from robot.sensing.aruco import frodo_aruco_uncertainties
 from robot.sensing.aruco.aruco_detector import ArucoDetector, ArucoDetectorStatus
 from robot.sensing.camera.pycamera import PyCamera
+from robot.sensing.measurement_model import measurement_model_from_file
 from robot.utilities.orientation import is_mostly_z_axis
 
 
@@ -34,11 +34,13 @@ class FRODO_ArucoMeasurement:
     uncertainty_position: np.ndarray
     uncertainty_psi: float
 
+
 # ======================================================================================================================
 @dataclasses.dataclass
 class FRODO_Measurements_Sample:
     status: FRODO_SensorStatus
     aruco_measurements: list[FRODO_ArucoMeasurement]
+
 
 # ======================================================================================================================
 @callback_definition
@@ -50,6 +52,7 @@ class FRODO_Sensors_Callbacks:
 class FRODO_Sensors_Events:
     new_aruco_measurement: Event
 
+
 # === FRODO SENSORS ====================================================================================================
 class FRODO_Sensors:
     status: FRODO_SensorStatus
@@ -58,7 +61,6 @@ class FRODO_Sensors:
     camera: PyCamera
     aruco_detector: ArucoDetector
     aruco_measurements: list[FRODO_ArucoMeasurement]
-
 
     callbacks: FRODO_Sensors_Callbacks
     events: FRODO_Sensors_Events
@@ -96,9 +98,11 @@ class FRODO_Sensors:
         )
 
         self.aruco_measurements = []
+
+        self.vision_measurement_model = measurement_model_from_file('./model.yaml', local=True)
+
         self.timeout_timer = TimeoutTimer(timeout_time=1, timeout_callback=self._onArucoTimeout)
         self.aruco_detector.callbacks.new_measurement.register(self._onNewArucoMeasurement)
-
 
         register_exit_callback(self.close)
 
@@ -133,6 +137,7 @@ class FRODO_Sensors:
                 aruco_measurements=copy.copy(self.aruco_measurements),
             )
         return sample
+
     # === PRIVATE METHODS ==============================================================================================
     def _onNewArucoMeasurement(self, measurements, *args, **kwargs):
         self.timeout_timer.reset()
@@ -171,8 +176,6 @@ class FRODO_Sensors:
             axis = qmt.quatAxis(q_CE_ME).squeeze()
             angle = qmt.quatAngle(q_CE_ME)
 
-
-
             # Check if the axis is mostly around the z-axis
             if not is_mostly_z_axis(axis):
                 self.logger.warning(f"Aruco Measurement not mostly around z-axis: {measurement}")
@@ -184,30 +187,25 @@ class FRODO_Sensors:
             if axis[2] < 0:
                 psi = -psi
 
+            state = self.common.getDynamicState()
 
-            psi_deg = np.rad2deg(psi)
+            if state is None:
+                continue
 
-            # print(f"ANGLE: {psi_deg:.1f}")
-
-            tvec_uncertainty, psi_uncertainty = frodo_aruco_uncertainties.aruco_uncertainty_scalars(
-                position, psi, params=frodo_aruco_uncertainties.ArUcoUncertaintyParams()
+            covariance = self.vision_measurement_model.covariance.covariance(
+                measurement=np.asarray([x, y, psi]),
+                v=state.v,
+                psi_dot=state.psi_dot,
             )
-
-            position_uncertainty = np.diag([tvec_uncertainty, tvec_uncertainty])
 
             measurement_processed = FRODO_ArucoMeasurement(
                 measured_aruco_id=measurement.marker_id,
                 position=position,
                 psi=psi,
-                uncertainty_position=position_uncertainty,
-                uncertainty_psi=psi_uncertainty,
+                uncertainty_position=covariance[0:2, 0:2],
+                uncertainty_psi=covariance[2, 2]
             )
             aruco_measurements_processed.append(measurement_processed)
 
         with self.data_lock:
             self.aruco_measurements = aruco_measurements_processed
-
-
-
-
-

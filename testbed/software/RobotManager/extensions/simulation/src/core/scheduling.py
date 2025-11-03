@@ -189,7 +189,7 @@ class Action:
         if self.function is not None:
             ret = self.function(*args, **{**self.parameters, **kwargs, **lambdas_exec})
         # Execute child actions.
-        for child in self.actions.values():
+        for child in list(self.actions.values()):
             child(*args, **{**self.parameters, **kwargs, **lambdas_exec})
 
     def addAction(self, action: Union['Action', List['Action'], Callable]):

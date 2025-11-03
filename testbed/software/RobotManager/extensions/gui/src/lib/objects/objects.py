@@ -10,7 +10,7 @@ import re
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.dict import replaceField, update_dict, ObservableDict, replaceStringInDict
 from core.utils.logging_utils import Logger
-from core.utils.uuid import generate_uuid
+from core.utils.uuid_utils import generate_uuid
 from extensions.gui.src.lib.messages import AddMessage, AddMessageData, RemoveMessage, RemoveMessageData
 from extensions.gui.src.lib.utilities import check_for_spaces, split_path, check_id
 

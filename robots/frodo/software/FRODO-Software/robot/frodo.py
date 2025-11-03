@@ -194,6 +194,13 @@ class FRODO:
             arguments=[]
         )
 
+        self.communication.wifi.newCommand(
+            identifier='skip_element',
+            function=self.control.skip_element,
+            description='Skip current element and continue with next',
+            arguments=[]
+        )
+
         # --- Navigator: convenience motion primitives (auto-start) --------------------------------
         self.communication.wifi.newCommand(
             identifier='moveTo',
@@ -213,6 +220,7 @@ class FRODO:
             arguments=[
                 CommandArgument(name='x', type=float, description='Target X [m]'),
                 CommandArgument(name='y', type=float, description='Target Y [m]'),
+                CommandArgument(name="element_id", type=str, description="Element ID", optional=True, default=None),
             ]
         )
 

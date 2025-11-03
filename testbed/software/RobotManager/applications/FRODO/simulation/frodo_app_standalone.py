@@ -209,7 +209,7 @@ class FRODO_App_Standalone:
         if position is None:
             position = [0, 0]
 
-        agent = self.simulation.addSimulatedAgent(agent_id, fov, vision_radius, interactive)
+        agent = self.simulation.add_agent(agent_id, fov, vision_radius, interactive)
 
         agent.state.x = position[0]
         agent.state.y = position[1]
@@ -278,7 +278,7 @@ class FRODO_App_Standalone:
             self.logger.warning(f'Object with ID {object_id} already exists')
             return
 
-        static_obj = self.simulation.addSimulatedStatic(object_id)
+        static_obj = self.simulation.add_static(object_id)
         static_obj.state.x = position[0]
         static_obj.state.y = position[1]
         static_obj.state.psi = psi

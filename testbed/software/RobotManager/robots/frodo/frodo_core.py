@@ -40,11 +40,11 @@ class FRODO_Core:
 
         self.device.events.event.on(self._handleLogMessage,
                                     predicate=pred_flag_equals('event', 'log'),
-                                    input_data=True)
+                                    )
 
         self.device.events.event.on(self._handleSpeakEventMessage,
                                     predicate=pred_flag_equals('event', 'speak'),
-                                    input_data=True)
+                                    )
 
         self.device.callbacks.stream.register(self._handleStream)
 

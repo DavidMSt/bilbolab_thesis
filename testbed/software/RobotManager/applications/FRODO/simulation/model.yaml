@@ -1,0 +1,82 @@
+fov: 1.5707963267948966
+min_measurement_distance: 0.0
+max_measurement_distance: 2.0
+components:
+  x:
+    distance:
+      baseline: 0.02
+      gain_1: 0.02
+      gain_2: 0.12
+      corner: 1.2
+    bearing:
+      baseline: 0.0
+      gain_1: 0.01
+      gain_2: 1
+      corner: 0.85
+    psi:
+      baseline: 0.0
+      gain_1: 0.0
+      gain_2: 1
+      corner: 1
+    v:
+      baseline: 0.0
+      gain_1: 0.3
+      gain_2: null
+      corner: null
+    psi_dot:
+      baseline: 0.0
+      gain_1: 0.05
+      gain_2: 0.2
+      corner: 0.7853981633974483
+  y:
+    distance:
+      baseline: 0.02
+      gain_1: 0.02
+      gain_2: 0.12
+      corner: 1.2
+    bearing:
+      baseline: 0.0
+      gain_1: 0.01
+      gain_2: 1
+      corner: 0.85
+    psi:
+      baseline: 0.0
+      gain_1: 0.0
+      gain_2: 1
+      corner: 1
+    v:
+      baseline: 0.0
+      gain_1: 0.3
+      gain_2: null
+      corner: null
+    psi_dot:
+      baseline: 0.0
+      gain_1: 0.1
+      gain_2: 0.4
+      corner: 0.7853981633974483
+  psi:
+    distance:
+      baseline: 0.01
+      gain_1: 0.02
+      gain_2: 0.12
+      corner: 1.2
+    bearing:
+      baseline: 0.0
+      gain_1: 0.01
+      gain_2: 1
+      corner: 0.85
+    psi:
+      baseline: 0.0
+      gain_1: 0.0
+      gain_2: 1
+      corner: 1
+    v:
+      baseline: 0.0
+      gain_1: 0.3
+      gain_2: null
+      corner: null
+    psi_dot:
+      baseline: 0.0
+      gain_1: 0.1
+      gain_2: 0.4
+      corner: 0.7853981633974483

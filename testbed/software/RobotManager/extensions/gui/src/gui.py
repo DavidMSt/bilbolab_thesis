@@ -7,12 +7,11 @@ import time
 import uuid
 from dataclasses import is_dataclass
 
-from core.utils.archives.events import pred_flag_key_equals
 # === CUSTOM IMPORTS ===================================================================================================
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.colors import rgb_to_hex
 from core.utils.dict import update_dict
-from core.utils.events import Event, EventFlag
+from core.utils.events import Event, EventFlag, pred_flag_equals
 from core.utils.exit import register_exit_callback
 from core.utils.files import relativeToFullPath
 from core.utils.js.vite import run_vite_app
@@ -525,7 +524,8 @@ class Page:
 
         widget.parent = None
         widget.onDelete()
-        del self.objects[widget.id]
+        if widget.id in self.objects:
+            del self.objects[widget.id]
 
     # ------------------------------------------------------------------------------------------------------------------
     def getGUI(self):
@@ -770,14 +770,14 @@ class Child:
         self.send(message)
 
         # 3) wait for the answer
-        success = self.request_event.wait(predicate=pred_flag_key_equals('request_id', request_id), timeout=5)
+        success = self.request_event.wait(predicate=pred_flag_equals('request_id', request_id), timeout=5)
         if not success:
             self.gui.logger.warning(
                 f"Timeout waiting for payload for category {category_id} from child GUI {self.id}"
             )
             return None
 
-        payload = self.request_event.getData()
+        payload = self.request_event.get_data()
 
         # 4) now recursively prefix every 'id' (and matching config['id']) in the payload
         prefix = self.path_in_gui.rstrip('/') + '/'
@@ -1070,7 +1070,7 @@ class GUI:
 
         self.client = None
 
-        self.logger = Logger(f'GUI: {self.id}', 'DEBUG')
+        self.logger = Logger(f'GUI: {self.id}', 'INFO')
 
         self.frontends = []
         self.child_guis = {}
@@ -1183,7 +1183,7 @@ class GUI:
             'WS_HOST': self.server.host,
         }, print_link=False, )
 
-        self.logger.debug(f"Running JS app at http://{self.server.host}:{self.js_app_port}/gui")
+        self.logger.important(f"Access GUI at http://{self.server.host}:{self.js_app_port}/gui")
 
     # ------------------------------------------------------------------------------------------------------------------
     def addCategory(self, category: Category):

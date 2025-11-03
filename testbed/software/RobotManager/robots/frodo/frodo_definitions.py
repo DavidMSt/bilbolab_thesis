@@ -375,7 +375,7 @@ class TrackedOrigin_Definition:
 # === OptiTrack: Origins ===============================================================================================
 ORIGIN_FRODO_DEFINITION = TrackedOrigin_Definition(
     points=[1, 2, 3, 4, 5],
-    origin=1,
+    origin=3,
     x_axis_end=2,
     y_axis_end=5,
     x_offset=0.01,
@@ -389,10 +389,10 @@ OPTITRACK_ORIGIN: dict[str, TrackedOrigin_Definition] = {
 # === FRODO: Colors ====================================================================================================
 
 FRODO_COLORS: Dict[str, List[float]] = {
-    "frodo1": [255 / 255, 98 / 255, 46 / 255],  # orange
-    "frodo4": [59 / 255, 58 / 255, 57 / 255],  # grey
+    "frodo1": [217 / 255, 41 / 255, 17 / 255],  # orange
+    "frodo4": [53 / 255, 97 / 255, 204 / 255],  # blue
     "frodo3": [136 / 255, 224 / 255, 4 / 255],  # green
-    "frodo2": [44 / 255, 170 / 255, 201 / 255],  # blue
+    "frodo2": [188 / 255, 35 / 255, 201 / 222],  # purple
 }
 
 # === FRODO: Shared physical model =====================================================================================
@@ -467,31 +467,31 @@ CAMERA_SETTINGS: Dict[str, FRODO_Camera_Settings] = {
 
 FRODO1_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     points=[1, 2, 3, 4, 5],
-    y_start=4,
-    y_end=5,
+    y_start=6,
+    y_end=4,
     x_start=3,
-)
+)  # DONE
 
 FRODO2_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     points=[1, 2, 3, 4, 5],
     y_start=1,
-    y_end=3,
+    y_end=5,
     x_start=4,
-)
+) # DONE
 
 FRODO3_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     points=[1, 2, 3, 4, 5],
     y_start=1,
-    y_end=4,
-    x_start=3,
-)
+    y_end=3,
+    x_start=4,
+)  # DONE
 
 FRODO4_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     points=[1, 2, 3, 4, 5],
-    y_start=1,
+    y_start=2,
     y_end=4,
     x_start=5,
-)
+) # DONE
 
 OPTITRACK_SETTINGS: Dict[str, FRODO_Optitrack_Settings] = {
     "frodo1": FRODO1_OPTITRACK_SETTINGS,

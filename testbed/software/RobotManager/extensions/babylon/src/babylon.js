@@ -71,6 +71,8 @@ export class Babylon extends Scene {
     _msgTimes = [];      // monotonically growing array of timestamps (ms)
     _msgHead = 0;       // index of first still-valid timestamp within _msgTimes
 
+    _resizeArmed = false;
+
     constructor(id, canvasOrEngine, config = {}, objects = {}) {
         super(canvasOrEngine);
 
@@ -130,7 +132,7 @@ export class Babylon extends Scene {
         this.callbacks.add('websocket_connected');
         this.callbacks.add('websocket_disconnected');
 
-        this._addGlobalResizeListener();
+
         this._initializeScene();
         this._addSceneClickListener();
         this._initializeWebsocket();
@@ -729,17 +731,82 @@ export class Babylon extends Scene {
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
+    // _addGlobalResizeListener() {
+    //     // const engine = new Engine(this.canvas, true, {preserveDrawingBuffer: true, stencil: true});
+    //     const engine = this.scene.getEngine();
+    //
+    //     // This ensures Babylon accounts for HiDPI / Retina displays
+    //     engine.setHardwareScalingLevel(1 / window.devicePixelRatio);
+    //
+    //     // Resize on window change
+    //     window.addEventListener("resize", () => {
+    //         engine.resize();
+    //     });
+    // }
+
     _addGlobalResizeListener() {
-        // const engine = new Engine(this.canvas, true, {preserveDrawingBuffer: true, stencil: true});
+        if (this._resizeArmed) return;    // <- guard
+        this._resizeArmed = true;
         const engine = this.scene.getEngine();
+        const canvas = engine.getRenderingCanvas();
+        let lastDPR = -1;
 
-        // This ensures Babylon accounts for HiDPI / Retina displays
-        engine.setHardwareScalingLevel(1 / window.devicePixelRatio);
+        const applyDPRAndResize = () => {
+            const dpr = Math.max(1, window.devicePixelRatio || 1);
+            // Update hardware scaling **only if** DPR changed
+            if (dpr !== lastDPR) {
+                engine.setHardwareScalingLevel(1 / dpr);
+                lastDPR = dpr;
+            }
 
-        // Resize on window change
-        window.addEventListener("resize", () => {
-            engine.resize();
-        });
+            // Make the backing store exactly CSS size * DPR (rounded to ints)
+            const rect = canvas.getBoundingClientRect();
+            const width = Math.max(1, Math.round(rect.width * dpr));
+            const height = Math.max(1, Math.round(rect.height * dpr));
+
+            // Only touch the engine if size actually changed (prevents extra frames)
+            if (engine.getRenderWidth(true) !== width || engine.getRenderHeight(true) !== height) {
+                engine.setSize(width, height, true);
+            } else {
+                // Still notify Babylon so projection matrices pick up aspect properly
+                engine.resize(true);
+            }
+        };
+
+        // 1) Window resize (covers most layout changes)
+        window.addEventListener('resize', applyDPRAndResize);
+
+        // 2) DPR/zoom changes (Chrome/Safari/Edge)
+        if (window.matchMedia) {
+            // Re-arm a new media query every time, since the expression uses the current DPR
+            const armResolutionWatcher = () => {
+                const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+                const handler = () => {
+                    mq.removeEventListener?.('change', handler);
+                    armResolutionWatcher();
+                    applyDPRAndResize();
+                };
+                mq.addEventListener?.('change', handler);
+            };
+            armResolutionWatcher();
+        }
+
+        // 3) VisualViewport scale changes (Safari/iPadOS often fires this)
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', applyDPRAndResize);
+            window.visualViewport.addEventListener('scroll', applyDPRAndResize); // some browsers signal zoom via “scroll”
+        }
+
+        // 4) Container resize (e.g. split pane, tabs, flexbox)
+        if (typeof ResizeObserver !== 'undefined') {
+            this._resizeObserver = new ResizeObserver(applyDPRAndResize);
+            // Observe the canvas’ parent to catch layout changes
+            const parent = canvas.parentElement || canvas;
+            this._resizeObserver.observe(parent);
+        }
+
+        // Initial sizing
+        applyDPRAndResize();
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -885,6 +952,15 @@ export class Babylon extends Scene {
                 return db - da;
             }
         );
+
+        // const engine = this.scene.getEngine();
+        // console.log(engine);
+        //
+        // engine.runRenderLoop(() => {
+        //     // Skip if the canvas has zero size (prevents GL_INVALID_FRAMEBUFFER warnings)
+        //     if (!engine.getRenderWidth(true) || !engine.getRenderHeight(true)) return;
+        //     this.scene.render();
+        // });
 
         return this.scene;
     }
@@ -1050,6 +1126,17 @@ export class Babylon extends Scene {
         //     this.frodo2.setState(0, -1, 0);
         // })
 
+    }
+
+
+    dispose() {
+        this._resizeObserver?.disconnect();
+        this._resizeObserver = null;
+        this._mq?.removeEventListener?.('change', this._mqHandler);
+        this._mq = this._mqHandler = null;
+        window.visualViewport?.removeEventListener?.('resize', this._vvHandler);
+        window.removeEventListener('resize', this._winResizeHandler);
+        // engine.dispose() etc. if appropriate
     }
 }
 
@@ -2281,54 +2368,22 @@ export class BabylonContainer {
         this._detachDebugInterceptors();
         this.debug_overlay.style.display = 'none';
     }
-}
 
-//
-// // 1) Make focused element super obvious (temporary)
-// const focusDebugStyle = document.createElement('style');
-// focusDebugStyle.textContent = `
-//   *:focus { outline: 3px solid #00e !important; outline-offset: 2px !important; }
-// `;
-// document.head.appendChild(focusDebugStyle);
-// //
-// // // 2) Log every focus move with a readable selector
-// function cssPath(el) {
-//     if (!el || el.nodeType !== 1) return '';
-//     const parts = [];
-//     while (el && el.nodeType === 1 && el !== document.documentElement) {
-//         const id = el.id ? `#${CSS.escape(el.id)}` : '';
-//         const cls = (el.className && typeof el.className === 'string')
-//             ? '.' + el.className.trim().split(/\s+/).map(c => CSS.escape(c)).join('.')
-//             : '';
-//         const tag = el.tagName.toLowerCase();
-//         let piece = `${tag}${id}${cls}`;
-//         if (!id) {
-//             // Add :nth-of-type to disambiguate
-//             let i = 1, sib = el;
-//             while ((sib = sib.previousElementSibling) != null) {
-//                 if (sib.tagName === el.tagName) i++;
-//             }
-//             piece += `:nth-of-type(${i})`;
-//         }
-//         parts.unshift(piece);
-//         el = el.parentElement;
-//     }
-//     return parts.join(' > ');
-// }
-//
-// //
-// function logFocus(e) {
-//     const el = e.target;
-//     console.log('[focusin]', el, cssPath(el));
-// }
-//
-// document.addEventListener('focusin', logFocus, true);
-// document.addEventListener('focusout', e => {
-//     console.log('[focusout]', e.target);
-// }, true);
-//
-// // 3) Quick peek at current focused element anytime:
-// window.dumpActive = () => {
-//     const el = document.activeElement;
-//     console.log('activeElement:', el, cssPath(el));
-// };
+    resize() {
+
+    }
+
+    onFirstShow() {
+        this.babylon._addGlobalResizeListener();
+        const engine = this.babylon.scene.getEngine();
+        // Re-apply DPR + size for first real layout
+        if (typeof this.babylon._addGlobalResizeListener === 'function') {
+            // already armed; just trigger it by a manual resize
+            engine.resize(true);
+        } else {
+            // safety: do it manually
+            engine.setHardwareScalingLevel(1 / (window.devicePixelRatio || 1));
+            engine.resize(true);
+        }
+    }
+}

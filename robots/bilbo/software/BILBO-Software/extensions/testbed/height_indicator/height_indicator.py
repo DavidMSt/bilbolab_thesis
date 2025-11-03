@@ -1,215 +1,3 @@
-# import dataclasses
-# import time
-# import threading
-#
-# from core.utils.exit import register_exit_callback
-# from core.utils.logging_utils import Logger
-# from core.utils.network import getHostIP
-# from core.utils.websockets import WebsocketServer
-#
-# import board
-# import neopixel
-#
-# HEIGHT_OFFSET_TO_PIXEL_0 = 10  # physical height (same units as 'height') at pixel 0
-# DISTANCE_BETWEEN_PIXELS = 16.5  # distance (same units) between successive pixels
-# WEBSOCKET_PORT = 7777
-#
-#
-# @dataclasses.dataclass
-# class HeightIndicatorConfig:
-#     height_offset_to_pixel_0: float = HEIGHT_OFFSET_TO_PIXEL_0
-#     distance_between_pixels: float = DISTANCE_BETWEEN_PIXELS
-#     height_color: tuple[int, int, int] = (0, 255, 0)
-#
-# class HeightIndicator:
-#     server: WebsocketServer
-#
-#     pixel_states: list[list]
-#
-#     # ==================================================================================================================
-#     def __init__(self):
-#
-#         self.logger = Logger('HeightIndicator', 'DEBUG')
-#
-#         host = getHostIP()
-#
-#         if host is None:
-#             self.logger.error("Could not get host IP.")
-#             return
-#
-#         self.server = WebsocketServer(host, WEBSOCKET_PORT, heartbeats=False)
-#         self.server.callbacks.new_client.register(self._newClient_callback)
-#         self.server.callbacks.message.register(self._client_message_callback)
-#
-#         self.pixels = neopixel.NeoPixel(board.D18, 30, auto_write=False)
-#
-#         # Track intended/desired LED state here. Rendering applies this to hardware.
-#         self.pixel_states = [[0, 0, 0] for _ in range(30)]
-#
-#         # Concurrency controls for flashing
-#         self._lock = threading.RLock()
-#         self._flash_thread = None
-#         self._flash_stop = threading.Event()
-#
-#         register_exit_callback(self.close)
-#
-#     # === METHODS ======================================================================================================
-#     def start(self):
-#         self.logger.info("Starting Height Indicator")
-#         self.server.start()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def close(self):
-#         with self._lock:
-#             self.pixels.fill((0, 0, 0))
-#             self.pixels.show()
-#         self.server.close()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def clear(self):
-#         """Clear the desired state and render."""
-#         with self._lock:
-#             self.pixel_states = [[0, 0, 0] for _ in range(len(self.pixel_states))]
-#             self._render_current_states_unlocked()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def setAll(self, r, g, b):
-#         """Set all LEDs to a color in desired state and render."""
-#         with self._lock:
-#             for i in range(len(self.pixel_states)):
-#                 self.pixel_states[i] = [int(r), int(g), int(b)]
-#             self._render_current_states_unlocked()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def flashRed(self, times, time_ms):
-#         """Flash whole bar red in a background thread."""
-#         self._start_flash_thread(color=(255, 0, 0), times=times, time_ms=time_ms)
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def flashGreen(self, times, time_ms):
-#         """Flash whole bar green in a background thread."""
-#         self._start_flash_thread(color=(0, 255, 0), times=times, time_ms=time_ms)
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def setHeightPixel(self, pixel_num):
-#         """Set desired state to show a single pixel (blue) and render."""
-#         with self._lock:
-#             # Clamp to valid range
-#             n = max(0, min(len(self.pixel_states) - 1, int(pixel_num)))
-#             # Show only that pixel as blue; others off
-#             for i in range(len(self.pixel_states)):
-#                 self.pixel_states[i] = [0, 0, 0]
-#             self.pixel_states[n] = [0, 0, 255]
-#             self._render_current_states_unlocked()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def setHeight(self, height):
-#         """
-#         Compute nearest pixel index from a physical 'height' using the calibration constants
-#         and illuminate that single pixel (blue).
-#         """
-#         try:
-#             h = float(height)
-#         except (TypeError, ValueError):
-#             self.logger.error(f"Invalid height value: {height}")
-#             return
-#
-#         # Map height to nearest pixel: index = round((h - offset) / distance)
-#         idx_float = (h - HEIGHT_OFFSET_TO_PIXEL_0) / DISTANCE_BETWEEN_PIXELS
-#         idx = int(round(idx_float))
-#         self.setHeightPixel(idx)
-#
-#     # === PRIVATE METHODS ==============================================================================================
-#     def _render_current_states_unlocked(self):
-#         """
-#         Apply self.pixel_states to the hardware strip.
-#         Call only while holding self._lock.
-#         """
-#         for i, rgb in enumerate(self.pixel_states):
-#             r, g, b = rgb
-#             self.pixels[i] = (int(r), int(g), int(b))
-#         self.pixels.show()
-#
-#     def _start_flash_thread(self, color, times, time_ms):
-#         """
-#         Start (or restart) a flashing thread. While flashing, the desired pixel_states are NOT modified.
-#         At the end (or if interrupted), the current pixel_states are re-rendered so any changes made
-#         during the flash are respected.
-#         """
-#         # If a flash is running, stop it first
-#         with self._lock:
-#             if self._flash_thread and self._flash_thread.is_alive():
-#                 self._flash_stop.set()
-#         if self._flash_thread and self._flash_thread.is_alive():
-#             # Wait outside lock to avoid deadlocks
-#             self._flash_thread.join(timeout=2)
-#
-#         # Reset stop flag and start a new thread
-#         self._flash_stop.clear()
-#         self._flash_thread = threading.Thread(
-#             target=self._flash_worker,
-#             args=(color, int(times), int(time_ms)),
-#             daemon=True
-#         )
-#         self._flash_thread.start()
-#
-#     def _flash_worker(self, color, times, time_ms):
-#         on_off_delay = max(0, time_ms) / 1000.0
-#         try:
-#             for _ in range(max(0, times)):
-#                 if self._flash_stop.is_set():
-#                     break
-#                 # ON
-#                 with self._lock:
-#                     self.pixels.fill(tuple(int(c) for c in color))  # type: ignore
-#                     self.pixels.show()
-#                 self._sleep_interruptible(on_off_delay)
-#                 if self._flash_stop.is_set():
-#                     break
-#                 # OFF
-#                 with self._lock:
-#                     self.pixels.fill((0, 0, 0))
-#                     self.pixels.show()
-#                 self._sleep_interruptible(on_off_delay)
-#         finally:
-#             # Restore whatever the current desired state is
-#             with self._lock:
-#                 self._render_current_states_unlocked()
-#
-#     def _sleep_interruptible(self, seconds):
-#         """Sleep in small slices so we can react quickly to stop events."""
-#         end = time.time() + seconds
-#         slice_s = 0.02
-#         while time.time() < end:
-#             if self._flash_stop.is_set():
-#                 return
-#             time.sleep(min(slice_s, max(0, end - time.time())))
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _newClient_callback(self, client):
-#         self.logger.info(f"New client connected: {client}")
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _client_message_callback(self, message, client):
-#         self.logger.debug(f"Received message: {message}")
-#
-#
-# if __name__ == '__main__':
-#     height_indicator = HeightIndicator()
-#     height_indicator.start()
-#
-#     # Example: set the top pixel initially
-#     height_indicator.setHeight(400)
-#
-#     time.sleep(2)
-#
-#     height_indicator.flashRed(5, 200)
-#
-#
-#     while True:
-#         time.sleep(10)
-
-
 import dataclasses
 import time
 import threading
@@ -226,11 +14,13 @@ import neopixel
 # Defaults (can be overridden by config messages from the PC)
 DEFAULT_WEBSOCKET_PORT = 7777
 DEFAULT_NUM_PIXELS = 30
-DEFAULT_HEIGHT_OFFSET_TO_PIXEL_0 = 10.0     # physical height (same units as 'height') at pixel 0
-DEFAULT_DISTANCE_BETWEEN_PIXELS = 16.5      # distance (same units) between successive pixels
-DEFAULT_HEIGHT_COLOR = (0, 0, 255)          # color for "height" indicator pixels
+DEFAULT_HEIGHT_OFFSET_TO_PIXEL_0 = 10.0  # physical height (same units as 'height') at pixel 0
+DEFAULT_DISTANCE_BETWEEN_PIXELS = 16.5  # distance (same units) between successive pixels
+DEFAULT_HEIGHT_COLOR = (0, 0, 255)  # color for "height" indicator pixels
 DEFAULT_BLUE = (0, 0, 255)
 DEFAULT_OFF = (0, 0, 0)
+
+PIN = board.D10  # board.D18
 
 
 @dataclasses.dataclass
@@ -265,7 +55,7 @@ class HeightIndicator:
         self.server.callbacks.message.register(self._client_message_callback)
 
         # Initialize LEDs
-        self.pixels = neopixel.NeoPixel(board.D18, self.config.num_pixels, auto_write=False)
+        self.pixels = neopixel.NeoPixel(PIN, self.config.num_pixels, auto_write=False)
 
         # Track intended/desired LED state here. Rendering applies this to hardware.
         self.pixel_states = [[0, 0, 0] for _ in range(self.config.num_pixels)]
@@ -567,10 +357,11 @@ if __name__ == '__main__':
     height_indicator = HeightIndicator()
     height_indicator.start()
     #
-    # # Example behavior for quick smoke-test:
-    # height_indicator.setHeight(400)   # uses configured mapping
-    # time.sleep(1)
-    # height_indicator.flash((255, 0, 0), 5, 200)
+    # Example behavior for quick smoke-test:
+    height_indicator.setHeight(400)   # uses configured mapping
+    time.sleep(1)
+    height_indicator.flash((0, 100, 0), 5, 200)
+
 
     while True:
         time.sleep(10)

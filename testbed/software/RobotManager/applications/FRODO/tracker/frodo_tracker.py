@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import time
 
 import numpy as np
@@ -6,6 +7,7 @@ import numpy as np
 from applications.FRODO.tracker.definitions import TrackedFRODO, TrackedOrigin, FRODO_TRACKED_OBJECTS, ORIGINS, \
     TrackedStatic, TRACKED_STATICS
 from core.utils.events import event_definition, Event
+from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from extensions.optitrack.optitrack import OptiTrack, RigidBodySample
 from core.utils.callbacks import callback_definition, CallbackContainer
@@ -27,6 +29,11 @@ class FRODO_Tracker_Events:
     description_received: Event
 
 
+class FRODO_Tracker_State(enum.StrEnum):
+    NOT_RUNNING = "not_running"
+    RUNNING = "running"
+
+
 class FRODO_Tracker:
     optitrack: OptiTrack
 
@@ -34,6 +41,7 @@ class FRODO_Tracker:
     statics: dict[str, TrackedStatic]
     origin: TrackedOrigin | None = None
 
+    state: FRODO_Tracker_State = FRODO_Tracker_State.NOT_RUNNING
     # === INIT =========================================================================================================
     def __init__(self, robots: dict[str, TrackedFRODO] = None, origin: TrackedOrigin = None):
         self.logger = Logger('BILBO Tracker', 'DEBUG')
@@ -50,6 +58,7 @@ class FRODO_Tracker:
         self.optitrack = OptiTrack(server_address='bree.local')
         self.optitrack.events.sample.on(self._onSample)
         self.optitrack.callbacks.description_received.register(self._onDescriptionReceived)
+        register_exit_callback(self.close)
 
     # === METHODS ======================================================================================================
     def init(self):
@@ -67,7 +76,7 @@ class FRODO_Tracker:
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
-    def close(self):
+    def close(self, *args, **kwargs):
         self.optitrack.close()
 
     # === PRIVATE METHODS ==============================================================================================
@@ -120,6 +129,7 @@ class FRODO_Tracker:
                 static.setOrigin(self.origin)
                 self.logger.info(f"Added origin {self.origin.id} to {static.id}")
 
+        self.state = FRODO_Tracker_State.RUNNING
         self.callbacks.description_received.call()
         self.events.description_received.set()
         self.callbacks.initialized.call()

@@ -426,7 +426,7 @@ class BabylonVisualization:
         self.id = id
 
         self.callbacks = BabylonCallbacks()
-        self.logger = Logger('BABYLON', 'DEBUG')
+        self.logger = Logger('BABYLON', 'INFO')
 
         self.server = WebsocketServer(host=host, port=port, heartbeats=False)
         self.server.callbacks.new_client.register(self._new_client_callback)
@@ -635,7 +635,7 @@ class BabylonVisualization:
         self.logger.important(f"Received event message: {event_message} from {sender}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    
+
     # ------------------------------------------------------------------------------------------------------------------
 
     # === PRIVATE METHODS ==============================================================================================

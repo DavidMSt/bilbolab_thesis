@@ -264,6 +264,13 @@ class Map:
         self.update_config[object.uid] = object.getConfig()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def clear(self):
+        for object in list(self.objects.values()):
+            self.removeObject(object)
+        for group in list(self.groups.values()):
+            self.removeGroup(group)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def getPayload(self) -> dict:
         payload = {
             'id': self.id,

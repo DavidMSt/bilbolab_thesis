@@ -83,31 +83,31 @@ class BILBO_Interfaces:
 
         listener = self.joystick.events.button.on(self.core.setResumeEvent,
                                                   predicate=pred_flag_contains('button', 'DPAD_RIGHT'),
-                                                  input_data=False)
+                                                  discard_data=True)
         self._joystick_event_listeners.append(listener)
 
         listener = self.joystick.events.button.on(self.core.setRevertEvent,
                                                   predicate=pred_flag_contains('button', 'DPAD_LEFT'),
-                                                  input_data=False)
+                                                  discard_data=True)
         self._joystick_event_listeners.append(listener)
 
         listener = self.joystick.events.button.on(Callback(self.control.enableTIC,
                                                            inputs={'state': True},
                                                            discard_inputs=True),
                                                   predicate=pred_flag_contains('button', 'DPAD_UP'),
-                                                  input_data=False)
+                                                  discard_data=True)
         self._joystick_event_listeners.append(listener)
         listener = self.joystick.events.button.on(Callback(self.control.enableTIC,
                                                            inputs={'state': False},
                                                            discard_inputs=True),
                                                   predicate=pred_flag_contains('button', 'DPAD_DOWN'),
-                                                  input_data=False, )
+                                                  discard_data=True)
         self._joystick_event_listeners.append(listener)
         listener = self.joystick.events.button.on(Callback(self.control.setControlMode,
                                                            inputs={'mode': BILBO_Control_Mode.BALANCING},
                                                            discard_inputs=True),
                                                   predicate=pred_flag_contains('button', 'A'),
-                                                  input_data=False,
+                                                  discard_data=True,
                                                   )
         self._joystick_event_listeners.append(listener)
         listener = self.joystick.events.button.on(Callback(self.control.setControlMode,
@@ -118,7 +118,7 @@ class BILBO_Interfaces:
         self._joystick_event_listeners.append(listener)
         listener = self.joystick.events.button.on(callback=self.core.beep,
                                                   predicate=pred_flag_contains('button', 'X'),
-                                                  input_data=False,
+                                                  discard_data=True,
                                                   )
         self._joystick_event_listeners.append(listener)
         self._startJoystickThread()

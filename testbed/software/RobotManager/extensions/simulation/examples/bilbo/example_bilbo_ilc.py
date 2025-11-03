@@ -39,7 +39,6 @@ def example_ilc():
     for j in range(0, J):
         # Apply the uj input
         states = bilbo_dynamics.simulate(input=uj, reset=True, include_zero_step=False)
-
         # Get the theta
         theta = np.asarray([state.theta for state in states])
 

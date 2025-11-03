@@ -342,9 +342,6 @@ class IntervalTimer:
         ...
 
 
-# ======================================================================================================================
-def setInterval(callback: Callback | Callable, interval: float, *args, **kwargs) -> IntervalTimer:
-    ...
 
 
 # ======================================================================================================================
@@ -379,7 +376,6 @@ class TimeoutTimer:
         """
         Starts the timer. If already running, it continues without resetting the time.
         """
-        print("Start the timer")
         if not self._is_running.is_set():
             self._is_running.set()
             self._last_reset_time = time.time()
@@ -388,7 +384,6 @@ class TimeoutTimer:
         """
         Resets the timer by updating the last reset time.
         """
-        print("Reset")
         if self._is_running.is_set():
             self._last_reset_time = time.time()
 

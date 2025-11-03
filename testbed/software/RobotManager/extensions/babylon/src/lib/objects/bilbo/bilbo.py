@@ -47,7 +47,7 @@ class BabylonBilbo(BabylonObject):
         self.update()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setState(self, x=None, y=None, theta=None, psi=None):
+    def set_state(self, x=None, y=None, theta=None, psi=None):
         self.setPosition(x, y)
         self.setOrientation(theta, psi)
 

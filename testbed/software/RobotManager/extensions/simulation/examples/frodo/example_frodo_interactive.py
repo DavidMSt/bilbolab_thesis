@@ -18,7 +18,7 @@ from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.joystick.joystick_manager import Joystick, JoystickManager
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.simulation.src.objects.base_environment import BaseEnvironment
-from extensions.simulation.src.objects.frodo_new import FRODO_DynamicAgent, DEFAULT_SAMPLE_TIME
+from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent, DEFAULT_SAMPLE_TIME
 
 
 # === INTERACTIVE FRODO ================================================================================================
@@ -239,9 +239,9 @@ class FRODO_ExampleInteractive:
         for robot in self.robots.values():
             try:
                 state = robot['robot'].state
-                robot['babylon'].setState(x=state.x,
-                                          y=state.y,
-                                          psi=state.psi)
+                robot['babylon'].set_state(x=state.x,
+                                           y=state.y,
+                                           psi=state.psi)
             except Exception as e:
                 self.logger.error(f'Error updating robot {robot["robot"].agent_id}: {e}')
 

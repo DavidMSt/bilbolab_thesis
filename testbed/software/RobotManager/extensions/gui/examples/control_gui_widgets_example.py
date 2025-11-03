@@ -568,7 +568,8 @@ def main():
 
     page_groups.addWidget(group1, width=10, height=10, row=5)
 
-    group_button_1 = Button(widget_id='group_button_1', text='GP 1', config={'color': random_color_from_palette('dark')})
+    group_button_1 = Button(widget_id='group_button_1', text='GP 1',
+                            config={'color': random_color_from_palette('dark')})
     group_slider_1 = SliderWidget(widget_id='group_slider_1',
                                   min_value=0,
                                   max_value=1,

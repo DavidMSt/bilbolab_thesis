@@ -1,19 +1,168 @@
+"""
+Navigator: queue-based motion primitive executor with events, callbacks, timing, and safety.
+
+===========================================================================================
+TUTORIAL (what this module does & how to use it)
+===========================================================================================
+
+What is it?
+-----------
+This module lets you enqueue *navigation elements* (aka motion "primitives") and runs them in
+order. Each element computes commands each control tick and signals when it is done. The
+Navigator converts those commands into motor outputs (either direct track speeds or v/omega)
+and manages timing, lifecycle, and events (started/finished/skipped/timeout/error).
+
+Key pieces:
+- `NavigationElement`: base class for all primitives (e.g., `MoveTo`, `TurnTo`, `TimeWait`).
+- `Navigator`: runs elements from a queue, dispatches events/callbacks, and sends motor
+  commands via a user-supplied function.
+
+Execution modes:
+- `NavigatorExecutionMode.THREAD`: the Navigator owns a background thread and runs itself.
+- `NavigatorExecutionMode.EXTERNAL`: *you* drive `navigator.update()` yourself in another loop.
+
+Speed control modes:
+- `TRACKS`: your `speed_command_function` expects (left_track_speed, right_track_speed).
+- `SPEED_CONTROL`: your `speed_command_function` expects (v, omega) in SI units.
+
+Events & callbacks:
+- Navigator-level events: element_started/finished/skipped/timeout/error, navigation_started/
+  paused/resumed/finished/error.
+- Element-level events: started/finished/skipped/timeout/error for the active primitive.
+
+Timing:
+- `TimeRef.EXPERIMENT`: measured from the *first* `startNavigation()` in a run.
+- `TimeRef.PRIMITIVE`: measured from the element's own activation time.
+- `TimeRef.ABSOLUTE`: measured against UNIX time (wall clock).
+
+Safety & gotchas handled:
+- Double "finished" event/callback emissions removed.
+- Skips and timeouts are reported via their dedicated events (not as errors).
+- Exceptions in `on_start`/`step` cleanly terminate the element and keep motors safe.
+- Navigation finishes (and emits `navigation_finished`) when the queue drains.
+- Consistent monotonic clock usage; thread-safe queue introspection; safe stop() join.
+
+-------------------------------------------------------------------------------------------
+Quick start
+-------------------------------------------------------------------------------------------
+
+1) Implement two functions for your robot/platform:
+
+    def send_tracks_or_speeds(a: float, b: float) -> None:
+        # If NavigatorSpeedControlMode.TRACKS -> (left, right) [m/s]
+        # If NavigatorSpeedControlMode.SPEED_CONTROL -> (v, omega) [m/s, rad/s]
+        ...
+
+    def get_state() -> NavigatedObjectState:
+        # Provide x, y, psi, v, psi_dot (world-frame pose & body-frame rates)
+        return NavigatedObjectState(...)
+
+2) Construct the Navigator:
+
+    nav = Navigator(
+        mode=NavigatorExecutionMode.THREAD,               # or EXTERNAL
+        speed_control_mode=NavigatorSpeedControlMode.TRACKS,  # or SPEED_CONTROL
+        speed_command_function=send_tracks_or_speeds,
+        state_fetch_function=get_state,
+    )
+    nav.start()   # starts background thread in THREAD mode (no-op in EXTERNAL mode)
+
+3) Enqueue elements and start:
+
+    nav.addElement(TurnToPoint(x=1.0, y=0.0))
+    nav.addElement(MoveTo(x=1.0, y=0.0))
+    nav.addElement(TurnTo(psi=0.0))
+    nav.startNavigation()
+
+4) (If EXTERNAL mode) call periodically:
+
+    while running:
+        nav.update()
+        time.sleep(nav.control_ts)
+
+5) Observe events or pull a status sample:
+
+    sample = nav.getSample()
+    print(sample.status, sample.element_status, sample.current_element)
+
+6) Stop, pause, resume:
+
+    nav.pauseNavigation()
+    nav.resumeNavigation()
+    nav.stopNavigation()   # stops current element; emits navigation_finished
+
+7) Trigger internal events (for EventWait):
+
+    nav.triggerEvent("door_opened")
+
+-------------------------------------------------------------------------------------------
+Notes
+-------------------------------------------------------------------------------------------
+- Element-local events (e.g., `element.events.finished`) are distinct from navigator-level
+  events (e.g., `navigator.events.element_finished`). Both are available.
+- For composite primitives, the composed sub-steps are invisible externally; you still only
+  get a single started/finished pair for the composite element itself.
+- See the docstrings below for further details on each class and method.
+"""
+from __future__ import annotations
+import abc
 import dataclasses
 import enum
 import queue
 import threading
 import time
 import math
+import uuid
 from typing import Tuple, Optional, Callable
 
 import qmt
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.data import clamp
-from core.utils.events import event_definition, Event
+from core.utils.events import event_definition, Event, EventFlag
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
-from robot.definitions import FRODO_DynamicState
+from core.utils.states import State
+
+
+@dataclasses.dataclass
+class NavigatedObjectState(State):
+    """Minimal kinematic state used by primitives."""
+    x: float = 0.0  # world-frame position [m]
+    y: float = 0.0  # world-frame position [m]
+    psi: float = 0.0  # world-frame yaw [rad]
+    v: float = 0.0  # body-frame linear speed [m/s]
+    psi_dot: float = 0.0  # body-frame yaw rate [rad/s]
+
+
+@event_definition
+class NavigatedObjectEvents:
+    finished: Event = Event(data_type=str, flags=[EventFlag('id', str)])
+    skipped: Event = Event(data_type=str, flags=[EventFlag('id', str)])
+    timeout: Event = Event(data_type=str, flags=EventFlag('id', str))
+    aborted: Event = Event(data_type=str, flags=EventFlag('id', str))
+    error: Event = Event(data_type=str, flags=EventFlag('id', str))
+
+
+class NavigatedObject:
+    id: str
+    state: NavigatedObjectState
+
+    def __init__(self, id: str):
+        self.id = id
+        self.events = NavigatedObjectEvents()
+
+    def add_navigation_element(self, element: NavigationElement):
+        ...
+
+    def start_navigation(self):
+        ...
+
+    def stop_navigation(self):
+        ...
+
+    def abort_current_element(self):
+        ...
 
 
 # === TUNABLE CONSTANTS ================================================================================================
@@ -27,11 +176,16 @@ class NavigatorConfig:
     - CONTROL_TS:         Control loop period (s).
     - LOOKAHEAD:          Carrot lookahead distance (m). Used to soften heading when far.
     - LIN/ANG PI:         Small integrators to fight friction/imperfections.
-    - SOFT_V_LIMIT:       Nominal linear speed cap during navigation (m/s).
+    - SOFT_V/OMEGA:       Nominal speed caps during navigation.
+    - DEFAULT_*_DURATION: Safety caps per element.
     """
 
     MAX_TRACK_SPEED = 0.2
     TRACK_WIDTH = 0.150
+
+    MAX_FORWARD_SPEED = 0.2  # m/s
+    MAX_TURN_SPEED = 3.141  # rad/s
+
     CONTROL_TS = 0.02
 
     # Carrot-chasing lookahead (increase for straighter paths)
@@ -43,13 +197,13 @@ class NavigatorConfig:
     LIN_I_LIMIT = 0.1  # clamp on the integrator (m/s contribution)
 
     # Angular (heading) PI
-    ANG_KP = 2
-    ANG_KI = 0.3
-    ANG_I_LIMIT = 0.05  # clamp on the integrator (rad/s contribution)
-
     # ANG_KP = 2
-    # ANG_KI = 1
-    # ANG_I_LIMIT = 0.8  # clamp on the integrator (rad/s contribution)
+    # ANG_KI = 0.3
+    # ANG_I_LIMIT = 0.05  # clamp on the integrator (rad/s contribution)
+
+    ANG_KP = 2
+    ANG_KI = 0
+    ANG_I_LIMIT = 0  # clamp on the integrator (rad/s contribution)
 
     # Nominal caps (tighter than the physical limit to preserve headroom)
     SOFT_V_LIMIT = 0.2  # m/s
@@ -63,7 +217,7 @@ class NavigatorConfig:
 # === UTILS ============================================================================================================
 def _v_omega_to_tracks(v: float, omega: float, track_width: float) -> tuple[float, float]:
     """
-    Convert body-frame (v, omega) to left/right track speeds.
+    Convert body-frame (v, omega) to differential track speeds (vl, vr).
     Unicycle-to-differential mapping:
         v = (vr + vl)/2
         omega = (vr - vl)/W
@@ -77,9 +231,7 @@ def _v_omega_to_tracks(v: float, omega: float, track_width: float) -> tuple[floa
 
 
 def _saturate_tracks(vl: float, vr: float, limit: float) -> tuple[float, float]:
-    """
-    Uniformly scale (if needed) to ensure |vl|, |vr| <= limit while preserving curvature.
-    """
+    """Uniformly scale (if needed) to keep |vl|, |vr| <= limit while preserving curvature."""
     max_mag = max(abs(vl), abs(vr), 1e-9)
     if max_mag <= limit:
         return vl, vr
@@ -87,37 +239,63 @@ def _saturate_tracks(vl: float, vr: float, limit: float) -> tuple[float, float]:
     return vl * scale, vr * scale
 
 
-# Small helper used by primitives
 def _pi_update(err: float, i_acc: float, kp: float, ki: float, i_limit: float, dt: float) -> tuple[float, float]:
+    """Simple clamped PI update returning (control, new_integral)."""
     i_acc = clamp(i_acc + err * dt * ki, -i_limit, i_limit)
     u = kp * err + i_acc
     return u, i_acc
 
 
+# === CONFIG HELPERS ===================================================================================================
+def _common_kwargs_from_config(cfg: dict) -> dict:
+    """Return kwargs that are common to all NavigationElements."""
+    out = {}
+    for k in ("id", "group_id", "min_duration", "max_duration"):
+        if k in cfg and cfg[k] is not None:
+            out[k] = cfg[k]
+    return out
+
+
 # ======================================================================================================================
 class TimeRef(enum.StrEnum):
-    EXPERIMENT = "EXPERIMENT"  # time referenced to experiment start
-    PRIMITIVE = "PRIMITIVE"  # time referenced to primitive start
-    ABSOLUTE = "ABSOLUTE"  # time referenced to absolute time
+    """Time reference frame for waits and time-based logic."""
+    EXPERIMENT = "EXPERIMENT"  # time referenced to `Navigator` experiment start
+    PRIMITIVE = "PRIMITIVE"  # time referenced to primitive activation time
+    ABSOLUTE = "ABSOLUTE"  # wall clock time
 
 
 @callback_definition
 class NavigationElement_Callbacks:
+    """Per-element callback containers."""
     started: CallbackContainer
     finished: CallbackContainer
+    skipped: CallbackContainer
+    timeout: CallbackContainer
     error: CallbackContainer
 
 
 @event_definition
 class NavigationElement_Events:
+    """Per-element events."""
     started: Event
     finished: Event
+    timeout: Event
+    skipped: Event
     error: Event
 
 
 # === PRIMITIVE CONTEXT (what Navigator passes into each primitive step) ===============================================
 @dataclasses.dataclass
 class PrimitiveContext:
+    """
+    Immutable context snapshot provided to each `step()` call.
+    - config: NavigatorConfig in effect.
+    - control_ts: effective control period [s].
+    - now: monotonic reference time at this tick.
+    - t0: primitive activation time (monotonic).
+    - exp_t0: experiment start time (monotonic).
+    - internal_event: internal string event bus (NavigatorInternal_Events.event).
+    """
     config: NavigatorConfig
     control_ts: float
     now: float
@@ -126,7 +304,7 @@ class PrimitiveContext:
     internal_event: Event  # NavigatorInternal_Events.event
 
     def event_matched(self, name: str, stale_window: float = 0.5) -> bool:
-        """Return True if the string event occurred within the stale_window."""
+        """Return True if the string event occurred within the stale_window (seconds)."""
         return self.internal_event.has_match_in_window(lambda _f, d: d == name, window=stale_window)
 
 
@@ -135,13 +313,22 @@ class NavigationElement:
     """
     Base type for all primitives.
 
-    Lifecycle flags are handled by Navigator.
-    Each primitive may implement:
-      - on_start(state, ctx): optional initialization when primitive becomes active.
-      - step(state, ctx) -> (v_cmd, w_cmd, done): compute command and completion.
+    Lifecycle (managed by Navigator):
+      - Navigator sets `active`, `_t0`, and default durations; then calls `on_start(state, ctx)`.
+      - Each control tick, Navigator calls `step(state, ctx)` until it returns `done=True`.
+      - Navigator finishes the element with a reason (OK/SKIPPED/TIMEOUT/ERROR) and emits events.
 
-    The Navigator converts (v_cmd, w_cmd) to track speeds and applies saturation.
+    Subclass contract:
+      - Override `on_start(state, ctx)` for element initialization (optional).
+      - Override `step(state, ctx) -> (v_cmd [m/s], w_cmd [rad/s], done: bool)`.
+
+    Event emission:
+      - `on_start` emits element-local `started` event/callback (Navigator emits navigator-level one).
+      - `on_finish` is a hook (no event emission); Navigator emits finish/timeout/skip/error.
     """
+
+    id: str = dataclasses.field(default_factory=lambda: str(uuid.uuid4()))
+    group_id: str = ''
     active: bool = False
     finished: bool = False
     error: bool = False
@@ -154,18 +341,34 @@ class NavigationElement:
 
     stop_flag: bool = False
 
-    # Navigator-managed timestamps
+    # Navigator-managed timestamps (monotonic)
     _t0: float | None = None
-    _exp_t0: float | None = None
+    _exp_t0: float | None = None  # retained for backwards compat; Navigator provides exp_t0 in ctx
 
+    def __post_init__(self):
+        if self.id is None:
+            self.id = str(uuid.uuid4())
     # --- API for subclasses -------------------------------------------------------------------------------------------
     def on_start(self, state, ctx: PrimitiveContext):
-        """Optional hook run once when the element is activated."""
-        return
+        """
+        Optional hook run once when the element is activated.
+        Emits element-local 'started' event/callback.
+        """
+        self.callbacks.started.call()
+        # add flags for parity/id-group introspection
+        self.events.started.set()
 
     def step(self, state, ctx: PrimitiveContext) -> Tuple[float, float, bool]:
-        """Return (v_cmd [m/s], w_cmd [rad/s], done: bool)."""
-        return 0.0, 0.0, True  # default: do nothing and finish immediately
+        """Return (v_cmd [m/s], w_cmd [rad/s], done: bool). Default does nothing and completes."""
+        return 0.0, 0.0, True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def on_finish(self):
+        """
+        Hook invoked *after* Navigator finalizes the element. Do not emit events here.
+        Use this to release per-element resources if needed.
+        """
+        return
 
     # --- Introspection/info for UI/telemetry --------------------------------------------------------------------------
     def _elapsed(self) -> float | None:
@@ -188,20 +391,60 @@ class NavigationElement:
             "min_duration": self.min_duration,
             "max_duration": self.max_duration,
             "elapsed": self._elapsed(),
+            "id": self.id,
+            "group_id": self.group_id,
         }
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def skip(self):
+        """
+        Ask the Navigator to stop this element. Navigator will finish it as SKIPPED on the next tick.
+        Emits element-local 'skipped' event/callback immediately.
+        """
+        self.stop_flag = True
+        self.active = False
+        self.callbacks.skipped.call()
+        self.events.skipped.set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_config(self) -> dict:
+        """
+        Default config for base element: subclasses should call super().get_config() and extend.
+        """
+        return {
+            "type": self.__class__.__name__,
+            "id": self.id,
+            "group_id": self.group_id or None,
+            "min_duration": self.min_duration,
+            "max_duration": self.max_duration,
+        }
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @classmethod
+    def from_config(cls, config: dict) -> "NavigationElement":
+        """
+        Base fallback (rarely used directly). Most subclasses override this.
+        """
+        kwargs = _common_kwargs_from_config(config)
+        return cls(**kwargs)  # type: ignore[arg-type]
 
 
 # === PRIMITIVES =======================================================================================================
 # --- WAITING PRIMITIVES -----------------------------------------------------------------------------------------------
 class Wait(NavigationElement):
+    """Base class for wait primitives (no additional parameters)."""
+
     def getInfo(self) -> dict:
-        info = super().getInfo()
-        # Generic wait has no extra params
-        return info
+        return super().getInfo()
 
 
 @dataclasses.dataclass
 class TimeWait(Wait):
+    """
+    Wait for a given duration measured against a time reference.
+    - reference=PRIMITIVE: from element activation time.
+    - reference=EXPERIMENT: from first `startNavigation()` in this run.
+    """
     duration: float = 0.0
     reference: TimeRef = TimeRef.PRIMITIVE
 
@@ -222,9 +465,27 @@ class TimeWait(Wait):
         })
         return info
 
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "duration": self.duration,
+            "reference": self.reference.value,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "TimeWait":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "duration": float(config["duration"]),
+            "reference": TimeRef(config.get("reference", TimeRef.PRIMITIVE.value)),
+        })
+        return cls(**kwargs)
+
 
 @dataclasses.dataclass
 class AbsoluteTimeWait(Wait):
+    """Wait until a UNIX timestamp (wall clock) is reached."""
     unix_time: float = 0.0
     reference: TimeRef = TimeRef.ABSOLUTE
 
@@ -241,9 +502,28 @@ class AbsoluteTimeWait(Wait):
         })
         return info
 
+    # In class AbsoluteTimeWait
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "unix_time": self.unix_time,
+            "reference": self.reference.value,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "AbsoluteTimeWait":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "unix_time": float(config["unix_time"]),
+            "reference": TimeRef(config.get("reference", TimeRef.ABSOLUTE.value)),
+        })
+        return cls(**kwargs)
+
 
 @dataclasses.dataclass
 class EventWait(Wait):
+    """Wait for an internal event string (`Navigator.triggerEvent("name")`)."""
     event: str = ""
 
     def step(self, state, ctx: PrimitiveContext):
@@ -252,16 +532,28 @@ class EventWait(Wait):
 
     def getInfo(self) -> dict:
         info = super().getInfo()
-        info.update({
-            "event": self.event,
-        })
+        info.update({"event": self.event})
         return info
+
+    # In class EventWait
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({"event": self.event})
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "EventWait":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({"event": str(config["event"])})
+        return cls(**kwargs)
 
 
 # --- MOVEMENT PRIMITIVES ----------------------------------------------------------------------------------------------
 @dataclasses.dataclass
 class _MovementBase(NavigationElement):
-    """Common PI and limits for movement primitives."""
+    """
+    Base for movement primitives with shared PI control state and arrive tolerance.
+    """
     speed: float | None = None
     arrive_tolerance: float = 0.05  # meters or radians (override meaning per primitive)
 
@@ -270,6 +562,7 @@ class _MovementBase(NavigationElement):
     _i_ang: float = 0.0
 
     def on_start(self, state, ctx: PrimitiveContext):
+        super().on_start(state, ctx)
         self._i_lin = 0.0
         self._i_ang = 0.0
 
@@ -307,9 +600,9 @@ class RelativeStraightMove(_MovementBase):
 
         # Carrot placement
         look = ctx.config.LOOKAHEAD
-        step = max(0.0, dist - look) if dist > 1e-6 else 0.0
-        cx = xg - (dx / (dist + 1e-9)) * step
-        cy = yg - (dy / (dist + 1e-9)) * step
+        step_back = max(0.0, dist - look) if dist > 1e-6 else 0.0
+        cx = xg - (dx / (dist + 1e-9)) * step_back
+        cy = yg - (dy / (dist + 1e-9)) * step_back
 
         psi_des = math.atan2(cy - state.y, cx - state.x)
         e_psi = qmt.wrapToPi(psi_des - state.psi)
@@ -335,9 +628,33 @@ class RelativeStraightMove(_MovementBase):
         })
         return info
 
+    # In class RelativeStraightMove
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "distance": self.distance,
+            "speed": self.speed,
+            "arrive_tolerance": self.arrive_tolerance,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "RelativeStraightMove":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "distance": float(config["distance"]),
+            "speed": config.get("speed", None),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.05)),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"RelativeStraightMove(distance={self.distance})"
+
 
 @dataclasses.dataclass
 class MoveTo(_MovementBase):
+    """Drive to a world-frame (x, y) with carrot-chasing and PI blending."""
     x: float = 0.0
     y: float = 0.0
 
@@ -349,9 +666,9 @@ class MoveTo(_MovementBase):
             return 0.0, 0.0, True
 
         look = ctx.config.LOOKAHEAD
-        step = max(0.0, dist - look) if dist > 1e-6 else 0.0
-        cx = self.x - (dx / (dist + 1e-9)) * step
-        cy = self.y - (dy / (dist + 1e-9)) * step
+        step_back = max(0.0, dist - look) if dist > 1e-6 else 0.0
+        cx = self.x - (dx / (dist + 1e-9)) * step_back
+        cy = self.y - (dy / (dist + 1e-9)) * step_back
 
         psi_des = math.atan2(cy - state.y, cx - state.x)
         e_psi = qmt.wrapToPi(psi_des - state.psi)
@@ -370,14 +687,38 @@ class MoveTo(_MovementBase):
 
     def getInfo(self) -> dict:
         info = super().getInfo()
-        info.update({
-            "target": (self.x, self.y),
-        })
+        info.update({"target": (self.x, self.y)})
         return info
+
+    # In class MoveTo
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "x": self.x,
+            "y": self.y,
+            "speed": self.speed,
+            "arrive_tolerance": self.arrive_tolerance,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "MoveTo":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "x": float(config["x"]),
+            "y": float(config["y"]),
+            "speed": config.get("speed", None),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.05)),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"MoveTo (x={self.x}, y={self.y})"
 
 
 @dataclasses.dataclass
 class MoveToRelative(_MovementBase):
+    """Drive to a position offset (dx, dy) relative to current pose at activation."""
     dx: float = 0.0
     dy: float = 0.0
     _goal_x: Optional[float] = None
@@ -397,9 +738,9 @@ class MoveToRelative(_MovementBase):
             return 0.0, 0.0, True
 
         look = ctx.config.LOOKAHEAD
-        step = max(0.0, dist - look) if dist > 1e-6 else 0.0
-        cx = self._goal_x - (dx / (dist + 1e-9)) * step
-        cy = self._goal_y - (dy / (dist + 1e-9)) * step
+        step_back = max(0.0, dist - look) if dist > 1e-6 else 0.0
+        cx = self._goal_x - (dx / (dist + 1e-9)) * step_back
+        cy = self._goal_y - (dy / (dist + 1e-9)) * step_back
 
         psi_des = math.atan2(cy - state.y, cx - state.x)
         e_psi = qmt.wrapToPi(psi_des - state.psi)
@@ -424,9 +765,36 @@ class MoveToRelative(_MovementBase):
         })
         return info
 
+        # In class MoveToRelative
+
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "dx": self.dx,
+            "dy": self.dy,
+            "speed": self.speed,
+            "arrive_tolerance": self.arrive_tolerance,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "MoveToRelative":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "dx": float(config["dx"]),
+            "dy": float(config["dy"]),
+            "speed": config.get("speed", None),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.05)),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"MoveToRelative (dx={self.dx}, dy={self.dy})"
+
 
 @dataclasses.dataclass
 class TurnTo(_MovementBase):
+    """Rotate in place to absolute heading `psi` (radians, world-frame)."""
     psi: float = 0.0
     arrive_tolerance: float = 0.05  # radians
 
@@ -443,14 +811,36 @@ class TurnTo(_MovementBase):
 
     def getInfo(self) -> dict:
         info = super().getInfo()
-        info.update({
-            "psi_target": self.psi,
-        })
+        info.update({"psi_target": self.psi})
         return info
+
+    # In class TurnTo
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "psi": self.psi,
+            "arrive_tolerance": self.arrive_tolerance,
+            "speed": self.speed,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "TurnTo":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "psi": float(config["psi"]),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.05)),
+            "speed": config.get("speed", None),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"TurnTo (psi={self.psi})"
 
 
 @dataclasses.dataclass
 class RelativeTurn(_MovementBase):
+    """Rotate in place by `dpsi` relative to current heading."""
     dpsi: float = 0.0
     arrive_tolerance: float = 0.05  # radians
     _goal_psi: Optional[float] = None
@@ -479,8 +869,31 @@ class RelativeTurn(_MovementBase):
         })
         return info
 
+    # In class RelativeTurn
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "dpsi": self.dpsi,
+            "arrive_tolerance": self.arrive_tolerance,
+            "speed": self.speed,
+        })
+        return cfg
 
-# --- NEW: TURN TO POINT -----------------------------------------------------------------------------------------------
+    @classmethod
+    def from_config(cls, config: dict) -> "RelativeTurn":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "dpsi": float(config["dpsi"]),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.05)),
+            "speed": config.get("speed", None),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"RelativeTurn (dpsi={self.dpsi:.3f})"
+
+
+# --- TURN TO POINT ----------------------------------------------------------------------------------------------------
 @dataclasses.dataclass
 class TurnToPoint(_MovementBase):
     """
@@ -505,10 +918,33 @@ class TurnToPoint(_MovementBase):
 
     def getInfo(self) -> dict:
         info = super().getInfo()
-        info.update({
-            "target_point": (self.x, self.y),
-        })
+        info.update({"target_point": (self.x, self.y)})
         return info
+
+    # In class TurnToPoint
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "x": self.x,
+            "y": self.y,
+            "arrive_tolerance": self.arrive_tolerance,
+            "speed": self.speed,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "TurnToPoint":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "x": float(config["x"]),
+            "y": float(config["y"]),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.02)),
+            "speed": config.get("speed", None),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"TurnToPoint(x={self.x}, y={self.y})"
 
 
 @dataclasses.dataclass
@@ -519,7 +955,8 @@ class CoordinatedMoveTo(NavigationElement):
       2) MoveTo(x, y)
       3) (optional) TurnTo(psi_end)
 
-    Tolerances are exposed so you can tune how 'tight' each stage is.
+    Tolerances/speed are exposed so you can tune how 'tight' each stage is.
+    External observers only see a single started/finished sequence for the composite.
     """
     x: float = 0.0
     y: float = 0.0
@@ -538,6 +975,7 @@ class CoordinatedMoveTo(NavigationElement):
     _turn2: TurnTo | None = dataclasses.field(default=None, init=False)
 
     def on_start(self, state, ctx: PrimitiveContext):
+        super().on_start(state, ctx)
         # Build sub-primitives with requested tolerances/speed.
         self._turn1 = TurnToPoint(x=self.x, y=self.y,
                                   arrive_tolerance=self.pre_rotate_tolerance)
@@ -560,7 +998,7 @@ class CoordinatedMoveTo(NavigationElement):
         else:
             self._stage = "TURN1"
 
-        # Also skip final turn if psi_end is effectively aligned at start (rare but cheap)
+        # Also skip final turn if psi_end is effectively aligned at start and we’re already at the target.
         if self._turn2 is not None and self._stage == "TURN1":
             if abs(qmt.wrapToPi(self._turn2.psi - state.psi)) <= self.final_heading_tolerance \
                     and math.hypot(self.x - state.x, self.y - state.y) <= self.arrive_tolerance:
@@ -601,7 +1039,6 @@ class CoordinatedMoveTo(NavigationElement):
     def getInfo(self) -> dict:
         info = super().getInfo()
         info.update({
-            "type": self.__class__.__name__,
             "target": (self.x, self.y),
             "psi_end": self.psi_end,
             "pre_rotate_tolerance": self.pre_rotate_tolerance,
@@ -612,13 +1049,77 @@ class CoordinatedMoveTo(NavigationElement):
         })
         return info
 
+    def get_config(self) -> dict:
+        cfg = super().get_config()
+        cfg.update({
+            "x": self.x,
+            "y": self.y,
+            "psi_end": self.psi_end,
+            "pre_rotate_tolerance": self.pre_rotate_tolerance,
+            "arrive_tolerance": self.arrive_tolerance,
+            "final_heading_tolerance": self.final_heading_tolerance,
+            "speed": self.speed,
+        })
+        return cfg
+
+    @classmethod
+    def from_config(cls, config: dict) -> "CoordinatedMoveTo":
+        kwargs = _common_kwargs_from_config(config)
+        kwargs.update({
+            "x": float(config["x"]),
+            "y": float(config["y"]),
+            "psi_end": (None if config.get("psi_end") is None else float(config["psi_end"])),
+            "pre_rotate_tolerance": float(config.get("pre_rotate_tolerance", 0.06)),
+            "arrive_tolerance": float(config.get("arrive_tolerance", 0.05)),
+            "final_heading_tolerance": float(config.get("final_heading_tolerance", 0.02)),
+            "speed": config.get("speed", None),
+        })
+        return cls(**kwargs)
+
+    def __repr__(self):
+        return f"CoordinatedMoveTo(x={self.x}, y={self.y}, psi_end={self.psi_end})"
+
+
+# ======================================================================================================================
+# === ELEMENT REGISTRY ================================================================================================
+ELEMENT_MAPPING: dict[str, type[NavigationElement]] = {
+    "TimeWait": TimeWait,
+    "AbsoluteTimeWait": AbsoluteTimeWait,
+    "EventWait": EventWait,
+    "RelativeStraightMove": RelativeStraightMove,
+    "MoveTo": MoveTo,
+    "MoveToRelative": MoveToRelative,
+    "TurnTo": TurnTo,
+    "RelativeTurn": RelativeTurn,
+    "TurnToPoint": TurnToPoint,
+    "CoordinatedMoveTo": CoordinatedMoveTo,
+}
+
+
+def element_from_config(config: dict) -> NavigationElement:
+    t = config.get("type")
+    if not t:
+        raise ValueError("NavigationElement config missing 'type'")
+    cls = ELEMENT_MAPPING.get(t)
+    if not cls:
+        raise ValueError(f"Unknown NavigationElement type: {t}")
+    return cls.from_config(config)
+
+
+def element_to_config(elem: NavigationElement) -> dict:
+    return elem.get_config()
+
 
 # ======================================================================================================================
 @event_definition
 class Navigator_Events:
-    element_started: Event = Event(copy_data_on_set=False)
-    element_finished: Event = Event(copy_data_on_set=False)
-    element_error: Event = Event(copy_data_on_set=False)
+    """Navigator-level events."""
+    element_started: Event = Event(copy_data_on_set=False, flags=EventFlag('id', str))
+    element_finished: Event = Event(copy_data_on_set=False, flags=EventFlag('id', str))
+    element_error: Event = Event(copy_data_on_set=False, flags=EventFlag('id', str))
+    element_skipped: Event = Event(copy_data_on_set=False, flags=EventFlag('id', str))
+    element_timeout: Event = Event(copy_data_on_set=False, flags=EventFlag('id', str))
+
     navigation_started: Event
     navigation_paused: Event
     navigation_resumed: Event
@@ -628,9 +1129,13 @@ class Navigator_Events:
 
 @callback_definition
 class Navigator_Callbacks:
+    """Navigator-level callbacks."""
     element_started: CallbackContainer
     element_finished: CallbackContainer
     element_error: CallbackContainer
+    element_skipped: CallbackContainer
+    element_timeout: CallbackContainer
+
     navigation_started: CallbackContainer
     navigation_paused: CallbackContainer
     navigation_resumed: CallbackContainer
@@ -640,11 +1145,13 @@ class Navigator_Callbacks:
 
 @event_definition
 class NavigatorInternal_Events:
+    """Internal bus for string events and stop signal."""
     event: Event = Event(data_type=str)
     stop: Event
 
 
 class NavigatorStatus(enum.StrEnum):
+    """High-level navigator state."""
     IDLE = "IDLE"
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"
@@ -652,6 +1159,7 @@ class NavigatorStatus(enum.StrEnum):
 
 
 class NavigatorElementStatus(enum.StrEnum):
+    """Derived status for the *current* element."""
     MOVING = "MOVING"
     WAITING = "WAITING"
     WAITING_FOR_EVENT = "WAITING_FOR_EVENT"
@@ -661,6 +1169,7 @@ class NavigatorElementStatus(enum.StrEnum):
 
 @dataclasses.dataclass
 class NavigatorSample:
+    """Lightweight snapshot for UI/telemetry."""
     status: NavigatorStatus
     element_status: NavigatorElementStatus
     current_element: dict | None
@@ -670,25 +1179,46 @@ class NavigatorSample:
 
 
 class NavigatorExecutionMode(enum.StrEnum):
+    """How the control loop is executed."""
     THREAD = "THREAD"
     EXTERNAL = "EXTERNAL"
 
 
+class NavigatorSpeedControlMode(enum.StrEnum):
+    """
+    How outgoing speed commands are interpreted by the provided callback:
+    - TRACKS: callback receives (vl, vr) in [m/s]
+    - SPEED_CONTROL: callback receives (v, omega) in [m/s, rad/s]
+    """
+    TRACKS = "TRACKS"
+    SPEED_CONTROL = "SPEED_CONTROL"
+
+
+class _FinishReason(enum.Enum):
+    """Internal reason for element finalization; used to route correct events."""
+    OK = "OK"
+    ERROR = "ERROR"
+    SKIPPED = "SKIPPED"
+    TIMEOUT = "TIMEOUT"
+
+
 class Navigator:
     """
-    Background worker:
-      - dequeues elements and calls their `on_start` (once) and `step` (periodic).
-      - converts (v, ω) to (left, right) track speeds and sends them via provided callback.
-      - handles lifecycle, min/max duration, and logging.
+    Background worker that:
+      - dequeues elements and invokes their `on_start` (once) and `step` (periodic).
+      - converts (v, ω) to (left, right) track speeds and sends them via a callback.
+      - handles lifecycle, min/max durations, exceptions, events, and logging.
 
-    You pass in:
-      - speed_command_function(left, right)
-      - state_fetch_function() -> FRODO_DynamicState
+    You must provide:
+      - speed_command_function(a, b):
+            if TRACKS         -> a=vl [m/s], b=vr [m/s]
+            if SPEED_CONTROL  -> a=v  [m/s], b=omega [rad/s]
+      - state_fetch_function() -> NavigatedObjectState
     """
     execution_mode: NavigatorExecutionMode
 
     speed_command_function: Callable[[float, float], None]
-    state_fetch_function: Callable[[], FRODO_DynamicState]
+    state_fetch_function: Callable[[], NavigatedObjectState]
 
     movement_queue: queue.Queue
     status: NavigatorStatus = NavigatorStatus.IDLE
@@ -705,59 +1235,90 @@ class Navigator:
 
     def __init__(self,
                  mode: NavigatorExecutionMode,
+                 speed_control_mode: NavigatorSpeedControlMode,
                  speed_command_function: Callable[[float, float], None],
-                 state_fetch_function: Callable[[], FRODO_DynamicState]):
-
+                 state_fetch_function: Callable[[], NavigatedObjectState],
+                 id: str | None = None, ):
         self.mode = mode
+        self.speed_control_mode = speed_control_mode
         self.speed_command_function = speed_command_function
         self.state_fetch_function = state_fetch_function
+
         self.movement_queue = queue.Queue()
-        self.logger = Logger("NAVIGATOR", "DEBUG")
+
+        self.logger = Logger("NAVIGATOR" if id is None else f"NAVIGATOR {id}", "DEBUG")
         self.callbacks = Navigator_Callbacks()
         self.events = Navigator_Events()
         self._internal_events = NavigatorInternal_Events()
 
-        self._thread = threading.Thread(target=self._task, daemon=True)
+        self._thread = threading.Thread(target=self._task, daemon=True, name="NavigatorThread")
 
-        # --- NEW: accounting for indices/remaining
+        # Accounting for indices/remaining
         self._elements_enqueued: int = 0
         self._elements_finished: int = 0
+
+        # Experiment epoch (monotonic). Set on first startNavigation().
+        self._exp_t0: float | None = None
+
         register_exit_callback(self.stop)
 
     # === PUBLIC API ===================================================================================================
     def start(self):
+        """
+        Initialize the control loop depending on the execution mode.
+        THREAD: start the background thread.
+        EXTERNAL: no thread is started; you must call `update()` periodically.
+        """
         if self.mode == NavigatorExecutionMode.EXTERNAL:
-            ...
+            self.logger.info("Navigator ready (EXTERNAL mode) — call update() periodically")
         elif self.mode == NavigatorExecutionMode.THREAD:
             self._thread.start()
+            self.logger.info("Navigator thread started")
         else:
             raise Exception("Execution mode not supported")
-        self.logger.info("Navigator started")
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop(self):
+        """
+        Request the background loop to exit, and join the thread if we are not on it.
+        Always leaves motors in a safe (zero) state.
+        """
         self._exit = True
-        if self._thread.is_alive():
-            self._thread.join()
-        self.logger.info("Navigator stopped")
+        try:
+            if self._thread.is_alive() and threading.current_thread() is not self._thread:
+                self._thread.join()
+        finally:
+            self.speed_command_function(0.0, 0.0)
+            self.logger.info("Navigator stopped")
 
     # ------------------------------------------------------------------------------------------------------------------
     def update(self):
+        """Run a single control step. Use only in EXTERNAL execution mode."""
         self._control_step()
 
     # ------------------------------------------------------------------------------------------------------------------
     def startNavigation(self):
+        """
+        Transition to RUNNING state; emit navigation_started.
+        Sets the experiment epoch on the first call within a run.
+        """
         if self.status in (NavigatorStatus.IDLE, NavigatorStatus.PAUSED, NavigatorStatus.STOPPED):
             self.status = NavigatorStatus.RUNNING
+            if self._exp_t0 is None:
+                self._exp_t0 = time.monotonic()
             self.events.navigation_started.set()
             self.callbacks.navigation_started.call()
             self.logger.info("Navigation started")
 
     # ------------------------------------------------------------------------------------------------------------------
     def stopNavigation(self):
+        """
+        Stop current element (mark as SKIPPED) and end navigation.
+        Emits navigation_finished.
+        """
         self.status = NavigatorStatus.STOPPED
         if self.active_element:
-            self.active_element.stop_flag = True
+            self.active_element.stop_flag = True  # will be finalized as SKIPPED on next tick
         self.speed_command_function(0.0, 0.0)
         self.events.navigation_finished.set()
         self.callbacks.navigation_finished.call()
@@ -765,6 +1326,7 @@ class Navigator:
 
     # ------------------------------------------------------------------------------------------------------------------
     def pauseNavigation(self):
+        """Pause navigation; motors commanded to zero; emits navigation_paused."""
         if self.status == NavigatorStatus.RUNNING:
             self.status = NavigatorStatus.PAUSED
             self.speed_command_function(0.0, 0.0)
@@ -774,14 +1336,19 @@ class Navigator:
 
     # ------------------------------------------------------------------------------------------------------------------
     def resumeNavigation(self):
+        """Resume navigation if paused; emits navigation_resumed."""
         if self.status == NavigatorStatus.PAUSED:
             self.status = NavigatorStatus.RUNNING
-            self.events.navigation_resumed.set()
             self.callbacks.navigation_resumed.call()
+            self.events.navigation_resumed.set()
             self.logger.info("Navigation resumed")
 
     # ------------------------------------------------------------------------------------------------------------------
     def runElement(self, element: NavigationElement):
+        """
+        Activate an element: mark active, set defaults, call on_start, and emit 'element_started'.
+        If `on_start` fails, the element is immediately finalized as ERROR and no started event is emitted.
+        """
         self.active_element = element
         element.active = True
         element.finished = False
@@ -789,7 +1356,7 @@ class Navigator:
         element.stop_flag = False
         element._t0 = time.monotonic()
         if element._exp_t0 is None:
-            element._exp_t0 = element._t0
+            element._exp_t0 = element._t0  # retained for backwards compat; ctx.exp_t0 will use navigator epoch
 
         # Default durations
         if element.min_duration is None:
@@ -799,31 +1366,56 @@ class Navigator:
 
         st = self.state_fetch_function()
         ctx = self._make_ctx(element)
+
         # Per-primitive init
         try:
             element.on_start(st, ctx)
         except Exception as e:
             self.logger.error(f"Element on_start failed: {e}")
-            element.error = True
+            # Immediately finish as ERROR (no 'started' emission)
+            self._finish_active(_FinishReason.ERROR)
+            # Also raise a navigator-level error
+            self.events.navigation_error.set(data=str(e))
+            self.callbacks.navigation_error.call(error=e)
+            return
 
-        # Notifications
-        self.events.element_started.set(data=element)
-        element.events.started.set()
-        self.callbacks.element_started.call(element=element)
-        element.callbacks.started.call()
-        self.logger.debug(f"Element started: {element}")
+        # Notifications (navigator-level)
+        self.events.element_started.set(data=element, flags={'id': element.id})
+        self.callbacks.element_started.call(element=element, flags={'id': element.id})
+        self.logger.info(f"Element started: {element}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def abortElement(self):
+    def skip_element(self):
+        """
+        Interrupt the currently running element and skip to the next one.
+        If no next element is queued, we mark navigation as finished.
+        """
         if self.active_element:
-            self.active_element.stop_flag = True
-            self.active_element.active = False
-            self.active_element = None
+            self.active_element.skip()  # emits element-local skipped immediately
             self.speed_command_function(0.0, 0.0)
-            self.logger.warning("Active element aborted")
+            self.logger.warning("Active element skipped")
+
+            if self.movement_queue.qsize() == 0:
+                # Mark navigation as finished (will also finalize active on next tick)
+                self.status = NavigatorStatus.STOPPED
+                self.events.navigation_finished.set()
+                self.callbacks.navigation_finished.call()
+                self.logger.info("No further elements queued — navigation finished")
+        else:
+            if self.movement_queue.qsize() == 0:
+                self.status = NavigatorStatus.STOPPED
+                self.events.navigation_finished.set()
+                self.callbacks.navigation_finished.call()
+                self.logger.info("skip_element called with no active element and empty queue — navigation finished")
+
+    # Backward compatibility (old camelCase API)
+    def abortElement(self):
+        """Back-compat alias for skip_element()."""
+        self.skip_element()
 
     # ------------------------------------------------------------------------------------------------------------------
     def clearQueue(self):
+        """Remove all queued (not yet active) elements."""
         cleared = 0
         while True:
             try:
@@ -835,33 +1427,68 @@ class Navigator:
             self.logger.info(f"Cleared {cleared} queued elements")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addElement(self, element: NavigationElement):
-        self.movement_queue.put(element)
-        self._elements_enqueued += 1
+    def addElement(self,
+                   element: NavigationElement,
+                   force_start: bool = True,
+                   force_element: bool = False):
+        """
+        Enqueue a navigation element.
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def setQueueFromFile(self, file: str):
-        ...
+        Args:
+            element: the element to enqueue.
+            force_start: if True (default), automatically start running navigation.
+            force_element: if True, preempt the current element (if any) and push this one
+                           to the **front** of the queue.
+
+        Note:
+            We do not use `queue.Queue.join()` in this module, so we never touch the internal
+            `unfinished_tasks` counter when preempting.
+        """
+        if force_element:
+            # Preempt current element and put new one at the front of the queue.
+            if self.active_element:
+                self.active_element.stop_flag = True  # control loop will end it shortly
+                self.logger.warning("Forcing element to front — current element will be aborted")
+
+            # queue.Queue uses an internal deque; use its mutex to safely mutate.
+            with self.movement_queue.mutex:
+                self.movement_queue.queue.appendleft(element)
+            self._elements_enqueued += 1
+        else:
+            self.movement_queue.put(element)
+            self._elements_enqueued += 1
+
+        if force_start:
+            self.startNavigation()
 
     # ------------------------------------------------------------------------------------------------------------------
     def triggerEvent(self, name: str):
+        """Emit an internal string event; consumable by EventWait primitives."""
         self._internal_events.event.set(data=name)
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> NavigatorSample:
+        """
+        Return a thread-safe snapshot of current status and a shallow copy of the queued elements'
+        info dicts. Access to the underlying queue is locked.
+        """
         element_status = self._infer_element_status()
         current_info = self.active_element.getInfo() if self.active_element else None
 
         # Index: how many elements have already finished (0-based for current)
         current_index = self._elements_finished
-        # Remaining in queue (does not include the active one)
-        remaining = self.movement_queue.qsize()
+
+        # Remaining in queue and the queue info snapshot
+        with self.movement_queue.mutex:
+            queued_list = list(self.movement_queue.queue)
+            remaining = len(queued_list)
+            queued_info = [e.getInfo() for e in queued_list]
 
         sample = NavigatorSample(
             status=self.status,
             element_status=element_status,
             current_element=current_info,
-            element_queue=[e.getInfo() for e in self.movement_queue.queue],
+            element_queue=queued_info,
             current_element_index=current_index,
             elements_remaining=remaining
         )
@@ -875,55 +1502,80 @@ class Navigator:
             control_ts=self.control_ts,
             now=now,
             t0=element._t0 or now,
-            exp_t0=element._exp_t0 or now,
+            exp_t0=self._exp_t0 or now,
             internal_event=self._internal_events.event
         )
 
     def _task(self):
-        last = time.perf_counter()
+        """Background thread loop (THREAD mode)."""
+        last = time.monotonic()
         while not self._exit:
-            now = time.perf_counter()
+            now = time.monotonic()
             dt = now - last
             if dt < self.control_ts:
                 time.sleep(self.control_ts - dt)
-                now = time.perf_counter()
+                now = time.monotonic()
             last = now
             try:
                 self._control_step()
             except Exception as e:
+                # Any exception here is treated as a navigation-level error, with motors safe.
                 self.logger.error(f"Navigator control exception: {e}")
                 self.speed_command_function(0.0, 0.0)
                 self.events.navigation_error.set(data=str(e))
                 self.callbacks.navigation_error.call(error=e)
 
-    def _finish_active(self, ok: bool = True):
+    def _finish_active(self, reason: _FinishReason):
+        """
+        Finalize the active element with the given reason, emit appropriate events/callbacks,
+        stop the motors, and clear the active element.
+        """
         if not self.active_element:
             return
+
         el = self.active_element
         el.active = False
-        el.finished = ok
-        el.error = not ok
+        el.finished = (reason == _FinishReason.OK)
+        el.error = (reason == _FinishReason.ERROR)
         self.active_element = None
 
-        # --- NEW: count finished
+        # Count finished elements for indexing/introspection.
         self._elements_finished += 1
 
-        if ok:
-            self.events.element_finished.set(data=el)
+        # --- Navigator-level & element-level emissions (parity preserved)
+        if reason == _FinishReason.OK:
+            self.events.element_finished.set(data=el, flags={'id': el.id})
             el.events.finished.set()
             self.callbacks.element_finished.call(element=el)
             el.callbacks.finished.call()
             self.logger.debug(f"Element finished: {el}")
-        else:
-            self.events.element_error.set(data=el)
+        elif reason == _FinishReason.SKIPPED:
+            self.events.element_skipped.set(data=el, flags={'id': el.id})
+            el.events.skipped.set()
+            self.callbacks.element_skipped.call(element=el)
+            el.callbacks.skipped.call()
+            self.logger.warning(f"Element skipped: {el}")
+        elif reason == _FinishReason.TIMEOUT:
+            self.events.element_timeout.set(data=el, flags={'id': el.id})
+            el.events.timeout.set()
+            self.callbacks.element_timeout.call(element=el)
+            el.callbacks.timeout.call()
+            self.logger.warning(f"Element timeout: {el}")
+        else:  # ERROR
+            self.events.element_error.set(data=el, flags={'id': el.id})
             el.events.error.set()
             self.callbacks.element_error.call(element=el)
             el.callbacks.error.call()
             self.logger.error(f"Element error/aborted: {el}")
 
-        self.speed_command_function(0.0, 0.0)
+        # Hook (no event emission here)
+        try:
+            el.on_finish()
+        finally:
+            self.speed_command_function(0.0, 0.0)
 
     def _infer_element_status(self) -> NavigatorElementStatus:
+        """Best-effort derivation of the current element's status for telemetry."""
         if self.active_element is None:
             # No active element — if we're paused, say WAITING, else DONE.
             if self.status == NavigatorStatus.PAUSED:
@@ -940,23 +1592,40 @@ class Navigator:
         return NavigatorElementStatus.MOVING
 
     def _control_step(self):
+        """
+        Single control step:
+          - If not running: hold motors safe and return.
+          - If no active element: try to start one, otherwise finish navigation if queue empty.
+          - If active: enforce timeout/min_duration, call step(), convert/saturate outputs,
+            and finalize when done.
+        """
         if self.status != NavigatorStatus.RUNNING:
             self.speed_command_function(0.0, 0.0)
             return
 
+        # Acquire next element if none is active
         if self.active_element is None:
             try:
                 nxt: NavigationElement = self.movement_queue.get_nowait()
             except queue.Empty:
+                # Queue drained — finish navigation
                 self.speed_command_function(0.0, 0.0)
+                self.status = NavigatorStatus.STOPPED
+                self.events.navigation_finished.set()
+                self.callbacks.navigation_finished.call()
+                self.logger.info("Navigation finished (queue empty)")
                 return
             self.runElement(nxt)
+            # If on_start failed, active_element may already be cleared by _finish_active(ERROR)
+            if self.active_element is None:
+                return
 
         el = self.active_element
         assert el is not None
 
+        # External skip request
         if el.stop_flag:
-            self._finish_active(ok=False)
+            self._finish_active(_FinishReason.SKIPPED)
             return
 
         # Timeouts
@@ -965,30 +1634,35 @@ class Navigator:
         elapsed = t - t0
         if el.max_duration is not None and elapsed > el.max_duration:
             self.logger.warning(f"Element timeout (> {el.max_duration:.1f}s)")
-            self._finish_active(ok=False)
+            self._finish_active(_FinishReason.TIMEOUT)
             return
 
         # Primitive step
         st = self.state_fetch_function()
         ctx = self._make_ctx(el)
-        v_cmd, w_cmd, done = el.step(st, ctx)
+        try:
+            v_cmd, w_cmd, done = el.step(st, ctx)
+        except Exception as e:
+            self.logger.error(f"Element step exception: {e}")
+            self._finish_active(_FinishReason.ERROR)
+            # Surface a navigation-level error, too
+            self.events.navigation_error.set(data=str(e))
+            self.callbacks.navigation_error.call(error=e)
+            return
 
         # Enforce min_duration at finish
         if done and elapsed < (el.min_duration or 0.0):
             done = False
 
         # Convert & saturate
-        vl, vr = _v_omega_to_tracks(v_cmd, w_cmd, self.config.TRACK_WIDTH)
-        vl, vr = _saturate_tracks(vl, vr, self.config.MAX_TRACK_SPEED)
-        self.speed_command_function(vl, vr)
+        if self.speed_control_mode == NavigatorSpeedControlMode.SPEED_CONTROL:
+            v = clamp(v_cmd, -self.config.MAX_FORWARD_SPEED, self.config.MAX_FORWARD_SPEED)
+            omega = clamp(w_cmd, -self.config.MAX_TURN_SPEED, self.config.MAX_TURN_SPEED)
+            self.speed_command_function(v, omega)
+        elif self.speed_control_mode == NavigatorSpeedControlMode.TRACKS:
+            vl, vr = _v_omega_to_tracks(v_cmd, w_cmd, self.config.TRACK_WIDTH)
+            vl, vr = _saturate_tracks(vl, vr, self.config.MAX_TRACK_SPEED)
+            self.speed_command_function(vl, vr)
 
         if done:
-            self._finish_active(ok=True)
-
-
-# === QUEUE HELPERS ====================================================================================================
-def movement_list_to_file(movements: list[NavigationElement], file: str):
-    ...
-
-def movement_file_to_list(file) -> list[NavigationElement]:
-    ...
+            self._finish_active(_FinishReason.OK)

@@ -110,7 +110,7 @@ class BILBO_Application:
                                                                inputs={'robot': bilbo},
                                                                discard_inputs=True),
                                              once=True,
-                                             input_data=False)
+                                             discard_data=True)
         else:
             self.gui.addRobot(bilbo)
 

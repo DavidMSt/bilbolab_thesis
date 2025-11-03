@@ -19,7 +19,7 @@ class CLI_Terminal:
         }
 
         self.config = update_dict(default_config, kwargs)
-        self.logger = Logger(f"CLI_Terminal {self.id}", 'DEBUG')
+        self.logger = Logger(f"CLI_Terminal {self.id}", 'WARNING')
 
     # === PROPERTIES ===================================================================================================
     @property

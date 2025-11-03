@@ -8,6 +8,7 @@ from core.utils.logging_utils import Logger
 
 logger = Logger('scanner')
 
+print("DO I FIND THIS?")
 
 @callback_definition
 class RobotScannerCallbacks:

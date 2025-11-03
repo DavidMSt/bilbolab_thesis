@@ -48,9 +48,9 @@ class NatNetClient:
         # Change this value to the IP address of your local network interface
         # self.localIPAddress = "127.0.0.1"
         # self.localIPAddress = "130.149.244.182"
-        # self.localIPAddress = "192.168.8.247"
-        # self.localIPAddress = '0.0.0.0'
+        # self.localIPAddress = "192.168.8.238"
         self.localIPAddress = '0.0.0.0'
+        # self.localIPAddress = '0.0.0.0'
         # self.localIPAddress = '192.168.1.149'
 
         # This should match the multicast address listed in Motive's streaming settings.
@@ -522,6 +522,7 @@ class NatNetClient:
             'marker_sets': marker_sets,
             'rigid_bodies': rigid_bodies,
         }
+
         if self.description_message_callback is not None:
             self.description_message_callback(data)
 
@@ -618,5 +619,4 @@ class NatNetClient:
         self.sendCommand(self.NAT_REQUEST_MODELDEF, "", self.commandSocket, (self.serverIPAddress, self.commandPort))
 
     def readModelDef(self):
-        ...
         self.sendCommand(self.NAT_REQUEST_MODELDEF, "", self.commandSocket, (self.serverIPAddress, self.commandPort))

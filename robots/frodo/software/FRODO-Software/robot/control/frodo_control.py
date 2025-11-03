@@ -8,12 +8,15 @@ from typing import Callable, Tuple, Optional
 import math
 
 from core.utils.callbacks import CallbackContainer, callback_definition
+from core.utils.data import clamp
 from core.utils.delayed_executor import setTimeout
 from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from robot.common import FRODO_Common
-from robot.control.navigator import NavigatorSample, Navigator, NavigatorExecutionMode
+from robot.control.navigator import NavigatorSample, Navigator, NavigatorExecutionMode, MoveTo, TurnTo, \
+    CoordinatedMoveTo, TimeWait, TimeRef, NavigatorStatus, MoveToRelative, RelativeStraightMove, RelativeTurn, \
+    TurnToPoint, AbsoluteTimeWait, EventWait, NavigationElement, NavigatedObjectState, NavigatorSpeedControlMode
 from robot.definitions import MAX_TRACK_SPEED
 from robot.estimation.frodo_estimation import FRODO_DynamicState
 from robot.frodo_core.frodo_core import FRODO_Core
@@ -58,6 +61,7 @@ class FRODO_Control:
     def __init__(self, common: FRODO_Common,
                  core: FRODO_Core,
                  communication: FRODO_Communication):
+
         self.logger = Logger("CONTROL", "DEBUG")
         self.core = core
         self.common = common
@@ -65,8 +69,15 @@ class FRODO_Control:
 
         self.navigator = Navigator(
             mode=NavigatorExecutionMode.THREAD,
+            speed_control_mode=NavigatorSpeedControlMode.TRACKS,
             speed_command_function=self._setTrackSpeedPrivate,
-            state_fetch_function=self.common.getDynamicState)
+            state_fetch_function=self._navigator_state_fetch_function)
+
+        self.navigator.events.element_finished.on(self._on_navigation_element_finished)
+        self.navigator.events.element_started.on(self._on_navigation_element_started)
+        self.navigator.events.element_skipped.on(self._on_navigation_element_skipped)
+        self.navigator.events.element_timeout.on(self._on_navigation_element_timeout)
+        self.navigator.events.element_error.on(self._on_navigation_element_error)
 
         self.input = FRODO_Control_Input(left=0.0, right=0.0)
 
@@ -164,8 +175,9 @@ class FRODO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def addMoveTo(self, x: float, y: float,
                   speed: float | None = None,
-                  arrive_tolerance: float | None = None):
-        el = MoveTo(x=x, y=y)
+                  arrive_tolerance: float | None = None,
+                  element_id: str | None = None,):
+        el = MoveTo(id=element_id, x=x, y=y)
         if speed is not None:
             el.speed = speed
         if arrive_tolerance is not None:
@@ -268,6 +280,10 @@ class FRODO_Control:
         self.navigator.startNavigation()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def skip_element(self):
+        self.navigator.skip_element()
+
+    # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> FRODO_Control_Sample:
         sample = FRODO_Control_Sample(
             mode=self.mode,
@@ -302,8 +318,8 @@ class FRODO_Control:
         left_normalized = left / MAX_TRACK_SPEED
         right_normalized = right / MAX_TRACK_SPEED
 
-        left_normalized = _clamp(left_normalized, -1.0, 1.0)
-        right_normalized = _clamp(right_normalized, -1.0, 1.0)
+        left_normalized = clamp(left_normalized, -1.0, 1.0)
+        right_normalized = clamp(right_normalized, -1.0, 1.0)
 
         self._setLowlevelTrackSpeedNormalized(left_normalized, right_normalized)
 
@@ -314,3 +330,72 @@ class FRODO_Control:
                                            address=FRODO_LL_Functions.FRODO_LL_FUNCTION_SET_SPEED,
                                            data=input_struct,
                                            input_type=motor_input_struct)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _navigator_state_fetch_function(self) -> NavigatedObjectState:
+        state = self.common.getDynamicState()
+        return NavigatedObjectState(
+            x=state.x,
+            y=state.y,
+            psi=state.psi,
+            v=state.v,
+            psi_dot=state.psi_dot,
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_navigation_element_finished(self, element: NavigationElement, *args, **kwargs):
+        self.logger.info(f"Navigation element finished: {element.id}")
+        event = {
+            "type": "finished",
+            "data": {
+                'element_id': element.id,
+            }
+        }
+        self.communication.send_event(event_name='navigation', event_data=event)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_navigation_element_started(self, element: NavigationElement, *args, **kwargs):
+        self.logger.info(f"Navigation element started: {element.id}")
+        event = {
+            "type": "started",
+            "data": {
+                'element_id': element.id,
+            }
+        }
+        self.communication.send_event(event_name='navigation', event_data=event)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_navigation_element_skipped(self, element: NavigationElement, *args, **kwargs):
+        self.logger.info(f"Navigation element skipped: {element.id}")
+        event = {
+            "type": "skipped",
+            "data": {
+                'element_id': element.id,
+            }
+        }
+        self.communication.send_event(event_name='navigation', event_data=event)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_navigation_element_timeout(self, element: NavigationElement, *args, **kwargs):
+        self.logger.info(f"Navigation element timeout: {element.id}")
+        event = {
+            "type": "timeout",
+            "data": {
+                'element_id': element.id,
+            }
+        }
+        self.communication.send_event(event_name='navigation', event_data=event)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_navigation_element_error(self, element: NavigationElement, *args, **kwargs):
+        self.logger.info(f"Navigation element error: {element.id}")
+        event = {
+            "type": "error",
+            "data": {
+                'element_id': element.id,
+                'reason': 'unknown'
+            }
+        }
+    # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------

@@ -9,9 +9,13 @@ import numpy as np
 import qmt
 
 import extensions.simulation.src.core as core
+from applications.FRODO.definitions import get_simulated_agent_definition_by_id
 from applications.FRODO.navigation.navigator import Navigator, NavigatorExecutionMode, NavigatedObjectState, \
-    CoordinatedMoveTo, MoveTo, NavigatorSpeedControlMode, TurnTo, TurnToPoint
-from applications.FRODO.simulation.frodo_simulation_utils import is_in_fov, is_view_obstructed
+    MoveTo, NavigatorSpeedControlMode, TurnTo, TurnToPoint
+from applications.FRODO.simulation.frodo_simulation_utils import is_view_obstructed
+from applications.FRODO.utilities.measurements import agent_is_in_fov
+from core.utils.dataclass_utils import update_dataclass_from_dict
+from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from core.utils.states import State
@@ -21,12 +25,14 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS,
 from extensions.simulation.src.objects.base_environment import BaseEnvironment
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent, FRODO_Input
 from robots.frodo.frodo_definitions import FRODO_ControlMode
+from applications.FRODO.utilities.measurement_model import measurement_model_from_file
 
 # Global registries
 SIMULATED_AGENTS: dict[str, "FRODO_VisionAgent"] = {}
-REAL_AGENTS: dict[str, "FRODO_VisionAgent_Real"] = {}
-SIMULATED_STATICS: dict[str, "FRODO_SimulationObject"] = {}
-REAL_STATICS: dict[str, "FRODO_SimulationObject"] = {}
+SIMULATED_STATICS: dict[str, FRODO_Static] = {}
+
+# ======================================================================================================================
+USE_AGENT_DEFINITIONS = True
 
 
 # ======================================================================================================================
@@ -130,36 +136,50 @@ class SimulatedAgentMeasurement:
         return np.asarray([self.position[0], self.position[1], self.psi, ])
 
 
+# ======================================================================================================================
+@dataclasses.dataclass
+class FRODO_VisionAgent_Config:
+    fov: float = np.deg2rad(100)
+    vision_radius: float = 1.5
+    size: float = 0.2
+    color: list | tuple = dataclasses.field(default_factory=lambda: [.8, .8, .8])
+
+
 class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     measurements: list[SimulatedAgentMeasurement]
 
-    fov: float  # Field-of-view in radians
-    vision_radius: float  # Maximum view range
-    size: float  # Diameter of the circle encompassing the object. Is used to detect vision blockage
+    config: FRODO_VisionAgent_Config
 
     control_mode: FRODO_ControlMode = FRODO_ControlMode.NAVIGATION
 
     navigator: Navigator | None
 
+    joystick: Joystick | None = None
+
     cli: FRODO_VisionAgent_CommandSet
 
     # === INIT =========================================================================================================
-    def __init__(self, agent_id, Ts, fov_deg: float = 100, vision_radius: float = 1.5, size: float = 0.2, *args,
+    def __init__(self, agent_id,
+                 Ts=None,
+                 config: FRODO_VisionAgent_Config = None,
+                 *args,
                  **kwargs):
-        super().__init__(agent_id, Ts=Ts, *args, **kwargs)
 
+        super().__init__(agent_id, Ts=Ts, *args, **kwargs)
 
         self.logger = Logger(self.agent_id)
         self.logger.setLevel('INFO')
 
-        self.fov = math.radians(fov_deg)
-        self.vision_radius = vision_radius
-        self.size = size
+        if config is None:
+            config = FRODO_VisionAgent_Config()
+
+        self.config = config
 
         self.navigator = Navigator(mode=NavigatorExecutionMode.EXTERNAL,
                                    speed_control_mode=NavigatorSpeedControlMode.SPEED_CONTROL,
                                    speed_command_function=self._navigator_set_speed,
-                                   state_fetch_function=self._navigator_get_state)
+                                   state_fetch_function=self._navigator_get_state,
+                                   id=self.agent_id)
 
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.MEASUREMENT,
                                object=self,
@@ -179,9 +199,12 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.scheduling.actions['output'].addAction(self.action_custom_output)
 
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._control)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
 
         self.input = [0, 0]
         self.measurements = []
+
+        self.covariance_model = measurement_model_from_file('./model.yaml', local=True)
 
         self.cli = FRODO_VisionAgent_CommandSet(self)
 
@@ -203,6 +226,21 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
     def set_mode(self, mode: FRODO_ControlMode):
         self.control_mode = mode
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def assign_joystick(self, joystick):
+        self.logger.info(f"{self.agent_id}: Assigning Joystick {joystick.id} ({joystick.name})")
+        self.joystick = joystick
+
+        self.navigator.stopNavigation()
+        self.set_mode(FRODO_ControlMode.EXTERNAL)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_joystick(self):
+        self.logger.info(f"{self.agent_id}: Removing Joystick {self.joystick.id} ({self.joystick.name})")
+        self.joystick = None
+        self.input = [0, 0]
+        self.set_mode(FRODO_ControlMode.NAVIGATION)
 
     # ------------------------------------------------------------------------------------------------------------------
     def move_to(self, x, y, force=False):
@@ -236,26 +274,22 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
     # ------------------------------------------------------------------------------------------------------------------
     def abort_navigation_element(self):
-        self.navigator.abort_element()
+        self.navigator.skip_element()
+
     # ------------------------------------------------------------------------------------------------------------------
-    def set_state(self, x: float = None, y: float = None, psi: float = None):
+    def set_state(self, x: float = None, y: float = None, psi: float = None, v: float = None, psi_dot: float = None):
         if x is not None:
             self.state.x = x
         if y is not None:
             self.state.y = y
         if psi is not None:
             self.state.psi = psi
+        if v is not None:
+            self.state.v = v
+        if psi_dot is not None:
+            self.state.psi_dot = psi_dot
 
     # === PRIVATE METHODS ==============================================================================================
-    def _generate_covariance(self, rel_position_vec: np.ndarray, rel_psi: float) -> np.ndarray:
-        """
-        Placeholder covariance generator. Currently returns a small diagonal covariance.
-        Override or modify later to reflect sensor characteristics.
-        """
-        var_pos = 1e-5
-        var_ang = 1e-5
-        return np.diag([var_pos, var_pos, var_ang])
-
     def _generate_measurements(self):
         """
         Simulated vision agent:
@@ -267,9 +301,9 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         """
         self.measurements = []
         # Targets from globals
-        agent_targets = [a for a in list(SIMULATED_AGENTS.values()) + list(REAL_AGENTS.values())
+        agent_targets = [a for a in list(SIMULATED_AGENTS.values())
                          if getattr(a, 'agent_id', None) != self.agent_id]
-        static_targets = list(SIMULATED_STATICS.values()) + list(REAL_STATICS.values())
+        static_targets = list(SIMULATED_STATICS.values())
 
         # Occluders: everything except self (we'll exclude the current target per check)
         occluders: list[FRODO_SimulationObject] = []
@@ -308,12 +342,12 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
             t_pos = obj_position(target)
 
             # FOV + range check
-            if not is_in_fov(
-                    pos=[own_pos[0], own_pos[1]],
-                    psi=own_psi,
-                    fov=self.fov,
-                    radius=self.vision_radius,
-                    other_agent_pos=[t_pos[0], t_pos[1]],
+            if not agent_is_in_fov(
+                    agent_from_state=self.state.asarray(),
+                    agent_to_state=target.state.asarray(),
+                    agent_from_fov=self.config.fov,
+                    agent_from_min_distance=0,
+                    agent_from_max_distance=self.config.vision_radius
             ):
                 continue
 
@@ -335,8 +369,11 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
             # Relative orientation (target vs self)
             rel_psi = qmt.wrapToPi(obj_psi(target) - own_psi)
 
-            cov = self._generate_covariance(rel_vec_body, rel_psi)
-
+            cov = self.covariance_model.covariance.covariance(
+                measurement=np.asarray([rel_vec_body[0], rel_vec_body[1], rel_psi]),
+                v=self.state.v,
+                psi_dot=self.state.psi_dot
+            )
             measurement = SimulatedAgentMeasurement(
                 object_from=self,
                 object_to=target,
@@ -362,37 +399,9 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         return NavigatedObjectState(x=self.state.x, y=self.state.y, psi=self.state.psi, v=self.state.v,
                                     psi_dot=self.state.psi_dot)
 
-
-# ======================================================================================================================
-class FRODO_VisionAgent_Interactive(FRODO_VisionAgent):
-    joystick: Joystick | None
-
-    last_input: FRODO_Input
-
-    def __init__(self, agent_id, Ts, fov_deg: float = 100, vision_radius: float = 1.5, *args, **kwargs):
-        super().__init__(agent_id, Ts, fov_deg, vision_radius, *args, **kwargs)
-        self.joystick = None
-
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._output_function)
-        self.last_input = FRODO_Input(0, 0)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def add_joystick(self, joystick):
-        self.logger.debug(f"{self.agent_id}: Adding Joystick {joystick}")
-        self.joystick = joystick
-        self.set_mode(FRODO_ControlMode.EXTERNAL)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def remove_joystick(self):
-        self.joystick = None
-        self.input = [0, 0]
-        self.set_mode(FRODO_ControlMode.NAVIGATION)
-        self.logger.debug(f"{self.agent_id}: Removed Joystick {self.joystick}")
-
     # ------------------------------------------------------------------------------------------------------------------
     def _input_function(self):
-        if self.joystick is None:
+        if self.joystick is None or self.control_mode != FRODO_ControlMode.EXTERNAL:
             return
 
         axis_forward = self.joystick.getAxis('LEFT_VERTICAL')
@@ -407,100 +416,6 @@ class FRODO_VisionAgent_Interactive(FRODO_VisionAgent):
 
         self.input.v = -3 * axis_forward * 0.2
         self.input.psi_dot = -3 * axis_turn
-
-    def _output_function(self):
-        self.last_input = FRODO_Input(self.input.v, self.input.psi_dot)
-
-
-# ======================================================================================================================
-class FRODO_VisionAgent_Real(FRODO_VisionAgent):
-
-    def __init__(self, agent_id, fov_deg: float = 100, vision_radius: float = 1.5, *args, **kwargs):
-        super().__init__(agent_id, fov_deg, vision_radius, *args, **kwargs)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _generate_measurements(self):
-        """
-        Real vision agent:
-        - ONLY computes measurements to SIMULATED objects (agents + statics) from globals.
-        - Measurements to REAL objects are assumed to come from the experiment and are not generated here.
-        """
-        self.measurements = []
-
-        # Targets from globals (simulated only)
-        sim_agent_targets = [a for a in SIMULATED_AGENTS.values()
-                             if getattr(a, 'agent_id', None) != self.agent_id]
-        sim_static_targets = list(SIMULATED_STATICS.values())
-
-        # Occluders: include all bodies except self (both sim + real, agents + statics)
-        occluders: list[FRODO_SimulationObject] = []
-        occluders.extend([a for a in SIMULATED_AGENTS.values() if a.agent_id != self.agent_id])
-        occluders.extend([a for a in REAL_AGENTS.values() if a.agent_id != self.agent_id])
-        occluders.extend(SIMULATED_STATICS.values())
-        occluders.extend(REAL_STATICS.values())
-
-        def obj_position(o: FRODO_SimulationObject) -> np.ndarray:
-            if hasattr(o, 'position'):
-                return np.asarray(o.position).reshape(2)
-            elif hasattr(o, 'state'):
-                return np.array([o.state.x, o.state.y])
-            else:
-                raise AttributeError("Object has no position/state")
-
-        def obj_psi(o: FRODO_SimulationObject) -> float:
-            if hasattr(o, 'state'):
-                return float(o.state.psi)
-            else:
-                return 0.0
-
-        def obj_size(o: FRODO_SimulationObject) -> float:
-            return float(getattr(o, 'size', 0.2))
-
-        own_pos = np.array([self.state.x, self.state.y])
-        own_psi = float(self.state.psi)
-
-        R_world_to_body = np.array([
-            [math.cos(own_psi), math.sin(own_psi)],
-            [-math.sin(own_psi), math.cos(own_psi)]
-        ])
-
-        for target in [*sim_agent_targets, *sim_static_targets]:
-            t_pos = obj_position(target)
-
-            if not is_in_fov(
-                    pos=[own_pos[0], own_pos[1]],
-                    psi=own_psi,
-                    fov=self.fov,
-                    radius=self.vision_radius,
-                    other_agent_pos=[t_pos[0], t_pos[1]],
-            ):
-                continue
-
-            # Occlusion using all bodies except the target
-            other_occluders = [o for o in occluders if o is not target]
-            obstacles = []
-            for o in other_occluders:
-                c = obj_position(o)
-                r = obj_size(o) * 0.5
-                obstacles.append((c, r))
-
-            if is_view_obstructed(own_pos, t_pos, obstacles):
-                continue
-
-            rel_vec_world = t_pos - own_pos
-            rel_vec_body = R_world_to_body @ rel_vec_world
-            rel_psi = qmt.wrapToPi(obj_psi(target) - own_psi)
-
-            cov = self._generate_covariance(rel_vec_body, rel_psi)
-
-            measurement = SimulatedAgentMeasurement(
-                object_from=self,
-                object_to=target,
-                position=rel_vec_body,
-                psi=rel_psi,
-                covariance=cov
-            )
-            self.measurements.append(measurement)
 
 
 # ======================================================================================================================
@@ -521,10 +436,10 @@ class FRODO_Static(FRODO_SimulationObject):
         self.agent_id = static_id
         self.size = size
         self.state = FRODO_Static_State(0, 0, 0)
-        self.setState(x, y, psi)
+        self.set_state(x, y, psi)
         print(f"Created static {static_id} at ({self.state.x}, {self.state.y})")
 
-    def setState(self, x: float = None, y: float = None, psi: float = None):
+    def set_state(self, x: float = None, y: float = None, psi: float = None):
         if x is not None:
             self.state.x = x
         if y is not None:
@@ -533,7 +448,14 @@ class FRODO_Static(FRODO_SimulationObject):
             self.state.psi = psi
 
 
-# ======================================================================================================================
+@event_definition
+class FRODO_Simulation_Events:
+    initialized: Event
+    update: Event
+    new_agent: Event = Event(copy_data_on_set=False)
+    removed_agent: Event = Event(copy_data_on_set=False)
+    new_static: Event = Event(copy_data_on_set=False)
+    removed_static: Event = Event(copy_data_on_set=False)
 
 
 # === FRODO SIMULATION =================================================================================================
@@ -542,13 +464,25 @@ class FRODO_Simulation:
 
     cli: FRODO_Simulation_CommandSet | None = None
 
+    agents: dict[str, FRODO_VisionAgent]
+    statics: dict[str, FRODO_Static]
+
+    events: FRODO_Simulation_Events
+
     # === INIT =========================================================================================================
     def __init__(self, Ts=0.05):
         self.Ts = Ts
         self.logger = Logger('FRODO Simulation', 'DEBUG')
         self.environment = FrodoEnvironment(Ts=Ts, run_mode='rt')
 
+        self.events = FRODO_Simulation_Events()
+
         self.cli = FRODO_Simulation_CommandSet(self)
+
+        self.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self.events.update.set)
+
+        self.agents = SIMULATED_AGENTS
+        self.statics = SIMULATED_STATICS
 
         register_exit_callback(self.stop)
 
@@ -560,32 +494,70 @@ class FRODO_Simulation:
     def start(self):
         self.logger.info("Starting FRODO Simulation")
         self.environment.start(thread=True, )
+        self.events.initialized.set()
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop(self):
         self.logger.info("Stopping FRODO Simulation")
         self.environment.stop()
 
-    # ------------------------------------ AGENTS ----------------------------------------------------------------------
-    def addSimulatedAgent(self, agent_id, fov_deg=100, vision_radius=1.5, interactive: bool = False, *args,
-                          **kwargs) -> FRODO_VisionAgent:
+    # ------------------------------------------------------------------------------------------------------------------
+    def new_agent(self,
+                  agent_id: str,
+                  config: FRODO_VisionAgent_Config | None = None,
+                  *args,
+                  **kwargs) -> FRODO_VisionAgent | None:
 
-        if interactive:
-            agent = FRODO_VisionAgent_Interactive(agent_id, self.Ts, fov_deg, vision_radius, *args, **kwargs)
-        else:
-            agent = FRODO_VisionAgent(agent_id, self.Ts, fov_deg, vision_radius, *args, **kwargs)
+        if agent_id in SIMULATED_AGENTS:
+            self.logger.warning(f"Simulated agent {agent_id} already exists. Cannot add it again")
+            return None
+
+        if USE_AGENT_DEFINITIONS:
+            agent_definition = get_simulated_agent_definition_by_id(agent_id)
+            if agent_definition is None:
+                self.logger.warning(
+                    f"Agent definition for {agent_id} not found. Cannot add it. "
+                    f"Either disable the use of predefined agent definitions by setting USE_AGENT_DEFINITIONS to False "
+                    f"or define the agent definition in the definitions.py file.")
+                return None
+
+            config = FRODO_VisionAgent_Config(
+                fov=agent_definition.fov,
+                vision_radius=agent_definition.vision_radius,
+                color=agent_definition.color,
+                size=agent_definition.size,
+            )
+
+        if config is None:
+            config = FRODO_VisionAgent_Config()
+
+        update_dataclass_from_dict(config, kwargs)
+
+        agent = FRODO_VisionAgent(agent_id, self.Ts, *args, **kwargs)
+        self.add_agent(agent)
+        return agent
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_agent(self,
+                  agent: FRODO_VisionAgent) -> FRODO_VisionAgent:
 
         global SIMULATED_AGENTS
-        SIMULATED_AGENTS[agent_id] = agent
-        self.environment.addAgent(agent)
-        self.logger.info(f"Simulated agent {agent_id} added")
+        SIMULATED_AGENTS[agent.agent_id] = agent
 
+        # Enforce Ts on agent
+        agent.scheduling.Ts = self.Ts
+        agent.dynamics.Ts = self.Ts
+
+        self.environment.addAgent(agent)
+        self.logger.info(f"Simulated agent {agent.agent_id} added")
         self.cli.addChild(agent.cli)
+
+        self.events.new_agent.set(agent)
 
         return agent
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeSimulatedAgent(self, agent: FRODO_VisionAgent | str):
+    def remove_agent(self, agent: FRODO_VisionAgent | str):
         if isinstance(agent, FRODO_VisionAgent):
             agent = agent.agent_id
 
@@ -594,44 +566,32 @@ class FRODO_Simulation:
             self.cli.removeChild(SIMULATED_AGENTS[agent].cli)
             del SIMULATED_AGENTS[agent]
             self.logger.info(f"Simulated agent {agent} removed")
+            self.events.removed_agent.set(agent)
         else:
             self.logger.warning(f"Simulated agent {agent} not found. Cannot remove it from the simulation")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addRealAgent(self, agent_id, fov_deg=100, vision_radius=1.5, *args, **kwargs):
-        agent = FRODO_VisionAgent_Real(agent_id, fov_deg, vision_radius, *args, **kwargs)
-        REAL_AGENTS[agent_id] = agent
-        self.environment.addAgent(agent)
-        self.logger.info(f"Real agent {agent_id} added")
+    def new_static(self, static_id: str, *args, **kwargs) -> FRODO_Static:
+        static = FRODO_Static(static_id, *args, **kwargs)
+        self.add_static(static)
+        return static
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeRealAgent(self, agent: FRODO_VisionAgent_Real | str):
-        if isinstance(agent, FRODO_VisionAgent_Real):
-            agent = agent.agent_id
+    def add_static(self, static: FRODO_Static) -> FRODO_Static | None:
 
-        if agent in REAL_AGENTS:
-            self.environment.removeObject(REAL_AGENTS[agent])
-            del REAL_AGENTS[agent]
-            self.logger.info(f"Real agent {agent} removed")
-        else:
-            self.logger.warning(f"Real agent {agent} not found. Cannot remove it from the simulation")
-
-    # ------------------------------------ STATICS ---------------------------------------------------------------------
-    def addSimulatedStatic(self, static_id: str, *args, **kwargs) -> FRODO_Static | None:
-
-        if static_id in SIMULATED_STATICS:
-            self.logger.warning(f"Simulated static {static_id} already exists. Cannot add it again")
+        if static.agent_id in SIMULATED_STATICS:
+            self.logger.warning(f"Simulated static {static.agent_id} already exists. Cannot add it again")
             return None
 
-        static_obj = FRODO_Static(static_id, *args, **kwargs)
-        SIMULATED_STATICS[static_id] = static_obj
+        SIMULATED_STATICS[static.agent_id] = static
         # statics are environment "objects" (not agents)
-        self.environment.addObject(static_obj)
-        self.logger.info(f"Simulated static {static_id} added")
-        return static_obj
+        self.environment.addObject(static)
+        self.logger.info(f"Simulated static {static.agent_id} added")
+        self.events.new_static.set(static)
+        return static
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeSimulatedStatic(self, static: str | FRODO_SimulationObject):
+    def remove_static(self, static: str | FRODO_SimulationObject):
         # allow passing id or object
         if not isinstance(static, str):
             # try to find id by object identity
@@ -646,36 +606,18 @@ class FRODO_Simulation:
 
         if static_id in SIMULATED_STATICS:
             self.environment.removeObject(SIMULATED_STATICS[static_id])
-            del SIMULATED_STATICS[static_id]
             self.logger.info(f"Simulated static {static_id} removed")
+            self.events.removed_static.set(static)
+            del SIMULATED_STATICS[static_id]
         else:
             self.logger.warning(f"Simulated static {static_id} not found. Cannot remove it from the simulation")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addRealStatic(self, static_id: str, static_obj: FRODO_SimulationObject):
-        REAL_STATICS[static_id] = static_obj
-        self.environment.addObject(static_obj)
-        self.logger.info(f"Real static {static_id} added")
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def removeRealStatic(self, static: str | FRODO_SimulationObject):
-        if not isinstance(static, str):
-            found_id = None
-            for sid, sobj in REAL_STATICS.items():
-                if sobj is static:
-                    found_id = sid
-                    break
-            static_id = found_id
-        else:
-            static_id = static
-
-        if static_id in REAL_STATICS:
-            self.environment.removeObject(REAL_STATICS[static_id])
-            del REAL_STATICS[static_id]
-            self.logger.info(f"Real static {static_id} removed")
-        else:
-            self.logger.warning(f"Real static {static_id} not found. Cannot remove it from the simulation")
-
+    def clear(self):
+        for agent in SIMULATED_AGENTS.values():
+            self.remove_agent(agent)
+        for static in SIMULATED_STATICS.values():
+            self.remove_static(static)
     # === PRIVATE METHODS ==============================================================================================
 
 
@@ -758,14 +700,59 @@ class FRODO_Simulation_CommandSet(CommandSet):
                 f"Agents: {list(SIMULATED_AGENTS.keys())}\nStatic: {list(SIMULATED_STATICS.keys())}")
         )
 
+        command_add_agent = Command(
+            name='add_agent',
+            description='Add a simulated agent',
+            arguments=[
+                CommandArgument(name='agent_id', short_name='i', type=str, description='Agent ID'),
+                CommandArgument(name='fov_deg', short_name='f', type=float, description='Field of view in degrees',
+                                default=100),
+                CommandArgument(name='vision_radius', short_name='r', type=float, description='Vision radius in meters',
+                                default=1.5),
+                CommandArgument(name='interactive', short_name='i', type=bool,
+                                description='Whether to use interactive mode',
+                                default=False),
+                CommandArgument(name='x', type=float, description='x position', optional=True, default=None),
+                CommandArgument(name='y', type=float, description='y position', optional=True, default=None),
+                CommandArgument(name='psi', type=float, description='orientation in radians', optional=True, )
+            ],
+            function=self.sim.new_agent,
+        )
+
+        command_remove_agent = Command(
+            name='remove_agent',
+            description='Remove an agent',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='agent', short_name='a', type=str, description='Agent ID'),
+            ],
+            function=self.sim.remove_agent,
+        )
+
+        command_add_static = Command(
+            name='add_static',
+            description='Add a static object',
+            arguments=[
+                CommandArgument(name='static_id', short_name='i', type=str, description='Static ID'),
+                CommandArgument(name='x', type=float, description='x position', optional=True, default=None),
+                CommandArgument(name='y', type=float, description='y position', optional=True, default=None),
+                CommandArgument(name='psi', type=float, description='orientation in radians', optional=True,
+                                default=None),
+            ],
+            function=self.sim.new_static,
+        )
+
         self.addCommand(command_list)
+        self.addCommand(command_add_agent)
+        self.addCommand(command_add_static)
+        self.addCommand(command_remove_agent)
 
     if __name__ == '__main__':
         sim = FRODO_Simulation()
         sim.init()
 
         # Example: add one simulated agent
-        sim.addSimulatedAgent(agent_id='frodo1', fov_deg=100, vision_radius=1.5)
+        sim.new_agent(agent_id='frodo1', fov_deg=100, vision_radius=1.5)
 
         sim.start()
 

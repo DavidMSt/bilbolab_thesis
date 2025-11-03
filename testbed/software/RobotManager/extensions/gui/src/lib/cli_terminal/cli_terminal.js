@@ -2,14 +2,7 @@
 import {Widget} from "../objects/objects.js";
 
 // === TerminalCommandInput ============================================================================================
-import {
-    Callbacks,
-    getColor,
-    writeToLocalStorage,
-    getFromLocalStorage,
-    existsInLocalStorage,
-    removeFromLocalStorage
-} from "../helpers.js";
+import {Callbacks, getColor, getFromLocalStorage, writeToLocalStorage} from "../helpers.js";
 
 function splitTokens(text) {
     return text.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
@@ -143,6 +136,7 @@ class TerminalCommandSet {
     }
 
     // -----------------------------------------------------------------------------------------------------------------
+    // -----------------------------------------------------------------------------------------------------------------
     addSet(set) {
         if (!(set instanceof TerminalCommandSet)) {
             throw new Error("Invalid command set type");
@@ -152,6 +146,13 @@ class TerminalCommandSet {
         }
         this.sets[set.name] = set;
         set.parent = this;
+
+        // Bubble to the terminal and rehydrate history
+        let p = this;
+        while (p && !(p instanceof CLI_Terminal)) p = p.parent;
+        if (p && typeof p._rehydrateHistory === 'function') {
+            p._rehydrateHistory();
+        }
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -401,6 +402,8 @@ export class CLI_Terminal extends Widget {
         this.historyMode = null;
         this.historyIndex = -1;
         this.historyPrefix = '';
+
+        this._acceptedHistoryBuffer = null;
 
         this.currentHistorySuggestion = null;
         this.currentHistorySet = null;
@@ -669,54 +672,48 @@ export class CLI_Terminal extends Widget {
 
     /* -------------------------------------------------------------------------------------------------------------- */
 
-    /* -------------------------------------------------------------------------------------------------------------- */
     updateRootSet(payload) {
         try {
             if (!payload || typeof payload !== 'object') {
                 throw new Error('updateRootSet: invalid payload');
             }
 
-            // 1) Remember the current absolute path (as tokens, excluding "~")
+            // Remember current absolute path tokens (excluding "~")
             let prevTokens = [];
             try {
                 if (this.command_set) {
-                    // getFullPath returns "~" for root; split and drop "~"
                     prevTokens = (this.command_set.getFullPath() || '')
                         .split(/\s+/)
                         .filter(t => t && t !== '~');
                 }
             } catch (e) {
-                // ignore – we'll just fall back to root if anything goes wrong
                 prevTokens = [];
             }
 
-            // 2) Build the new root command set from config (recursive)
-            // 3) Install the new root and wire parent
+            // Build and install new root
             this.root_command_set = (payload instanceof TerminalCommandSet)
                 ? payload
                 : TerminalCommandSet.fromConfig(payload);
             this.root_command_set.parent = this;
 
-            // 4) Walk the previous path on the new tree; back off when a segment is missing
+            // Walk previous path on new tree (back off when missing)
             let target = this.root_command_set;
             for (const tok of prevTokens) {
                 if (target.sets && Object.prototype.hasOwnProperty.call(target.sets, tok)) {
                     target = target.sets[tok];
                 } else {
-                    // can't go deeper – stop here (this is the "back up" behavior)
                     break;
                 }
             }
 
-            // 5) Switch to the resolved set and refresh UI/hints
             this.setCurrentCommandSet(target);
-            // setCurrentCommandSet already calls _updateCommandHints and _updateInputField,
-            // but calling them again is harmless and keeps things explicit.
             this._updateCommandHints();
             this._updateInputField();
+
+            // IMPORTANT: try resolving history again against the new tree
+            this._rehydrateHistory();
         } catch (err) {
             console.error('updateRootSet failed:', err);
-            // Keep UI consistent even if there was a problem
             this._updateCommandHints();
             this._updateInputField();
         }
@@ -839,11 +836,39 @@ export class CLI_Terminal extends Widget {
     /* INPUT HANDLING */
 
     /* -------------------------------------------------------------------------------------------------------------- */
+    // _onUserInputEvent() {
+    //     // Fetch the input from the input field, clear it, and parse the command
+    //     let input = this.input_field.value;
+    //     let comes_from_history = false;
+    //     // Check if we are in history mode
+    //     if (this.historyMode === 'all' || this.historyMode === 'local') {
+    //         if (this.currentHistorySuggestion) {
+    //             input = this.currentHistorySuggestion;
+    //             comes_from_history = true;
+    //         }
+    //     } else if (this.historyMode === 'global') {
+    //         if (this.currentHistorySuggestion) {
+    //             input = this.currentHistorySet.getFullPath() + ' ' + this.currentHistorySuggestion;
+    //             comes_from_history = true;
+    //         }
+    //     }
+    //
+    //     if (comes_from_history && this.currentHistorySuggestion && this.currentHistorySet) {
+    //         this._promoteHistoryEntry(this.currentHistorySuggestion, this.currentHistorySet);
+    //     }
+    //
+    //
+    //     this._exitHistoryMode();
+    //     this._clearInputField();
+    //     this._parseUserInput(input, comes_from_history);
+    // }
     _onUserInputEvent() {
-        // Fetch the input from the input field, clear it, and parse the command
         let input = this.input_field.value;
+
+        // default assumption
         let comes_from_history = false;
-        // Check if we are in history mode
+
+        // previous logic for live history mode (Alt/Meta+↑ then Enter without Tab)
         if (this.historyMode === 'all' || this.historyMode === 'local') {
             if (this.currentHistorySuggestion) {
                 input = this.currentHistorySuggestion;
@@ -856,10 +881,22 @@ export class CLI_Terminal extends Widget {
             }
         }
 
+        // NEW: If we previously accepted via Tab, only keep "comes_from_history"
+        // if the text is unchanged. If user edited it, treat as a fresh command.
+        if (this._acceptedHistoryBuffer !== null) {
+            if (this.input_field.value !== this._acceptedHistoryBuffer) {
+                comes_from_history = false;  // user changed it → should be added to history
+                console.log('User edited history buffer, treat as fresh command')
+            } else {
+                comes_from_history = true;   // unchanged → don't duplicate in history
+                console.log('User did not edit history buffer, treat as history suggestion')
+            }
+            this._acceptedHistoryBuffer = null; // clear the buffer
+        }
+
         if (comes_from_history && this.currentHistorySuggestion && this.currentHistorySet) {
             this._promoteHistoryEntry(this.currentHistorySuggestion, this.currentHistorySet);
         }
-
 
         this._exitHistoryMode();
         this._clearInputField();
@@ -882,6 +919,7 @@ export class CLI_Terminal extends Widget {
             this._clearHistory();
             this.print('History cleared.', 'green');
             return;
+
         } else if (command === 'exit' || command === 'close') {
             this.callbacks.get('close').call();
             return;
@@ -967,15 +1005,26 @@ export class CLI_Terminal extends Widget {
 
     /* HISTORY */
     _addToHistory(obj) {
-        // Check if the most recent command and set is the same as this
+        // obj = { command, set }
+        const setPath = obj.set.getFullPath();
+
+        // De-dupe against the most recent resolved entry (UI nicety)
         if (this.history.length > 0) {
             const last = this.history[this.history.length - 1];
-            if (last.command === obj.command && last.set === obj.set) {
+            if (last.command === obj.command && last.set.getFullPath() === setPath) {
                 return;
             }
         }
-        // If not, add it to the history
-        this.history.push(obj)
+
+        // 1) Update resolved (in-memory) history used for the UI
+        this.history.push({command: obj.command, set: obj.set});
+
+        // 2) Update raw (persisted) history — this is the source of truth for storage
+        if (!Array.isArray(this._rawHistory)) this._rawHistory = [];
+        const lastRaw = this._rawHistory[this._rawHistory.length - 1];
+        if (!lastRaw || lastRaw.command !== obj.command || lastRaw.setPath !== setPath) {
+            this._rawHistory.push({command: obj.command, setPath});
+        }
 
         this._persistHistory();
     }
@@ -1145,27 +1194,29 @@ export class CLI_Terminal extends Widget {
         return true; // we handled the key
     }
 
-
     /* -------------------------------------------------------------------------------------------------------------- */
     /** Move an existing {command,set} entry to the most-recent position (end of array). */
     _promoteHistoryEntry(command, set) {
         if (!command || !set) return;
-        const idx = this.history.findIndex(h => h.command === command && h.set === set);
-        if (idx === -1) {
-            // Not found: treat as a one-off run without duplication risk
-            this.history.push({command, set});
-        } else if (idx !== this.history.length - 1) {
+        const setPath = set.getFullPath();
+
+        // Promote in resolved history (UI)
+        const idx = this.history.findIndex(h => h.command === command && h.set.getFullPath() === setPath);
+        if (idx !== -1 && idx !== this.history.length - 1) {
             const [entry] = this.history.splice(idx, 1);
             this.history.push(entry);
         }
-        this._persistHistory();
+
+        // Promote in raw history (persisted)
+        if (!Array.isArray(this._rawHistory)) this._rawHistory = [];
+        const ridx = this._rawHistory.findIndex(h => h.command === command && h.setPath === setPath);
+        if (ridx !== -1 && ridx !== this._rawHistory.length - 1) {
+            const [entry] = this._rawHistory.splice(ridx, 1);
+            this._rawHistory.push(entry);
+            this._persistHistory();
+        }
     }
 
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-
-
-    /* OVERLAYS */
 
     /* -------------------------------------------------------------------------------------------------------------- */
     _showHelpOverlay() {
@@ -1690,6 +1741,7 @@ export class CLI_Terminal extends Widget {
             } else {
                 this.input_field.value = this.currentHistorySuggestion;
             }
+            this._acceptedHistoryBuffer = this.input_field.value;
             // leave history mode
             this._exitHistoryMode();
             // redraw hints & prompt
@@ -1877,49 +1929,90 @@ export class CLI_Terminal extends Widget {
     /** Save `this.history` to localStorage (command + set path only) */
     _persistHistory() {
         try {
-            const data = this.history.map(({command, set}) => ({
-                command,
-                // Use the absolute path so we can re-find the set next time
-                setPath: set.getFullPath()
-            }));
-            writeToLocalStorage(this._historyStorageKey(), data);
+            const key = this._historyStorageKey();
+
+            // Merge with latest on disk in case another tab has written to it.
+            const latest = getFromLocalStorage(key);
+            const existing = Array.isArray(latest) ? latest : [];
+
+            // Build a map (command+setPath) to keep uniqueness while preserving current order preference
+            const toKey = (e) => `${e.command}@@${e.setPath}`;
+            const map = new Map();
+
+            // Start with disk entries
+            for (const e of existing) {
+                if (e && typeof e.command === 'string' && typeof e.setPath === 'string') {
+                    map.set(toKey(e), e);
+                }
+            }
+            // Then apply our raw history to become the “latest” ordering
+            for (const e of (this._rawHistory || [])) {
+                if (e && typeof e.command === 'string' && typeof e.setPath === 'string') {
+                    map.delete(toKey(e));
+                    map.set(toKey(e), {command: e.command, setPath: e.setPath});
+                }
+            }
+
+            const merged = Array.from(map.values());
+            writeToLocalStorage(key, merged);
         } catch (e) {
             console.error('Persist history failed:', e);
         }
     }
 
+
     /** Load history from localStorage and rehydrate set references */
+
+    /** Load raw history from storage; do not drop unresolved entries */
+    /** Load raw history from storage; do not drop unresolved entries */
     _loadHistory() {
         try {
             const raw = getFromLocalStorage(this._historyStorageKey());
-            if (!Array.isArray(raw)) return;
+            this._rawHistory = Array.isArray(raw) ? raw : [];
+        } catch (e) {
+            console.error('Load history failed:', e);
+            this._rawHistory = [];
+        }
+        this._rehydrateHistory(); // build resolved history from raw
+    }
 
-            const deserialized = raw
-                .map(({command, setPath}) => {
-                    // Re-resolve the set object from the stored path
-                    const set = this._getSetFromUnformattedPath(setPath);
-                    if (!set) return null;
-                    return {command, set};
-                })
-                .filter(Boolean);
+    _rehydrateHistory() {
+        try {
+            // Optionally refresh raw history from disk before resolving (helps multi-tab)
+            const latest = getFromLocalStorage(this._historyStorageKey());
+            if (Array.isArray(latest)) {
+                this._rawHistory = latest;
+            }
 
-            this.history = deserialized;
+            const resolved = [];
+            for (const entry of (this._rawHistory || [])) {
+                if (!entry || typeof entry !== 'object') continue;
+                const {command, setPath} = entry;
+                if (typeof command !== 'string' || typeof setPath !== 'string') continue;
 
-            // (Optional) also show last session's commands on screen:
-            // this.setOnScreenHistory(deserialized);
+                const set = this._getSetFromUnformattedPath(setPath);
+                if (set) {
+                    resolved.push({command, set});
+                }
+                // IMPORTANT: if not resolvable, do NOTHING — keep it in _rawHistory
+            }
 
-            // Keep UI consistent
-            this._updateHistoryIndicator?.();
+            this.history = resolved;
+
+            // UI updates
+            if (this._updateHistoryIndicator) this._updateHistoryIndicator();
             this._updateInputField();
             this._updateCommandHints();
         } catch (e) {
-            console.error('Load history failed:', e);
+            console.error('Rehydrate history failed:', e);
         }
     }
 
     /** Wipe saved history (keep key but make it an empty array as requested) */
     _wipePersistedHistory() {
         writeToLocalStorage(this._historyStorageKey(), []);
+        this._rawHistory = [];
     }
+
 
 }

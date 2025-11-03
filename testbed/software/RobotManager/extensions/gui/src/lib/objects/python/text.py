@@ -8,7 +8,7 @@ from extensions.gui.src.lib.objects.objects import Widget
 class TextWidget(Widget):
     type = 'text'
 
-    def __init__(self, widget_id: str, text: str = "", **kwargs):
+    def __init__(self, widget_id: str = None, text: str = "", **kwargs):
         super().__init__(widget_id)
 
         default_config = {

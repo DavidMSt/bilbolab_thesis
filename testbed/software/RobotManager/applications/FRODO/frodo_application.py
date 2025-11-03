@@ -5,11 +5,16 @@ import time
 
 import numpy as np
 
+from applications.FRODO.agent_manager import FRODO_AgentManager
 from applications.FRODO.algorithm.algorithm import AlgorithmAgentState, AlgorithmAgentMeasurement, AlgorithmAgentInput
 from applications.FRODO.algorithm.algorithm_centralized import CentralizedAgent, CentralizedAlgorithm
 from applications.FRODO.algorithm.algorithm_distributed import DistributedAlgorithm, DistributedAgent
-from applications.FRODO.data_aggregator import FRODO_DataAggregator, TestbedObject_FRODO, TestbedObject_STATIC
+from applications.FRODO.navigation.multi_agent_navigator import NavigatorPlan, Move
+from applications.FRODO.navigation.navigator import MoveTo
+from applications.FRODO.testbed_manager import FRODO_TestbedManager, TestbedObject_FRODO, TestbedObject_STATIC
 from applications.FRODO.gui.frodo_gui import FRODO_GUI
+from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_VisionAgent, FRODO_Static, \
+    SIMULATED_AGENTS, SIMULATED_STATICS
 from applications.FRODO.tracker.frodo_tracker import FRODO_Tracker
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.events import event_definition, Event
@@ -23,11 +28,19 @@ from extensions.joystick.joystick_manager import JoystickManager
 from robots.frodo.frodo import FRODO
 from robots.frodo.frodo_manager import FRODO_Manager
 
-UPDATE_TIME = 0.02
+# ----------------------------------------------------------------------------------------------------------------------
+# TODO:
+# - allow adding agents during runtime
+# - make agent configs
+#
+#
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+UPDATE_TIME = 0.05
 
 INITIAL_GUESS_AGENTS = np.asarray([0.01, 0.012, 0.002])
 INITIAL_GUESS_AGENTS_COVARIANCE = 1e5 * np.diag([1, 1, 1])
-
 STATIC_AGENTS_COVARIANCE = 1e-8 * np.diag([1, 1, 1])
 
 
@@ -37,40 +50,19 @@ class AlgorithmState(enum.StrEnum):
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-@dataclasses.dataclass
-class AgentError:
-    x: float
-    y: float
-    psi: float
-
-    @property
-    def position(self):
-        return np.asarray([self.x, self.y])
-
-    @property
-    def distance(self):
-        return np.linalg.norm(self.position)
-
-
-# ----------------------------------------------------------------------------------------------------------------------
-@dataclasses.dataclass
-class AgentContainer:
-    centralized_algorithm_agent: CentralizedAgent
-    distributed_algorithm_agent: DistributedAgent
-    testbed_object: TestbedObject_FRODO
-    robot: FRODO
-    error: AgentError | None = None
-
-
-@dataclasses.dataclass
-class SimulatedAgentContainer:
-    ...
-
-
-@dataclasses.dataclass
-class StaticContainer:
-    centralized_algorithm_agent: CentralizedAgent
-    distributed_algorithm_agent: DistributedAgent
+# @dataclasses.dataclass
+# class AgentError:
+#     x: float
+#     y: float
+#     psi: float
+#
+#     @property
+#     def position(self):
+#         return np.asarray([self.x, self.y])
+#
+#     @property
+#     def distance(self):
+#         return np.linalg.norm(self.position)
 
 
 @event_definition
@@ -89,23 +81,18 @@ class FRODO_Application_Callbacks:
 
 # ======================================================================================================================
 class FRODO_Application:
-    agents: dict
-    manager: FRODO_Manager
-    joystick_manager: JoystickManager
-
-    aggregator: FRODO_DataAggregator
-
-    algorithm_centralized: CentralizedAlgorithm
-    algorithm_distributed: DistributedAlgorithm
+    testbed_manager: FRODO_TestbedManager
 
     gui: FRODO_GUI
-    tracker: FRODO_Tracker
     soundsystem: SoundSystem
 
-    agents: dict[str, AgentContainer]
-    statics: dict[str, StaticContainer]
+    agent_manager: FRODO_AgentManager
 
-    algorithm_state = AlgorithmState.STOPPED
+    simulation: FRODO_Simulation
+
+    _initialized: bool = False
+
+    # algorithm_state = AlgorithmState.STOPPED
 
     # === INIT =========================================================================================================
     def __init__(self):
@@ -119,9 +106,6 @@ class FRODO_Application:
         self.callbacks = FRODO_Application_Callbacks()
 
         # Manager
-        self.manager = FRODO_Manager(host=host)
-        self.manager.callbacks.new_robot.register(self._newRobot_callback)
-        self.manager.callbacks.robot_disconnected.register(self._robotDisconnected_callback)
 
         # Joystick Manager
         self.joystick_manager = JoystickManager()
@@ -130,27 +114,26 @@ class FRODO_Application:
         self.soundsystem = SoundSystem(primary_engine='etts', volume=1)
         self.soundsystem.start()
 
-        # Tracker
-        self.tracker = FRODO_Tracker()
+        # Simulation
+        self.simulation = FRODO_Simulation(Ts=UPDATE_TIME)
 
-        # Data Aggregator
-        self.aggregator = FRODO_DataAggregator(manager=self.manager, tracker=self.tracker)
+        # Testbed Manager
+        self.testbed_manager = FRODO_TestbedManager()
 
-        # Algorithm
-        self.algorithm_centralized = CentralizedAlgorithm(Ts=UPDATE_TIME)
-        self.algorithm_distributed = DistributedAlgorithm(Ts=UPDATE_TIME)
-
-        # Objects
-        self.agents = {}
-        self.statics = {}
+        # Agent Manager
+        self.agent_manager = FRODO_AgentManager(testbed_manager=self.testbed_manager,
+                                                simulation=self.simulation)
 
         # CLI
         self.command_set = FRODO_Application_CLI(self)
         self.cli = CLI(id='frodo_app_cli', root=self.command_set)
 
         # GUI
-        self.gui = FRODO_GUI(host, application=self, tracker=self.tracker, cli=self.cli, manager=self.manager,
-                             aggregator=self.aggregator, )
+        self.gui = FRODO_GUI(host,
+                             application=self,
+                             testbed_manager=self.testbed_manager,
+                             cli=self.cli,
+                             )
 
         # Timer
         self.timer = IntervalTimer(interval=UPDATE_TIME, raise_race_condition_error=False)
@@ -163,25 +146,26 @@ class FRODO_Application:
 
     # === METHODS ======================================================================================================
     def init(self):
-        self.tracker.init()
+        self.simulation.init()
         self.gui.init()
-        self.manager.init()
         self.joystick_manager.init()
-        self.cli.root.addChild(self.manager.cli)
+        self.testbed_manager.init()
+        self.cli.root.addChild(self.testbed_manager.robot_manager.cli)
+        self.cli.root.addChild(self.simulation.cli)
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        self.tracker.start()
         self.gui.start()
-        self.manager.start()
+        self.testbed_manager.start()
         self.joystick_manager.start()
+        self.simulation.start()
+        self.agent_manager.start()
         speak("Start Frodo Application")
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         speak("Closing Frodo Application")
         time.sleep(1)
-        self.tracker.close()
         self._exit = True
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -196,25 +180,28 @@ class FRODO_Application:
         This is the main update loop for acquiring data, processing the data, updating the algorithm and logging
         """
 
-        # 1. Update the data aggregator
-        self.aggregator.update()
+        # 1. Update the testbed manager
+        self.testbed_manager.update()
 
-        # 2. Update the Algorithms
-        if self.algorithm_state == AlgorithmState.RUNNING:
-            # 2.1 Prediction Centralized
-            self._prediction_centralized()
+        # 2. Update the agent manager
+        self.agent_manager.update()
 
-            # 2.2 Prediction Distributed
-            self._prediction_distributed()
-
-            # 2.3 Update Centralized
-            self._update_centralized()
-
-            # 2.4 Update Distributed
-            self._update_distributed()
-
-            # 4. Calculate the estimation error
-            self._calculate_estimation_errors()
+        # # 2. Update the Algorithms
+        # if self.algorithm_state == AlgorithmState.RUNNING:
+        #     # 2.1 Prediction Centralized
+        #     self._prediction_centralized()
+        #
+        #     # 2.2 Prediction Distributed
+        #     self._prediction_distributed()
+        #
+        #     # # 2.3 Update Centralized
+        #     # self._update_centralized()
+        #     #
+        #     # # 2.4 Update Distributed
+        #     # self._update_distributed()
+        #
+        #     # 4. Calculate the estimation error
+        #     self._calculate_estimation_errors()
 
         # Emit the events
         self.events.update.set()
@@ -227,45 +214,137 @@ class FRODO_Application:
             self.logger.warning("Application is already running")
             return
 
-        self.agents = {}
-        self.statics = {}
+        # 1. Initialize the testbed manager
+        self.testbed_manager.initialize()
 
-        # Clear the aggregator
-        self.aggregator.clear()
-
-        for robot in self.manager.robots.values():
-            testbed_object = self.aggregator.addRobot(robot)
-
-            centralized_algorithm_agent = CentralizedAgent(id=robot.id,
-                                                           Ts=UPDATE_TIME,
-                                                           state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
-                                                           covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
-                                                           is_anchor=False)
-
-            distributed_algorithm_agent = DistributedAgent(id=robot.id,
-                                                           Ts=UPDATE_TIME,
-                                                           state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
-                                                           covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
-                                                           is_anchor=False)
-
-            agent = AgentContainer(
-                robot=robot,
-                testbed_object=testbed_object,
-                centralized_algorithm_agent=centralized_algorithm_agent,
-                distributed_algorithm_agent=distributed_algorithm_agent,
-            )
-
-            self.agents[robot.id] = agent
-            self.logger.important(f"Added agent {robot.id} to the application")
-
-        # TODO: How to get the available statics?
-
-        self.aggregator.initialize()
+        # 2. Initialize the agent manager based on the testbed manager and the simulation
+        self.agent_manager.initialize()
 
         self._exit = False
+        self._initialized = True
         self.logger.important("Application initialized")
         self._thread = threading.Thread(target=self.task, daemon=True)
         self._thread.start()
+
+        #
+        #     self.agents = {}
+        #     self.statics = {}
+        #
+        #     # Clear the aggregator
+        #     self.testbed_manager.clear()
+        #
+        #     self.testbed_manager.initialize()
+        #
+        #     # Collect the real agents
+        #     for robot in self.robot_manager.robots.values():
+        #         testbed_object = self.testbed_manager.addRobot(robot)
+        #
+        #         centralized_algorithm_agent = CentralizedAgent(id=robot.id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
+        #                                                        covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
+        #                                                        is_anchor=False)
+        #
+        #         distributed_algorithm_agent = DistributedAgent(id=robot.id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
+        #                                                        covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
+        #                                                        is_anchor=False)
+        #
+        #         agent = RealAgentContainer(
+        #             robot=robot,
+        #             testbed_object=testbed_object,
+        #             centralized_algorithm_agent=centralized_algorithm_agent,
+        #             distributed_algorithm_agent=distributed_algorithm_agent,
+        #         )
+        #
+        #         self.agents[robot.id] = agent
+        #         if robot.id in self.agents:
+        #             self.logger.warning(f"Agent {robot.id} is already in the application. Cannot be added.")
+        #             continue
+        #         self.logger.important(f"Added agent {robot.id} to the application")
+        #
+        #     # Collect the simulated agents
+        #     for agent in SIMULATED_AGENTS.values():
+        #         centralized_algorithm_agent = CentralizedAgent(id=agent.agent_id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
+        #                                                        covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
+        #                                                        is_anchor=False)
+        #
+        #         distributed_algorithm_agent = DistributedAgent(id=agent.agent_id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS),
+        #                                                        covariance=INITIAL_GUESS_AGENTS_COVARIANCE,
+        #                                                        is_anchor=False)
+        #
+        #         simulated_agent_container = SimulatedAgentContainer(
+        #             agent=agent,
+        #             centralized_algorithm_agent=centralized_algorithm_agent,
+        #             distributed_algorithm_agent=distributed_algorithm_agent,
+        #         )
+        #         if agent.agent_id in self.agents:
+        #             self.logger.warning(f"Agent {agent.agent_id} is already in the application. Cannot be added.")
+        #             continue
+        #         self.agents[agent.agent_id] = simulated_agent_container
+        #         self.logger.important(f"Added simulated agent {agent.agent_id} to the application")
+        #
+        #     # Collect the real statics. We get them from the tracker
+        #     for static in self.tracker.statics.values():
+        #         testbed_object = self.testbed_manager.addStatic(static)
+        #
+        #         centralized_algorithm_agent = CentralizedAgent(id=static.id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(static.state.asarray()),
+        #                                                        covariance=STATIC_AGENTS_COVARIANCE,
+        #                                                        is_anchor=True)
+        #
+        #         distributed_algorithm_agent = DistributedAgent(id=static.id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(static.state.asarray()),
+        #                                                        covariance=STATIC_AGENTS_COVARIANCE,
+        #                                                        is_anchor=True
+        #                                                        )
+        #
+        #         static_container = RealStaticContainer(
+        #             testbed_object=testbed_object,
+        #             centralized_algorithm_agent=centralized_algorithm_agent,
+        #             distributed_algorithm_agent=distributed_algorithm_agent,
+        #         )
+        #
+        #     # Collect the simulated statics
+        #     for static in SIMULATED_STATICS.values():
+        #         centralized_algorithm_agent = CentralizedAgent(id=static.agent_id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(
+        #                                                            static.state.asarray()
+        #                                                        ),
+        #                                                        covariance=STATIC_AGENTS_COVARIANCE,
+        #                                                        is_anchor=True)
+        #
+        #         distributed_algorithm_agent = DistributedAgent(id=static.agent_id,
+        #                                                        Ts=UPDATE_TIME,
+        #                                                        state=AlgorithmAgentState.from_array(
+        #                                                            static.state.asarray()
+        #                                                        ),
+        #                                                        covariance=STATIC_AGENTS_COVARIANCE,
+        #                                                        is_anchor=True
+        #                                                        )
+        #
+        #         static_container = SimulatedStaticContainer(
+        #             static=static,
+        #             centralized_algorithm_agent=centralized_algorithm_agent,
+        #             distributed_algorithm_agent=distributed_algorithm_agent,
+        #         )
+        #
+        #         self.statics[static.agent_id] = static_container
+        #         if static.agent_id in self.statics:
+        #             self.logger.warning(f"Static {static.agent_id} is already in the application. Cannot be added.")
+        #             continue
+        #         self.logger.important(f"Added simulated static {static.agent_id} to the application")
+        #
+        #     self.testbed_manager.initialize()
+        #
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop_application(self):
@@ -275,38 +354,38 @@ class FRODO_Application:
             self._thread.join()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def start_algorithm(self):
-        if self.algorithm_state == AlgorithmState.RUNNING:
-            self.logger.warning("Algorithm is already running")
-            return
-
-        if self._thread is None:
-            self.logger.warning("Application is not initialized. Please initialize the application first")
-            return
-
-        centralized_algorithm_agents = []
-        distributed_algorithm_agents = []
-
-        for agent_id, agent_container in self.agents.items():
-            agent_container.centralized_algorithm_agent.state = AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS)
-            agent_container.centralized_algorithm_agent.state_covariance = INITIAL_GUESS_AGENTS_COVARIANCE
-            centralized_algorithm_agents.append(agent_container.centralized_algorithm_agent)
-
-            agent_container.distributed_algorithm_agent.state = AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS)
-            agent_container.distributed_algorithm_agent.state_covariance = INITIAL_GUESS_AGENTS_COVARIANCE
-            distributed_algorithm_agents.append(agent_container.distributed_algorithm_agent)
-
-        for static_id, static_container in self.statics.items():
-            centralized_algorithm_agents.append(static_container.centralized_algorithm_agent)
-            distributed_algorithm_agents.append(static_container.distributed_algorithm_agent)
-
-        self.algorithm_centralized.initialize(centralized_algorithm_agents)
-        self.algorithm_distributed.initialize(distributed_algorithm_agents)
-
-        self.algorithm_state = AlgorithmState.RUNNING
-        self.logger.important("Start FRODO Algorithm")
-        self.soundsystem.speak('Start FRODO Algorithm')
-        self.events.algorithm_started.set()
+    # def start_algorithm(self):
+    #     if self.algorithm_state == AlgorithmState.RUNNING:
+    #         self.logger.warning("Algorithm is already running")
+    #         return
+    #
+    #     if self._thread is None:
+    #         self.logger.warning("Application is not initialized. Please initialize the application first")
+    #         return
+    #
+    #     centralized_algorithm_agents = []
+    #     distributed_algorithm_agents = []
+    #
+    #     for agent_id, agent_container in self.agents.items():
+    #         agent_container.centralized_algorithm_agent.state = AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS)
+    #         agent_container.centralized_algorithm_agent.state_covariance = INITIAL_GUESS_AGENTS_COVARIANCE
+    #         centralized_algorithm_agents.append(agent_container.centralized_algorithm_agent)
+    #
+    #         agent_container.distributed_algorithm_agent.state = AlgorithmAgentState.from_array(INITIAL_GUESS_AGENTS)
+    #         agent_container.distributed_algorithm_agent.state_covariance = INITIAL_GUESS_AGENTS_COVARIANCE
+    #         distributed_algorithm_agents.append(agent_container.distributed_algorithm_agent)
+    #
+    #     for static_id, static_container in self.statics.items():
+    #         centralized_algorithm_agents.append(static_container.centralized_algorithm_agent)
+    #         distributed_algorithm_agents.append(static_container.distributed_algorithm_agent)
+    #
+    #     self.algorithm_centralized.initialize(centralized_algorithm_agents)
+    #     self.algorithm_distributed.initialize(distributed_algorithm_agents)
+    #
+    #     self.algorithm_state = AlgorithmState.RUNNING
+    #     self.logger.important("Start FRODO Algorithm")
+    #     self.soundsystem.speak('Start FRODO Algorithm')
+    #     self.events.algorithm_started.set()
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop_algorithm(self):
@@ -320,127 +399,148 @@ class FRODO_Application:
         raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
+    def add_simulated_agent(self, agent_id, *args, **kwargs):
+        if self._initialized:
+            self.logger.warning(f"Application is already initialized. Cannot add agent {agent_id}")
+            return
+        simulated_agent = self.simulation.add_agent(agent_id=agent_id, **kwargs)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_simulated_static(self, static_id, *args, **kwargs):
+        if self._initialized:
+            self.logger.warning(f"Application is already initialized. Cannot add static {static_id}")
+            return
+        static_object = self.simulation.add_static(static_id=static_id, **kwargs)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_simulated_agent(self, agent_id):
+        if self._initialized:
+            self.logger.warning(f"Application is already initialized. Cannot remove simulated agent {agent_id}")
+            return
+        self.simulation.remove_agent(agent_id)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_simulated_static(self, static_id):
+        if self._initialized:
+            self.logger.warning(f"Application is already initialized. Cannot remove simulated static {static_id}")
+            return
+        self.simulation.remove_static(static_id)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def clear_simulation(self):
+        self.simulation.clear()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def test(self):
+        self.logger.info("Running Test")
+
+        plan = NavigatorPlan(
+            id='test',
+            actions=[
+                Move(
+                    id='move1',
+                    agent_id='frodo1',
+                    element=MoveTo(
+                        x=2.75,
+                        y=2.75,
+                    ),
+                    blocking=False
+                ),
+                # Move(
+                #     id='move2',
+                #     agent_id='frodo2',
+                #     element=MoveTo(
+                #         x=2.75,
+                #         y=0.25,
+                #     ),
+                #     blocking=False
+                # ),
+                Move(
+                    id='move3',
+                    agent_id='frodo3',
+                    element=MoveTo(
+                        x=0.25,
+                        y=2.75,
+                    ),
+                    blocking=False
+                ),
+                Move(
+                    id='move4',
+                    agent_id='frodo4',
+                    element=MoveTo(
+                        x=0.25,
+                        y=0.25,
+                    ),
+                    blocking=False
+                )
+            ]
+        )
+
+        self.agent_manager.navigator.load_plan(plan, start=True)
 
     # === PRIVATE METHODS ==============================================================================================
-    def _newRobot_callback(self, robot: FRODO, *args, **kwargs):
-        self.soundsystem.speak(f"New robot {robot.id} connected")
-        # self.aggregator.addRobot(robot)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _robotDisconnected_callback(self, robot: FRODO, *args, **kwargs):
-        self.soundsystem.speak(f"Robot {robot.id} disconnected")
-        # self.aggregator.removeRobot(robot)
 
     # === ALGORITHM METHODS ============================================================================================
-    def _prediction_centralized(self):
-        if self.algorithm_state != AlgorithmState.RUNNING:
-            return
-
-        for agent_id, agent_container in self.agents.items():
-            # 3. Set the inputs
-            agent_container.centralized_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
-                agent_container.testbed_object.dynamic_state.v,
-                agent_container.testbed_object.dynamic_state.psi_dot
-            ])
-            )
-
-        self.algorithm_centralized.prediction()
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _prediction_distributed(self):
-        if self.algorithm_state != AlgorithmState.RUNNING:
-            return
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _prediction(self):
-        if self.algorithm_state != AlgorithmState.RUNNING:
-            return
-
-        for agent_id, agent_container in self.agents.items():
-            agent_container.distributed_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
-                agent_container.testbed_object.dynamic_state.v,
-                agent_container.testbed_object.dynamic_state.psi_dot
-            ])
-            )
-
-            agent_container.centralized_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
-                agent_container.testbed_object.dynamic_state.v,
-                agent_container.testbed_object.dynamic_state.psi_dot
-            ]))
-
-
-        self.algorithm_distributed.prediction()
-        self.algorithm_centralized.prediction()
-
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _correction(self):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _update_centralized(self):
-        if self.algorithm_state != AlgorithmState.RUNNING:
-            return
-
-        # Update the real agents
-        for agent_id, agent_container in self.agents.items():
-
-            # 1. Clear measurements
-            agent_container.centralized_algorithm_agent.measurements.clear()
-
-            # 2. Add measurements from the real agent
-            for measurement in agent_container.testbed_object.measurements:
-                to_id = measurement.object_to.id
-
-                algorithm_measurement = AlgorithmAgentMeasurement(
-                    source=self.algorithm_centralized.agents[agent_id],
-                    source_index=self.algorithm_centralized.agents[agent_id].index,
-                    target=self.algorithm_centralized.agents[to_id],
-                    target_index=self.algorithm_centralized.agents[to_id].index,
-                    measurement=np.asarray([measurement.relative.x, measurement.relative.y, measurement.relative.psi]),
-                    measurement_covariance=measurement.covariance
-                )
-
-                agent_container.centralized_algorithm_agent.measurements.append(algorithm_measurement)
-
-        # Update the statics
-        for static_id, static_container in self.statics.items():
-
-            # 1. Clear measurements (should be empty anyway)
-            static_container.algorithm_agent.measurements.clear()
-
-            # 2. Check if the static has been moved and trigger an error here. For now, we assume that statics stay in the same position
-            static_position_new = np.asarray(
-                [static_container.testbed_object.state.x, static_container.testbed_object.state.y])
-            if np.linalg.norm(static_position_new - static_container.algorithm_agent.state.as_array()) > 0.02:
-                self.logger.error(
-                    f"Static {static_id} moved. New position: {static_position_new}, original position: {static_container.algorithm_agent.state.as_array()}")
-
-        # Update the centralized algorithm
-        self.algorithm_centralized.update()
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _update_distributed(self):
-        if self.algorithm_state != AlgorithmState.RUNNING:
-            return
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _calculate_estimation_errors(self):
-
-        for agent_id, agent_container in self.agents.items():
-            x_true = agent_container.testbed_object.state.x
-            y_true = agent_container.testbed_object.state.y
-            psi_true = agent_container.testbed_object.state.psi
-
-            x_estimated = agent_container.centralized_algorithm_agent.state.x
-            y_estimated = agent_container.centralized_algorithm_agent.state.y
-            psi_estimated = agent_container.centralized_algorithm_agent.state.psi
-
-            agent_container.error = AgentError(
-                x=x_true - x_estimated,
-                y=y_true - y_estimated,
-                psi=psi_true - psi_estimated,
-            )
+    # def _prediction_centralized(self):
+    #     if self.algorithm_state != AlgorithmState.RUNNING:
+    #         return
+    #
+    #     for agent_id, agent_container in self.agents.items():
+    #         # 3. Set the inputs
+    #         agent_container.centralized_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
+    #             agent_container.testbed_object.dynamic_state.v,
+    #             agent_container.testbed_object.dynamic_state.psi_dot
+    #         ])
+    #         )
+    #
+    #     self.algorithm_centralized.prediction()
+    #
+    # # ------------------------------------------------------------------------------------------------------------------
+    # def _prediction_distributed(self):
+    #     if self.algorithm_state != AlgorithmState.RUNNING:
+    #         return
+    #
+    # # ------------------------------------------------------------------------------------------------------------------
+    # def _prediction(self):
+    #     if self.algorithm_state != AlgorithmState.RUNNING:
+    #         return
+    #
+    #     for agent_id, agent_container in self.agents.items():
+    #         agent_container.distributed_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
+    #             agent_container.testbed_object.dynamic_state.v,
+    #             agent_container.testbed_object.dynamic_state.psi_dot
+    #         ])
+    #         )
+    #
+    #         agent_container.centralized_algorithm_agent.input = AlgorithmAgentInput.from_array(np.asarray([
+    #             agent_container.testbed_object.dynamic_state.v,
+    #             agent_container.testbed_object.dynamic_state.psi_dot
+    #         ]))
+    #
+    #     self.algorithm_distributed.prediction()
+    #     self.algorithm_centralized.prediction()
+    #
+    # # ------------------------------------------------------------------------------------------------------------------
+    # def _correction(self):
+    #     ...
+    #
+    # # ------------------------------------------------------------------------------------------------------------------
+    # def _calculate_estimation_errors(self):
+    #
+    #     for agent_id, agent_container in self.agents.items():
+    #         x_true = agent_container.testbed_object.state.x
+    #         y_true = agent_container.testbed_object.state.y
+    #         psi_true = agent_container.testbed_object.state.psi
+    #
+    #         x_estimated = agent_container.centralized_algorithm_agent.state.x
+    #         y_estimated = agent_container.centralized_algorithm_agent.state.y
+    #         psi_estimated = agent_container.centralized_algorithm_agent.state.psi
+    #
+    #         agent_container.error = AgentError(
+    #             x=x_true - x_estimated,
+    #             y=y_true - y_estimated,
+    #             psi=psi_true - psi_estimated,
+    #         )
 
 
 # === FRODO APPLICATION CLI COMMAND SET ================================================================================
@@ -497,6 +597,13 @@ class FRODO_Application_CLI(CommandSet):
 
         self.addCommand(start_command)
 
+        test_command = Command(
+            name='test',
+            function=self.app.test,
+            description='Test the application',
+
+        )
+        self.addCommand(test_command)
         self.addChild(joystick_command_set)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -510,14 +617,25 @@ class FRODO_Application_CLI(CommandSet):
             return
 
         # 1. Check if this joystick is already assigned to a robot
-        for r in self.app.manager.robots.values():
+        for r in self.app.testbed_manager.robot_manager.robots.values():
             if joystick == r.interfaces.joystick:
                 self.app.logger.warning(f'Joystick {joystick.id} is already assigned to robot {r.id}')
                 return
 
-        # 2. Assign the joystick to the robot
-        robot = self.app.manager.getRobotById(robot)
-        robot.interfaces.assignJoystick(joystick)
+        # 2. Check if the joystick is assigned to an agent i nthe simulation
+        for agent in self.app.simulation.agents.values():
+            if joystick == agent.joystick:
+                self.app.logger.warning(f"Joystick {joystick.id} is already assigned to robot {agent.agent_id}")
+
+        # 2. Assign the joystick to the robot or agent
+        if robot in self.app.testbed_manager.robot_manager.robots:
+            robot = self.app.testbed_manager.robot_manager.getRobotById(robot)
+            robot.interfaces.assignJoystick(joystick)
+        elif robot in self.app.simulation.agents:
+            agent = self.app.simulation.agents[robot]
+            agent.assign_joystick(joystick)
+        else:
+            self.app.logger.warning(f'Robot with ID {robot} does not exist')
 
     # ------------------------------------------------------------------------------------------------------------------
     def _remove_joystick(self, robot: str = None, joystick: int = None):
@@ -531,11 +649,14 @@ class FRODO_Application_CLI(CommandSet):
             return
 
         if robot is not None:
-            robot = self.app.manager.getRobotById(robot)
-            if robot is None:
+
+            if robot in self.app.testbed_manager.robot_manager.robots:
+                self.app.testbed_manager.robot_manager.robots[robot].interfaces.removeJoystick()
+            elif robot in self.app.simulation.agents:
+                self.app.simulation.agents[robot].remove_joystick()
+            else:
                 self.app.logger.warning(f'Robot with ID {robot} does not exist')
                 return
-            robot.interfaces.removeJoystick()
         else:
             joystick = self.app.joystick_manager.getJoystickById(joystick)
             if joystick is None:
@@ -543,11 +664,18 @@ class FRODO_Application_CLI(CommandSet):
                 return
 
             owner_found = False
-            for robot in self.app.manager.robots.values():
+            for robot in self.app.testbed_manager.robot_manager.robots.values():
                 if joystick == robot.interfaces.joystick:
                     robot.interfaces.removeJoystick()
                     owner_found = True
                     break
+
+            if not owner_found:
+                for agent in self.app.simulation.agents.values():
+                    if joystick == agent.joystick:
+                        agent.remove_joystick()
+                        owner_found = True
+                        break
 
             if not owner_found:
                 self.app.logger.warning(f'Joystick {joystick.id} is not assigned to any robot')

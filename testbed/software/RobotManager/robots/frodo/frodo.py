@@ -41,7 +41,6 @@ class FRODO:
         self.callbacks = FRODO_Callbacks()
         self.events = FRODO_Events()
 
-
     # === PROPERTIES ===================================================================================================
     @property
     def id(self):

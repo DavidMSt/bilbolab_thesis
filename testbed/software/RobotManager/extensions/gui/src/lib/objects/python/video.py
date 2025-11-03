@@ -24,7 +24,7 @@ class VideoWidget(Widget):
     type = 'video'
     video_path: str = None
 
-    def __init__(self, widget_id: str, path: str, stream_type: str = 'mjpeg',  **kwargs):
+    def __init__(self, widget_id: str, path: str, stream_type: str = 'mjpeg', **kwargs):
         super().__init__(widget_id)
 
         default_config = {
@@ -44,8 +44,6 @@ class VideoWidget(Widget):
 
         assert self.config['fit'] in ['contain', 'cover', 'fill']
 
-
-
         self.video_path = path
         self.stream_type = stream_type
 
@@ -61,7 +59,7 @@ class VideoWidget(Widget):
         # Called once after widget is created; parent will push getConfiguration()
         super().init(*args, **kwargs)
 
-    def handleEvent(self, message, sender = None) -> Any:
+    def handleEvent(self, message, sender=None) -> Any:
         """
         Handle messages from the frontend:
           - event: 'click' if clickable
