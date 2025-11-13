@@ -8,7 +8,7 @@ from scipy.signal import find_peaks
 import numpy as np
 
 from core.utils.json_utils import writeJSON, readJSON
-from robot.bilbo_core import BILBO_Information
+from robot.bilbo_common import BILBO_Config
 from robot.bilbo_definitions import BILBO_DynamicState
 from robot.control.bilbo_control_data import BILBO_Control_Mode, BILBO_ControlConfig
 
@@ -79,7 +79,7 @@ class BILBO_TrajectoryExperimentData:
 @dataclasses.dataclass
 class BILBO_TrajectoryExperimentMeta:
     robot_id: str
-    robot_information: BILBO_Information
+    robot_information: BILBO_Config
     control_config: BILBO_ControlConfig
     description: str
     software_revision: str

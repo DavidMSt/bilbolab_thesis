@@ -9,7 +9,7 @@ import numpy as np
 from dacite import Config
 from numpy.core.defchararray import isnumeric
 
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 # ======================================================================================================================
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.communication.serial.bilbo_serial_messages import BILBO_Sequencer_Event_Message
@@ -75,7 +75,7 @@ class BILBO_ExperimentHandler_Events:
 # === BILBO_ExperimentHandler ==========================================================================================
 class BILBO_ExperimentHandler:
     communication: BILBO_Communication
-    core: BILBO_Core
+    core: BILBO_Common
     utils: BILBO_Utilities
     control: BILBO_Control
 
@@ -88,7 +88,7 @@ class BILBO_ExperimentHandler:
 
     # === INIT =========================================================================================================
     def __init__(self,
-                 core: BILBO_Core,
+                 core: BILBO_Common,
                  communication: BILBO_Communication,
                  utils: BILBO_Utilities,
                  control: BILBO_Control):
@@ -231,7 +231,7 @@ class BILBO_ExperimentHandler:
             id=str(trajectory.id),
             data=output_data,
             meta = BILBO_TrajectoryExperimentMeta(
-                robot_id = self.core.getID(),
+                robot_id = self.core._get_id(),
                 robot_information=self.core.information,
                 control_config=self.control.config,
                 description = '',

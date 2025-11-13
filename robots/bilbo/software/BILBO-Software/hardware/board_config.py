@@ -6,7 +6,7 @@ from dacite import Config
 from core.utils.dataclass_utils import from_dict
 from core.utils.files import fileExists, deleteFile
 from core.utils.json_utils import readJSON, writeJSON
-from robot.settings import config_path
+from robot.paths import CONFIG_PATH
 
 
 class BoardRevision(enum.StrEnum):
@@ -102,6 +102,11 @@ REV4_1_PINS = BoardPins(
 
 # ----------------------------------------------------------------------------------------------------------------------
 def generateBoardConfig(board_rev: str, cm_type: str):
+
+    # Check if there is a prefix with "rev"
+    if not board_rev.startswith("rev"):
+        board_rev = f"rev{board_rev}"
+
     if board_rev not in ['rev3', 'rev4', 'rev4.1']:
         print("Invalid board revision. Must be one of 'rev3', 'rev4', or 'rev4.1'.")
         return
@@ -145,13 +150,13 @@ def generateBoardConfig(board_rev: str, cm_type: str):
     )
 
     board_config_dict = dataclasses.asdict(board_config)
-    writeJSON(f"{config_path}/board.json", board_config_dict)
+    writeJSON(f"{CONFIG_PATH}/board.json", board_config_dict)
     print(f"Board config file generated for revision {board_rev} and compute module {cm_type}")
 
 
 # ======================================================================================================================
 def getBoardConfig() -> RobotControlBoardConfig | None:
-    file = f"{config_path}/board.json"
+    file = f"{CONFIG_PATH}/board.json"
     if not fileExists(file):
         return None
 

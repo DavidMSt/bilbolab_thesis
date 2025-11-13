@@ -29,10 +29,10 @@ class IdeenExpoGUI(NodeJSGui):
                 self.sendJoystickMessage()
 
     def addRobot(self, robot):
-        self.sendEvent(event='robot_connected', device_id=robot.device.information.device_id)
+        self.sendEvent(event='robot_connected', device_id=robot.device.config.device_id)
 
     def removeRobot(self, robot):
-        self.sendEvent(event='robot_disconnected', device_id=robot.device.information.device_id)
+        self.sendEvent(event='robot_disconnected', device_id=robot.device.config.device_id)
 
     @staticmethod
     def convertTwiprSample(sample):

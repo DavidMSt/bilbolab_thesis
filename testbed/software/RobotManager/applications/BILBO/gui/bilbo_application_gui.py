@@ -1,3 +1,4 @@
+import dataclasses
 import time
 from typing import Dict, Optional, Callable
 
@@ -7,22 +8,27 @@ from qmt import wrapToPi
 # === CUSTOM MODULES ===================================================================================================
 from applications.BILBO.gui.applications.dilc_app import DILC_App
 from applications.BILBO.gui.applications.input_viewer import InputViewerApplication
+from applications.BILBO.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
 from core.utils.colors import get_color_from_palette
 from core.utils.lipo import lipo_soc
 from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
+from extensions.babylon.src.babylon import BabylonVisualization
+from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
+from extensions.babylon.src.lib.objects.box.box import WallFancy
+from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CLI
 from extensions.gui.src.app import App, Folder
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.objects import Widget_Group, ContextMenuItem, ContextMenuGroup
+from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import MultiStateButton, Button
 from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWidget, ConnectionIndicator, \
     InternetIndicator, JoystickIndicator, ProgressIndicator
 from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget
 from extensions.gui.src.lib.objects.python.popup import YesNoPopup
 from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement
-from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode, JSPlotTimeSeries
-from extensions.gui.src.lib.plot.realtime.archive.rt_plot_widget import PlotWidget
+from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode, TimeSeries, RT_Plot_Widget
 from extensions.joystick.joystick_manager import Joystick
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.robot.bilbo import BILBO
@@ -53,6 +59,7 @@ class BILBO_Application_GUI_Robot_Category:
         self._buildPages()
 
         self.robot.core.events.stream.on(self._streamCallback)
+        self.logger = Logger(f"Category {self.robot.id}")
 
     # === METHODS ======================================================================================================
 
@@ -141,26 +148,60 @@ class BILBO_Application_GUI_Robot_Category:
             grid_column: int,
             grid_width: int = 9,
             grid_height: int = 9,
-    ) -> tuple[PlotWidget, JSPlotTimeSeries]:
-        """Create a plot widget + a single timeseries, add to page, and return both."""
-        plot = PlotWidget(
+    ):
+        """Create a plot widget with a dedicated Y-axis + a single timeseries, add to page, and return both."""
+        # New widget class + API: Y-axis is separate from the timeseries
+        plot = RT_Plot_Widget(
             widget_id=widget_id,
-            title=title,
+            plot_config={
+                "title": title,
+                "show_title": True,
+                "legend_label_type": "point",
+            },
             server_mode=ServerMode.EXTERNAL,
             update_mode=UpdateMode.CONTINUOUS,
         )
         page.addWidget(plot, column=grid_column, width=grid_width, height=grid_height)
 
-        ts = JSPlotTimeSeries(
-            timeseries_id=timeseries_id,
+        # Palette helper -> ensure RGBA
+        base_col = list(self._palette(color_index))
+        if len(base_col) == 3:
+            rgba = base_col + [1.0]
+        else:
+            rgba = base_col[:4]
+
+        # Add a dedicated Y axis for this series
+        y_axis_id = f"{timeseries_id}_y"
+        y_axis = plot.plot.add_y_axis(
+            y_axis_id,
+            {
+                "label": f"{series_name} [{unit}]" if unit else series_name,
+                "min": vmin,
+                "max": vmax,
+                "color": rgba,
+                "grid_color": [0.5, 0.5, 0.5, 0.4],
+                "precision": 2,
+                "highlight_zero": True,
+                "side": "left",
+            },
+        )
+
+        # Add the timeseries bound to that Y axis
+        ts = TimeSeries(
+            id=timeseries_id,
+            y_axis=y_axis,  # can pass the object or its id
             name=series_name,
             unit=unit,
-            min=vmin,
-            max=vmax,
-            color=self._palette(color_index),
+            color=rgba,
+            fill_color=rgba[:-1] + [0.15] if len(rgba) == 4 else base_col + [0.15],
+            fill=False,
+            tension=0.0,
+            precision=2,
+            width=2,
         )
-        ts.setValue(0)
-        plot.plot.addTimeseries(ts)
+        ts.set_value(0.0)
+        plot.plot.add_timeseries(ts)
+
         return plot, ts
 
     @staticmethod
@@ -255,14 +296,16 @@ class BILBO_Application_GUI_Robot_Category:
             BILBO_Control_Mode.OFF: 'OFF',
             BILBO_Control_Mode.BALANCING: 'BALANCING',
         }
+
         # Initial state
-        mode_button.state = mode_mapping[self.robot.control.mode]
+        if self.robot.control.mode is not None:
+            mode_button.state = mode_mapping[self.robot.control.mode]
 
         # Keep the button in sync with robot mode changes
         def robot_control_mode_change_callback(mode):
             mode_button.state = mode_mapping[mode]
 
-        self.robot.control.callbacks.mode_changed.register(robot_control_mode_change_callback)
+        self.robot.control.events.mode_changed.on(robot_control_mode_change_callback)
 
         # --- TIC BUTTON ---
         self.tic_button = self._create_toggle_button(
@@ -290,13 +333,19 @@ class BILBO_Application_GUI_Robot_Category:
 
         # Keep TIC/VIC buttons in sync with configuration changes
         def robot_control_config_change_callback(config):
+            self.logger.important("Control config changed")
             tic_enabled = config['balancing_control']['tic']['enabled']
             self.tic_button.state = 'ON' if tic_enabled else 'OFF'
 
             vic_enabled = config['balancing_control']['vic']['enabled']
             self.vic_button.state = 'ON' if vic_enabled else 'OFF'
 
-        self.robot.control.callbacks.configuration_changed.register(robot_control_config_change_callback)
+        # self.robot.control.events.configuration_changed.on(robot_control_config_change_callback)
+
+        def on_tic_mode_change(mode):
+            self.tic_button.state = 'ON' if mode else 'OFF'
+
+        self.robot.control.events.tic_mode_changed.on(on_tic_mode_change)
 
         # --- PLOTS ---
         # Theta
@@ -441,6 +490,7 @@ class BILBO_Application_GUI_Robot_Category:
                 del self.joystick_contextmenu_items[jid]
 
         def new_assignment(joystick, robot: BILBO, *args, **kwargs):
+            self.logger.info(f'New assignment: {joystick.id} -> {robot.id}')
             jid = str(joystick.id)
             if jid in self.joystick_contextmenu_items:
                 item = self.joystick_contextmenu_items[jid]
@@ -450,6 +500,7 @@ class BILBO_Application_GUI_Robot_Category:
                     item['item'].name = f"{item['joystick'].name} (ID: {jid}) (-> {robot.id})"
 
         def assignment_removed(joystick, robot: BILBO, *args, **kwargs):
+            self.logger.info(f'Assignment removed: {joystick.id} -> {robot.id}')
             jid = str(joystick.id)
             if jid in self.joystick_contextmenu_items:
                 item = self.joystick_contextmenu_items[jid]
@@ -717,16 +768,16 @@ class BILBO_Application_GUI_Robot_Category:
         self.theta_dot_digital_number.value = np.rad2deg(sample.lowlevel.estimation.state.theta_dot)
         self.psi_dot_digital_number.value = np.rad2deg(sample.lowlevel.estimation.state.psi_dot)
 
-        # Plots
-        self.theta_timeseries.setValue(sample.lowlevel.estimation.state.theta * 180.0 / 3.141592653589793)
-        self.v_timeseries.setValue(sample.lowlevel.estimation.state.v)
-        self.theta_dot_timeseries.setValue(sample.lowlevel.estimation.state.theta_dot * 180.0 / 3.141592653589793)
-        self.psi_dot_timeseries.setValue(sample.lowlevel.estimation.state.psi_dot * 180.0 / 3.141592653589793)
+        # Plots (new API uses set_value)
+        self.theta_timeseries.set_value(sample.lowlevel.estimation.state.theta * 180.0 / 3.141592653589793)
+        self.v_timeseries.set_value(sample.lowlevel.estimation.state.v)
+        self.theta_dot_timeseries.set_value(sample.lowlevel.estimation.state.theta_dot * 180.0 / 3.141592653589793)
+        self.psi_dot_timeseries.set_value(sample.lowlevel.estimation.state.psi_dot * 180.0 / 3.141592653589793)
 
         # Battery / indicators — throttle to every ~200 ticks
         if self.robot.core.tick % 200 == 0:
             voltage = sample.sensors.power.bat_voltage
-            cells = self.robot.information.hardware['electronics']['battery_cells']
+            cells = self.robot.config.electronics.battery_cells
             self.battery_indicator.setValue(percentage=lipo_soc(voltage=voltage, cells=cells), voltage=voltage)
 
             # Connection
@@ -804,15 +855,6 @@ class BILBO_Application_App_Robot_Folder:
 
         self.mode_button.callbacks.click.register(_mode_click_handler)
 
-        # Keep the button in sync with robot-side mode changes
-        def _on_robot_mode_changed(mode):
-            try:
-                self.mode_button.state = _mode_mapping[mode]
-            except Exception:
-                ...
-
-        self.robot.control.callbacks.mode_changed.register(_on_robot_mode_changed)
-
         # --- TIC BUTTON (same behavior as in GUI Category) ---
         self.tic_button = MultiStateButton(
             id='tic_button',
@@ -841,23 +883,21 @@ class BILBO_Application_App_Robot_Folder:
 
         self.tic_button.callbacks.click.register(_tic_click_handler)
 
-        # Keep TIC in sync with configuration changes (like in the GUI Category)
-        def _on_config_changed(config):
-            try:
-                tic_enabled = config['balancing_control']['tic']['enabled']
-                self.tic_button.state = 'ON' if tic_enabled else 'OFF'
-            except Exception:
-                ...
-
-        self.robot.control.callbacks.configuration_changed.register(_on_config_changed)
-
-        # Also initialize TIC state once from current config if available
-        try:
-            cfg = self.robot.control.configuration
-            tic_enabled = cfg['balancing_control']['tic']['enabled']
+        def robot_control_config_change_callback(config):
+            tic_enabled = config['balancing_control']['tic']['enabled']
             self.tic_button.state = 'ON' if tic_enabled else 'OFF'
-        except Exception:
-            self.tic_button.state = 'OFF'
+
+        self.robot.control.callbacks.configuration_changed.register(robot_control_config_change_callback)
+
+        _mode_mapping = {
+            BILBO_Control_Mode.OFF: 'OFF',
+            BILBO_Control_Mode.BALANCING: 'BALANCING',
+        }
+
+        def robot_control_mode_change_callback(mode):
+            self.mode_button.state = _mode_mapping[mode]
+
+        self.robot.control.callbacks.mode_changed.register(robot_control_mode_change_callback)
 
         # --- Interface Buttons ---
         self.start_button = Button(widget_id='start_button', text='Start', color=[0.0, 0.4, 0.0])
@@ -914,6 +954,95 @@ class BILBO_Application_App_Robot_Folder:
 
 
 # ======================================================================================================================
+class BILBO_GUI_TestbedPage:
+    page: Page
+    manager: BILBO_TestbedManager
+
+    @dataclasses.dataclass
+    class RobotContainer:
+        robot: BILBO_TestbedAgent
+        babylon: BabylonBilbo
+
+    robots: dict[str, RobotContainer]
+
+    def __init__(self, manager: BILBO_TestbedManager):
+        self.manager = manager
+
+        self.logger = Logger("Testbed Page")
+        self.page = Page(id='testbed_page', name='Testbed')
+        self.robots = {}
+
+        self.babylon_visualization = BabylonVisualization(id='babylon', babylon_config={
+            'title': 'BILBO Testbed'})
+        self.babylon_visualization.start()
+        self._buildPage()
+
+        self.manager.events.new_robot.on(self._on_new_testbed_robot)
+        self.manager.events.robot_disconnected.on(self._on_testbed_robot_disconnected)
+        self.manager.events.new_tracker_sample.on(self._on_new_tracker_sample)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _buildPage(self):
+        testbed_size = [3, 3]  # Size in meters
+        self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
+        self.page.addWidget(self.babylon_widget, row=1, column=1, height=18, width=24)
+
+        # Floor is kept larger than testbed for visual purposes
+        floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
+        self.babylon_visualization.addObject(floor)
+
+        # Wall length matches testbed size
+        # Wall positions are offset by half the testbed size to create the boundary
+        wall1 = WallFancy('wall1', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
+        wall1.setPosition(y=testbed_size[1] / 2)
+        self.babylon_visualization.addObject(wall1)
+
+        wall2 = WallFancy('wall2', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
+        self.babylon_visualization.addObject(wall2)
+        wall2.setPosition(y=-testbed_size[1] / 2)
+
+        wall3 = WallFancy('wall3', length=testbed_size[1], texture='wood4.png')
+        wall3.setPosition(x=testbed_size[0] / 2)
+        wall3.setAngle(np.pi / 2)
+        self.babylon_visualization.addObject(wall3)
+
+        wall4 = WallFancy('wall4', length=testbed_size[1], texture='wood4.png')
+        wall4.setPosition(x=-testbed_size[0] / 2)
+        wall4.setAngle(np.pi / 2)
+        self.babylon_visualization.addObject(wall4)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_new_testbed_robot(self, robot: BILBO_TestbedAgent):
+        if robot.id in self.robots:
+            self.logger.warning(f'Testbed robot {robot.id} already exists. Skipping.')
+            return
+
+        container = self.RobotContainer(
+            robot=robot,
+            babylon=BabylonBilbo(object_id=robot.id,
+                                 color=robot.robot.config.general.color,
+                                 text=robot.robot.config.general.short_id)
+        )
+
+        self.robots[robot.id] = container
+        self.babylon_visualization.addObject(container.babylon)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_testbed_robot_disconnected(self, robot: BILBO_TestbedAgent):
+        ...
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_new_tracker_sample(self, *args, **kwargs):
+        for robot in self.robots.values():
+            robot.babylon.set_state(
+                x=robot.robot.tracked_object.state.x,
+                y=robot.robot.tracked_object.state.y,
+                theta=robot.robot.tracked_object.state.theta,
+                psi=robot.robot.tracked_object.state.psi,
+            )
+
+
+# ======================================================================================================================
 @callback_definition
 class BILBO_Application_GUI_Callbacks:
     emergency_stop: CallbackContainer
@@ -927,7 +1056,10 @@ class BILBO_Application_GUI:
     robot_app_folders: dict[str, BILBO_Application_App_Robot_Folder]
 
     # === INIT =========================================================================================================
-    def __init__(self, host, cli: CLI = None, joystick_control: BILBO_JoystickControl = None):
+    def __init__(self, host,
+                 testbed_manager: BILBO_TestbedManager,
+                 cli: CLI = None,
+                 joystick_control: BILBO_JoystickControl = None):
         self.callbacks = BILBO_Application_GUI_Callbacks()
 
         self.gui = GUI(
@@ -941,7 +1073,7 @@ class BILBO_Application_GUI:
             host=host,
             run_js_app=False,
         )
-
+        self.testbed_manager = testbed_manager
         self.gui.cli_terminal.setCLI(cli)
         self.joystick_control = joystick_control
 
@@ -978,7 +1110,7 @@ class BILBO_Application_GUI:
     # ------------------------------------------------------------------------------------------------------------------
     def addRobot(self, robot: BILBO):
         self._addRobotCategory(robot.id, robot)
-        # self._addRobotFolder_App(robot.id, robot)
+        self._addRobotFolder_App(robot.id, robot)
 
     # ------------------------------------------------------------------------------------------------------------------
     def removeRobot(self, robot: BILBO):
@@ -994,19 +1126,17 @@ class BILBO_Application_GUI:
         self.categories['application'] = {'category': category_application}
 
         # Pages
-        page_overview = Page(id='overview', name='Overview')
-        category_application.addPage(page_overview)
+        # page_overview = Page(id='overview', name='Overview')
+        # category_application.addPage(page_overview)
+        #
+        # page_robots = Page(id='robots', name='Robots')
+        # category_application.addPage(page_robots)
 
-        page_robots = Page(id='robots', name='Robots')
-        category_application.addPage(page_robots)
-
-        page_testbed = Page(id='testbed', name='Testbed')
-        category_application.addPage(page_testbed)
+        self.testbed_page = BILBO_GUI_TestbedPage(self.testbed_manager)
+        category_application.addPage(self.testbed_page.page)
 
         self.categories['application']['pages'] = {
-            'overview': page_overview,
-            'robots': page_robots,
-            'testbed': page_testbed,
+            'testbed': self.testbed_page.page,
         }
 
         # Robots Category

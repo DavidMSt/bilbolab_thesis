@@ -63,7 +63,7 @@ class FolderPagePayload:
 
 @dataclasses.dataclass
 class FolderPageObjectInstance:
-    instance: WidgetInstance
+    instance: Widget
     row: int
     column: int
     width: int
@@ -109,7 +109,7 @@ class FolderPage:
         self._occupied = [[False for _ in range(self._cols)] for _ in range(self._rows)]
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addObject(self, obj: Widget, row=None, column=None, width=1, height=1, **kwargs) -> WidgetInstance:
+    def addObject(self, obj: Widget, row=None, column=None, width=1, height=1, **kwargs) -> Widget:
 
         if not isinstance(obj, Widget):
             raise TypeError(f"Expected GUI_Object, got {type(obj)}")
@@ -118,7 +118,7 @@ class FolderPage:
             # TODO: I need to check if the folder already has an app
             ...
 
-        instance = obj.newInstance(**kwargs)
+        instance = obj
 
         if instance.id in self.objects:
             raise ValueError(f"Object with id {instance.id} already exists in page {self.id}.")
@@ -160,10 +160,8 @@ class FolderPage:
         return instance
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeObject(self, obj: Widget | WidgetInstance | str) -> None:
-        if isinstance(obj, WidgetInstance):
-            instance = obj
-        elif isinstance(obj, Widget):
+    def removeObject(self, obj: Widget | str) -> None:
+        if isinstance(obj, Widget):
             instance = self.objects.get(obj.id).instance
             if instance is None:
                 raise ValueError(f"No object with id {obj.id} found in page {self.id}.")
@@ -439,7 +437,7 @@ class Folder:
 
     # ------------------------------------------------------------------------------------------------------------------
     def addObject(self, obj: Widget, page: str | int | FolderPage = None, row=None, column=None, width=1, height=1,
-                  **kwargs) -> WidgetInstance:
+                  **kwargs) -> Widget:
         if isinstance(page, str):
             page = self.pages.get(page)
             if page is None:
@@ -459,7 +457,7 @@ class Folder:
         return page.addObject(obj, row=row, column=column, width=width, height=height, **kwargs)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeObject(self, page: str | int | FolderPage, obj: Widget | WidgetInstance | str) -> None:
+    def removeObject(self, page: str | int | FolderPage, obj: Widget | str) -> None:
         if isinstance(page, str):
             page = self.pages.get(page)
             if page is None:
@@ -563,8 +561,7 @@ class Folder:
 
     # ------------------------------------------------------------------------------------------------------------------
     def onRemove(self):
-        for instance in self.button.instances:
-            instance.parent.removeWidget(self.button)
+        self.button.parent.removeObject(self.button)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _createButton(self, **kwargs) -> FolderButton:
@@ -954,10 +951,8 @@ class App:
         if element is None:
             self.logger.warning(f"Event for unknown element {msg_id}: {message}")
             return
-        if isinstance(element, WidgetInstance):
-            element.widget.onEvent(message.get('data'), sender=sender)
-        else:
-            element.onEvent(message.get('data'), sender=sender)
+
+        element.onEvent(message.get('data'), sender=sender)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleFrontendHandshake(self, client: WebsocketServerClient, data):
@@ -1162,7 +1157,8 @@ def main():  # Example usage
                           )
 
     folder_groups.addObject(group1, width=3, height=4, row=1)
-    group_button_1 = Button(widget_id='group_button_1', text='GP 1', config={'color': random_color_from_palette('dark')})
+    group_button_1 = Button(widget_id='group_button_1', text='GP 1',
+                            config={'color': random_color_from_palette('dark')})
     group1.addWidget(group_button_1, width=2, height=2, row=1, column=1)
     group_checkbox = CheckboxWidget(widget_id='group_checkbox', value=False, title='Checkbox')
     group1.addWidget(group_checkbox, width=5, height=1, row=4, column=1)

@@ -5,6 +5,7 @@ import math
 
 import numpy as np
 from prompt_toolkit.history import ThreadedHistory
+from scipy.linalg import block_diag
 
 from applications.FRODO.algorithm.algorithm import get_covariance_ellipse
 from applications.FRODO.definitions import get_simulated_agent_definition_by_id
@@ -35,6 +36,7 @@ from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWid
 from extensions.gui.src.lib.objects.python.video import VideoWidget
 from extensions.gui.src.lib.objects.python.text import TextWidget
 from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode
+from extensions.gui.src.lib.terminal.terminal_widget import TerminalWidget
 from robots.frodo.frodo import FRODO
 from robots.frodo.frodo_definitions import FRODO_DEFINITIONS, STATIC_DEFINITIONS, FRODO_Sample, TESTBED_SIZE, \
     TESTBED_TILE_SIZE, FRODO_VIDEO_PORT
@@ -47,6 +49,22 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from applications.FRODO.frodo_application import FRODO_Application
+
+
+class FRODO_SSH_Page:
+    page: Page
+
+    # === INIT =========================================================================================================
+    def __init__(self, gui: GUI):
+        self.gui = gui
+        self.page = Page(id='ssh_page', name='SSH')
+        self._buildPage()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _buildPage(self, *args, **kwargs):
+        ...
+        # self.terminal_widget_1 = TerminalWidget(widget_id='terminal_widget', host='localhost')
+        # self.page.addWidget( self.terminal_widget_1, width=20, height=9)
 
 
 # === TRACKER PAGE =====================================================================================================
@@ -196,9 +214,6 @@ class FRODO_Robots_Page:
         self.page.clear()
         self._num_robots = 0
         self.robots = {}
-        # for robot in list(self.manager.robots.values()):
-        #     self._addRobot(robot)
-        #     self._num_robots += 1
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onRobotUpdate(self, robot_id):
@@ -280,7 +295,155 @@ class FRODO_Robots_Page:
         return 'low'
 
 
-# === VISION PAGE ======================================================================================================
+# # === VISION PAGE ======================================================================================================
+# class FRODO_Vision_Page:
+#     page: Page
+#     gui: GUI
+#     manager: FRODO_Manager
+#
+#     robots: dict
+#     num_robots: int = 0
+#
+#     # === INIT =========================================================================================================
+#     def __init__(self, gui: GUI, manager: FRODO_Manager):
+#         self.gui = gui
+#         self.manager = manager
+#         self.page = Page(id='vision_page', name='Vision')
+#         self._buildPage()
+#
+#         self.manager.callbacks.new_robot.register(self._addRobot)
+#         self.manager.callbacks.robot_disconnected.register(self._removeRobot)
+#
+#         self.robots = {}
+#
+#     # === METHODS ======================================================================================================
+#     ...
+#
+#     # === PRIVATE METHODS ==============================================================================================
+#     def _buildPage(self, *args, **kwargs):
+#         # Add a big map
+#         self.map_widget = MapWidget(widget_id='vision_map_widget',
+#                                     limits={"x": [0, TESTBED_SIZE[0]], "y": [0, TESTBED_SIZE[1]]},
+#                                     initial_display_center=[TESTBED_SIZE[0] / 2, TESTBED_SIZE[1] / 2],
+#                                     tiles=True,
+#                                     tile_size=TESTBED_TILE_SIZE,
+#                                     show_grid=False,
+#                                     server_port=8101,
+#                                     # major_grid_size=0.5,
+#                                     # minor_grid_size=0.1,
+#                                     )
+#         self.page.addWidget(self.map_widget, width=18, height=18)
+#
+#     # ------------------------------------------------------------------------------------------------------------------
+#     def _addRobot(self, robot: FRODO):
+#         self.robots[robot.id] = {}
+#         self.robots[robot.id]['robot'] = robot
+#
+#         robot_group = MapObjectGroup(id=f'robot_{robot.id}_vision', )
+#         vision_elements_group = MapObjectGroup(id=f'robot_{robot.id}_vision_elements', )
+#         self.robots[robot.id]['group'] = robot_group
+#         self.robots[robot.id]['vision_elements_group'] = vision_elements_group
+#
+#         self.robots[robot.id]['vision_map_widget'] = VisionAgent(id=robot.id,
+#                                                                  color=FRODO_DEFINITIONS[robot.id].color,
+#                                                                  size=0.07,
+#                                                                  arrow_length=0.3,
+#                                                                  arrow_width=0.05,
+#                                                                  vision_radius=1.5,
+#                                                                  vision_fov=math.radians(120),
+#                                                                  x=0,
+#                                                                  y=0,
+#                                                                  )
+#
+#         robot_group.addObject(self.robots[robot.id]['vision_map_widget'])
+#         robot_group.addGroup(vision_elements_group)
+#         self.map_widget.map.addGroup(robot_group)
+#
+#         # Add the video output
+#         robot_video_widget = VideoWidget(widget_id=f'{robot.id}_video_widget',
+#                                          path=f"http://{robot.id}.local:{FRODO_VIDEO_PORT}/video",
+#                                          title=f"{robot.id}",
+#                                          title_color=FRODO_DEFINITIONS[robot.id].color, )
+#
+#         row, column = self._get_robot_video_spot(robot.id)
+#         self.page.addWidget(robot_video_widget, column=column, row=row, width=12, height=9)
+#
+#         self.robots[robot.id]['video_widget'] = robot_video_widget
+#
+#         robot.core.events.stream.on(
+#             callback=Callback(function=self._onRobotUpdate, inputs={'robot_id': robot.id}, discard_inputs=True), )
+#
+#         self.num_robots += 1
+#
+#     # ------------------------------------------------------------------------------------------------------------------
+#     def _removeRobot(self, robot: FRODO):
+#
+#         robot_id = robot.id
+#
+#         # Remove the video widget
+#         self.page.removeWidget(self.robots[robot_id]['video_widget'])
+#
+#         # Remove the robot from the map
+#         robot_group: MapObjectGroup = self.robots[robot_id]['group']
+#         self.map_widget.map.removeGroup(robot_group)
+#
+#     # ------------------------------------------------------------------------------------------------------------------
+#     def _onRobotUpdate(self, robot_id):
+#         robot: FRODO = self.robots[robot_id]['robot']
+#         data: FRODO_Sample = self.robots[robot_id]['robot'].core.data
+#
+#         # Update the vision map
+#
+#         # 1. Update the robot
+#         vision_map_widget: VisionAgent = self.robots[robot_id]['vision_map_widget']
+#         vision_map_widget.update(x=data.estimation.state.x, y=data.estimation.state.y, psi=data.estimation.state.psi)
+#
+#         # 2. Update the vision elements
+#
+#         vision_elements_group: MapObjectGroup = self.robots[robot_id]['vision_elements_group']
+#
+#         # Make all measurements invisible
+#         for element in vision_elements_group.objects.values():
+#             element.visible(False)
+#
+#         # Update the measurements that are visible
+#         for measurement in data.measurements.aruco_measurements:
+#             object_id = str(measurement.measured_aruco_id)
+#             position = measurement.position
+#             psi = measurement.psi
+#
+#             position_global = vector2GlobalFrame(position, robot.core.data.estimation.state.psi)
+#             position_global = [position_global[0] + robot.core.data.estimation.state.x,
+#                                position_global[1] + robot.core.data.estimation.state.y, ]
+#
+#             if vision_elements_group.objectInGroup(object_id):
+#                 element = vision_elements_group.getObjectByPath(object_id)
+#                 element.visible(True)
+#                 element.update(x=position_global[0], y=position_global[1])
+#
+#             else:
+#                 vision_element = Point(id=object_id,
+#                                        color=[0.8, 0.8, 0.8],
+#                                        size=0.05,
+#                                        x=position_global[0],
+#                                        y=position_global[1],
+#                                        )
+#                 vision_elements_group.addObject(vision_element)
+#
+#     # ------------------------------------------------------------------------------------------------------------------
+#     def _get_robot_video_spot(self, robot_id):
+#
+#         match robot_id:
+#             case 'frodo1':
+#                 return (1, 24)
+#             case 'frodo2':
+#                 return (1, 36)
+#             case 'frodo3':
+#                 return (10, 24)
+#             case 'frodo4':
+#                 return (10, 36)
+#             case _:
+#                 raise ValueError(f"Unknown robot ID {robot_id}")
 class FRODO_Vision_Page:
     page: Page
     gui: GUI
@@ -288,6 +451,12 @@ class FRODO_Vision_Page:
 
     robots: dict
     num_robots: int = 0
+
+    @dataclasses.dataclass
+    class VisionMeasurementContainer:
+        id: str
+        point: Point
+        covariance: Ellipse
 
     # === INIT =========================================================================================================
     def __init__(self, gui: GUI, manager: FRODO_Manager):
@@ -314,13 +483,8 @@ class FRODO_Vision_Page:
                                     tile_size=TESTBED_TILE_SIZE,
                                     show_grid=False,
                                     server_port=8101,
-                                    # major_grid_size=0.5,
-                                    # minor_grid_size=0.1,
                                     )
         self.page.addWidget(self.map_widget, width=18, height=18)
-
-        for robot in self.manager.robots.values():
-            self._addRobot(robot)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _addRobot(self, robot: FRODO):
@@ -331,6 +495,7 @@ class FRODO_Vision_Page:
         vision_elements_group = MapObjectGroup(id=f'robot_{robot.id}_vision_elements', )
         self.robots[robot.id]['group'] = robot_group
         self.robots[robot.id]['vision_elements_group'] = vision_elements_group
+        self.robots[robot.id]['measurements'] = {}  # str -> VisionMeasurementContainer
 
         self.robots[robot.id]['vision_map_widget'] = VisionAgent(id=robot.id,
                                                                  color=FRODO_DEFINITIONS[robot.id].color,
@@ -376,6 +541,31 @@ class FRODO_Vision_Page:
         self.map_widget.map.removeGroup(robot_group)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _normalize_covariance_xy(self, P_raw) -> np.ndarray:
+        """
+        Robustly extract a 2x2 (x,y) covariance from various possible representations.
+        Falls back to a tiny isotropic covariance if unknown.
+        """
+        if isinstance(P_raw, np.ndarray):
+            if P_raw.ndim == 2:
+                if P_raw.shape == (3, 3):
+                    P_xy = P_raw[:2, :2]
+                elif P_raw.shape == (2, 2):
+                    P_xy = P_raw
+                else:
+                    diag = np.diag(P_raw)
+                    P_xy = np.diag(diag[:2]) if diag.size >= 2 else np.eye(2) * 1e-6
+            elif P_raw.ndim == 1:
+                P_xy = np.diag(P_raw[:2]) if P_raw.size >= 2 else np.eye(2) * 1e-6
+            else:
+                P_xy = np.eye(2) * 1e-6
+        else:
+            P_xy = np.eye(2) * 1e-6
+
+        # Symmetrize for safety
+        return 0.5 * (P_xy + P_xy.T)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _onRobotUpdate(self, robot_id):
         robot: FRODO = self.robots[robot_id]['robot']
         data: FRODO_Sample = self.robots[robot_id]['robot'].core.data
@@ -386,37 +576,98 @@ class FRODO_Vision_Page:
         vision_map_widget: VisionAgent = self.robots[robot_id]['vision_map_widget']
         vision_map_widget.update(x=data.estimation.state.x, y=data.estimation.state.y, psi=data.estimation.state.psi)
 
-        # 2. Update the vision elements
-
+        # 2. Update the vision elements (points + covariance ellipses)
         vision_elements_group: MapObjectGroup = self.robots[robot_id]['vision_elements_group']
+        measurements_dict: dict[str, FRODO_Vision_Page.VisionMeasurementContainer] = self.robots[robot_id][
+            'measurements'
+        ]
 
-        # Make all measurements invisible
-        for element in vision_elements_group.objects.values():
-            element.visible(False)
+        active_ids = set()
+
+        # Make everything invisible for this tick; we'll re-enable the ones we see
+        for container in measurements_dict.values():
+            container.point.visible(False)
+            container.covariance.visible(False)
 
         # Update the measurements that are visible
-        for measurement in data.measurements.aruco_measurements:
+        for measurement in getattr(data.measurements, 'aruco_measurements', []):
             object_id = str(measurement.measured_aruco_id)
-            position = measurement.position
-            psi = measurement.psi
 
-            position_global = vector2GlobalFrame(position, robot.core.data.estimation.state.psi)
-            position_global = [position_global[0] + robot.core.data.estimation.state.x,
-                               position_global[1] + robot.core.data.estimation.state.y, ]
+            # Relative position of the measured object in the robot frame
+            # existing code uses "measurement.position" (likely [x, y] in robot frame)
+            rel_pos = np.asarray(measurement.position[:2], dtype=float)
 
-            if vision_elements_group.objectInGroup(object_id):
-                element = vision_elements_group.getObjectByPath(object_id)
-                element.visible(True)
-                element.update(x=position_global[0], y=position_global[1])
+            # Convert to global coordinates using current robot pose
+            rel_global = vector2GlobalFrame(rel_pos, robot.core.data.estimation.state.psi)
+            meas_x = float(rel_global[0] + robot.core.data.estimation.state.x)
+            meas_y = float(rel_global[1] + robot.core.data.estimation.state.y)
 
+            # Create or fetch map objects
+            if object_id not in measurements_dict:
+                point = Point(
+                    id=object_id,
+                    color=[0.8, 0.8, 0.8],
+                    size=0.05,
+                    x=meas_x,
+                    y=meas_y,
+                )
+                ellipse = Ellipse(
+                    id=f"{object_id}_covariance",
+                    opacity=0.2,
+                    color=[0.8, 0.8, 0.8],
+                    x=meas_x,
+                    y=meas_y,
+                    rx=0.0,
+                    ry=0.0,
+                    psi=0.0,
+                )
+                vision_elements_group.addObject(point)
+                vision_elements_group.addObject(ellipse)
+
+                measurements_dict[object_id] = self.VisionMeasurementContainer(
+                    id=object_id,
+                    point=point,
+                    covariance=ellipse,
+                )
             else:
-                vision_element = Point(id=object_id,
-                                       color=[0.8, 0.8, 0.8],
-                                       size=0.05,
-                                       x=position_global[0],
-                                       y=position_global[1],
-                                       )
-                vision_elements_group.addObject(vision_element)
+                # Re-enable visibility
+                measurements_dict[object_id].point.visible(True)
+                measurements_dict[object_id].covariance.visible(True)
+
+            container = measurements_dict[object_id]
+            container.point.update(x=meas_x, y=meas_y)
+
+            # --- Covariance handling (mirror of Testbed page logic) ---
+            # Try a few attribute names to be robust across message versions
+            P_raw = block_diag(measurement.uncertainty_position, measurement.uncertainty_psi)
+
+            P_xy_agent = self._normalize_covariance_xy(P_raw)
+
+            # Rotate into global frame using robot heading
+            psi_robot = robot.core.data.estimation.state.psi
+            c, s = np.cos(psi_robot), np.sin(psi_robot)
+            R = np.array([[c, -s],
+                          [s, c]], dtype=float)
+            P_xy_global = R @ P_xy_agent @ R.T
+
+            # Convert covariance to ellipse radii / orientation
+            rx, ry, psi_ellipse = get_covariance_ellipse(P_xy_global)
+
+            container.covariance.update(
+                x=meas_x,
+                y=meas_y,
+                rx=rx,
+                ry=ry,
+                psi=psi_ellipse,
+            )
+
+            active_ids.add(object_id)
+
+        # Hide any measurements not present this tick
+        for mid, container in list(measurements_dict.items()):
+            if mid not in active_ids:
+                container.point.visible(False)
+                container.covariance.visible(False)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _get_robot_video_spot(self, robot_id):
@@ -551,14 +802,14 @@ class FRODO_TestbedData_Page:
         self.page.addWidget(self.agent_video_4, row=10, column=41, width=10, height=9)
 
     # ------------------------------------------------------------------------------------------------------------------
-
     def _add_listeners(self):
         self.testbed_manager.events.new_object.on(self._on_testbed_manager_new_object)
         self.testbed_manager.events.update.on(self._on_testbed_manager_update)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_testbed_manager_new_object(self,testbed_object, *args, **kwargs):
+    def _on_testbed_manager_new_object(self, testbed_object, *args, **kwargs):
         self.addTestbedObject(testbed_object)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _on_testbed_manager_update(self, *args, **kwargs):
         for agent in list(self.agents.values()):
@@ -751,10 +1002,12 @@ class FRODO_Agents_Page:
         self.gui = gui
         self.manager = manager
         self.page = Page(id='agents_page', name='Agents')
+        self.agents = {}
+        self.statics = {}
         self._buildPage()
 
-        self.manager.events.initialized.on(self._on_agent_manager_initialized)
         self.manager.events.update.on(self._on_agent_manager_update)
+        self.manager.events.new_agent.on(self._on_new_agent)
 
     def _buildPage(self):
         self.map_widget = MapWidget(widget_id='agent_map_widget',
@@ -777,7 +1030,12 @@ class FRODO_Agents_Page:
     def _add_agent(self, agent: agent_manager.AgentContainer):
         agent_id = agent.id
 
-        color = FRODO_DEFINITIONS[agent_id].color if agent_id in FRODO_DEFINITIONS else [0.8, 0.8, 0.8]
+        if agent_id in FRODO_DEFINITIONS:
+            color = FRODO_DEFINITIONS[agent_id].color
+        elif get_simulated_agent_definition_by_id(agent_id) is not None:
+            color = get_simulated_agent_definition_by_id(agent_id).color
+        else:
+            color = [0.8, 0.8, 0.8]
 
         group = MapObjectGroup(id=f'object_{agent_id}_group')
 
@@ -788,6 +1046,8 @@ class FRODO_Agents_Page:
                            arrow_width=0.05,
                            opacity=0.5,
                            )
+
+        map_object.update(x=agent.state.x, y=agent.state.y, psi=agent.state.psi)
 
         group.addObject(map_object)
 
@@ -824,20 +1084,6 @@ class FRODO_Agents_Page:
         self.statics[static_id] = container
 
     # ------------------------------------------------------------------------------------------------------------------
-
-    # ------------------------------------------------------------------------------------------------------------------
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _on_agent_manager_initialized(self, *args, **kwargs):
-        self._clear()
-
-        for agent in self.manager.agents.values():
-            self._add_agent(agent)
-
-        for static in self.manager.statics.values():
-            self._add_static(static)
-
-    # ------------------------------------------------------------------------------------------------------------------
     def _on_agent_manager_update(self, *args, **kwargs):
 
         # Update the agents
@@ -852,6 +1098,10 @@ class FRODO_Agents_Page:
             static_container.map_object.update(x=static_container.static.state.x,
                                                y=static_container.static.state.y,
                                                psi=static_container.static.state.psi)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_new_agent(self, agent: agent_manager.AgentContainer, *args, **kwargs):
+        self._add_agent(agent)
 
 
 # === FRODO SIMULATION PAGE ==============================================================================================
@@ -1178,6 +1428,9 @@ class FRODO_GUI:
     def _buildOverviewCategory(self):
         self.overview_category = Category(id='overview', name='FRODO App')
         self.gui.addCategory(self.overview_category)
+
+        self.ssh_page = FRODO_SSH_Page(self.gui)
+        self.overview_category.addPage(self.ssh_page.page)
 
         self.robots_page = FRODO_Robots_Page(self.gui, self.robot_manager)
         self.overview_category.addPage(self.robots_page.page)

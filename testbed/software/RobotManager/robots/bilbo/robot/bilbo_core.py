@@ -2,11 +2,10 @@ import time
 
 from core.communication.protocol import JSON_Message
 from core.communication.device_server import Device
-from core.utils.archives.events import pred_flag_key_equals
 from robots.bilbo.robot.bilbo_data import BILBO_Sample, bilboSampleFromDict
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import event_definition, Event, EventFlag
+from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 from core.utils.logging_utils import Logger, LOG_LEVELS
 from core.utils.sound.sound import speak, playSound
 
@@ -54,12 +53,10 @@ class BILBO_Core:
         self.interface_events = BILBO_Interface_Events()
 
         self.device.events.event.on(self._handleLogMessage,
-                                    predicate=pred_flag_key_equals('event', 'log'),
-                                    input_data=True)
+                                    predicate=pred_flag_equals('event', 'log'))
 
         self.device.events.event.on(self._handleSpeakEventMessage,
-                                    predicate=pred_flag_key_equals('event', 'speak'),
-                                    input_data=True)
+                                    predicate=pred_flag_equals('event', 'speak'))
 
         # self.device.events.stream.on(self._handleStream, input_data=True)
         self.device.callbacks.stream.register(self._handleStream)

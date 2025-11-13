@@ -12,14 +12,15 @@ to handle nested dataclasses.
 import copy
 import dataclasses
 import enum
-from enum import IntEnum
+from enum import IntEnum, Enum
 from itertools import zip_longest
 from functools import lru_cache
-
-# Consolidate duplicate imports from typing
+import dataclasses
+import numpy as np
+from enum import Enum
 from typing import (
-    Any, Dict, Tuple, Type, TypeVar, Optional, get_type_hints,
-    Mapping, Collection, MutableMapping, get_origin, get_args, Union
+    Any, Dict, Iterable, Mapping, MutableMapping, Sequence, Tuple, Type, TypeVar,
+    Optional, get_type_hints, get_origin, get_args, Union, Collection, List
 )
 
 import graphviz
@@ -60,6 +61,7 @@ from dacite.types import (
 
 # Type variable for generic dataclass conversion
 T = TypeVar("T")
+
 
 
 def from_dict(data_class: Type[T], data: Data | dict, config: Optional[Config] = None) -> T:
@@ -132,6 +134,250 @@ def from_dict(data_class: Type[T], data: Data | dict, config: Optional[Config] =
             post_init_values[field.name] = value
 
     # Instantiate the dataclass with the initial values and set post-init values
+    instance = data_class(**init_values)
+    for key, value in post_init_values.items():
+        setattr(instance, key, value)
+    return instance
+
+
+# ---------- Generic coercion helpers ----------
+
+def _is_dataclass_type(tp: Any) -> bool:
+    try:
+        return dataclasses.is_dataclass(tp) and isinstance(tp, type)
+    except Exception:
+        return False
+
+
+def _is_enum_type(tp: Any) -> bool:
+    try:
+        return issubclass(tp, Enum)
+    except Exception:
+        return False
+
+
+def _coerce_enum(value: Any, enum_type: Type[Enum]) -> Enum:
+    if isinstance(value, enum_type):
+        return value
+    # try by value first (covers ints and exact values)
+    try:
+        return enum_type(value)
+    except Exception:
+        # try by name (e.g. "BALANCING")
+        return enum_type[str(value)]
+
+
+def _to_ndarray(value: Any) -> np.ndarray:
+    if isinstance(value, np.ndarray):
+        return value
+    if isinstance(value, (list, tuple)):
+        return np.asarray(value)
+    return np.asarray(value)
+
+
+def _simple_cast(value: Any, tp: Any) -> Any:
+    # conservative simple casts
+    if tp in (int, float, str, bool) and not isinstance(value, tp):
+        # empty string to None for Optional[...]
+        if value == "" and tp is not str:
+            raise ValueError("empty cannot cast to non-str")
+        return tp(value)
+    return value
+
+
+from typing import Any, get_origin, get_args, Union, Mapping, Iterable, Tuple, List, Sequence
+import types as pytypes
+import dataclasses
+import numpy as np
+from enum import Enum
+
+
+def coerce_to_type(value: Any, target_type: Any, config) -> Any:
+    """
+    Convert 'value' into 'target_type' using typing annotations.
+    Supports:
+      - PEP 604 unions (A | B)
+      - typing.Union / Optional
+      - numpy arrays
+      - Enums (by value or by name)
+      - Nested dataclasses (via from_dict_auto)
+      - Dict / List / Set / Tuple (fixed/variadic)
+      - Primitive casts (int/float/str/bool)
+
+    Falls back to returning the original value; if config.check_types=True,
+    dacite will still validate types later.
+    """
+    if value is None:
+        return None
+
+    # Helper predicates
+    def _is_dataclass_type(tp: Any) -> bool:
+        try:
+            return dataclasses.is_dataclass(tp) and isinstance(tp, type)
+        except Exception:
+            return False
+
+    def _is_enum_type(tp: Any) -> bool:
+        try:
+            return issubclass(tp, Enum)
+        except Exception:
+            return False
+
+    def _coerce_enum(v: Any, enum_type: type[Enum]) -> Enum:
+        if isinstance(v, enum_type):
+            return v
+        # try by value (covers ints and exact values)
+        try:
+            return enum_type(v)
+        except Exception:
+            # try by name
+            return enum_type[str(v)]
+
+    def _to_ndarray(v: Any) -> np.ndarray:
+        if isinstance(v, np.ndarray):
+            return v
+        if isinstance(v, (list, tuple)):
+            return np.asarray(v)
+        return np.asarray(v)
+
+    def _simple_cast(v: Any, tp: Any) -> Any:
+        if tp in (int, float, str, bool) and not isinstance(v, tp):
+            if v == "" and tp is not str:
+                # avoid surprising int("") etc.
+                raise ValueError("empty cannot cast to non-str")
+            return tp(v)
+        return v
+
+    origin = get_origin(target_type)
+    args = get_args(target_type)
+
+    # ----- Optional / Union (supports typing.Union and PEP 604 X | Y) -----
+    if origin in (Union, pytypes.UnionType):
+        last_err = None
+        for opt in args:
+            if opt is type(None):
+                if value is None:
+                    return None
+                continue
+            try:
+                return coerce_to_type(value, opt, config)
+            except Exception as e:
+                last_err = e
+        # None matched – re-raise the last error or a generic one
+        raise last_err or TypeError(f"Cannot coerce {value!r} to {target_type}")
+
+    # ----- numpy arrays -----
+    if target_type is np.ndarray:
+        return _to_ndarray(value)
+
+    # ----- Enums -----
+    if _is_enum_type(target_type):
+        return _coerce_enum(value, target_type)
+
+    # ----- Dataclasses -----
+    if _is_dataclass_type(target_type):
+        # value should be a Mapping; delegate to your dataclass builder
+        # NOTE: from_dict_auto must be in scope
+        return from_dict_auto(target_type, value, config=config)
+
+    # ----- Mappings (e.g., Dict[K, V]) -----
+    if origin in (dict, Mapping):
+        k_t, v_t = args or (Any, Any)
+        if not isinstance(value, Mapping):
+            raise TypeError(f"Expected Mapping for {target_type}, got {type(value)}")
+        out = {}
+        for k, v in value.items():
+            kk = coerce_to_type(k, k_t, config) if k_t is not Any else k
+            vv = coerce_to_type(v, v_t, config) if v_t is not Any else v
+            out[kk] = vv
+        return out
+
+    # ----- Sequences / Tuples / Sets -----
+    if origin in (list, List, Sequence, tuple, Tuple, set, frozenset):
+        if not isinstance(value, Iterable) or isinstance(value, (str, bytes, bytearray)):
+            raise TypeError(f"Expected iterable for {target_type}, got {type(value)}")
+
+        def coerce_elem(e, i):
+            # Homogeneous containers like List[T], Set[T], etc.
+            if origin in (list, List, Sequence, set, frozenset):
+                t = args[0] if args else Any
+                return coerce_to_type(e, t, config) if t is not Any else e
+            # Tuple handling: Tuple[T1, T2, ...] or Tuple[T, ...]
+            if origin in (tuple, Tuple):
+                if len(args) == 2 and args[1] is Ellipsis:
+                    return coerce_to_type(e, args[0], config)
+                if i >= len(args):
+                    raise TypeError(f"Tuple index {i} out of bounds for {target_type}")
+                return coerce_to_type(e, args[i], config)
+            return e
+
+        coerced = [coerce_elem(e, i) for i, e in enumerate(value)]
+        if origin is set:
+            return set(coerced)
+        if origin is frozenset:
+            return frozenset(coerced)
+        if origin in (tuple, Tuple):
+            return tuple(coerced)
+        return list(coerced)
+
+    # ----- Fall back: direct type or Annotated-like wrappers -----
+    if isinstance(target_type, type):
+        try:
+            return _simple_cast(value, target_type)
+        except Exception:
+            pass
+        if _is_dataclass_type(target_type):
+            return from_dict_auto(target_type, value, config=config)
+        if _is_enum_type(target_type):
+            return _coerce_enum(value, target_type)
+
+    # Unknown/Any: return as-is (dacite's type checking will catch real mismatches)
+    return value
+
+
+# ---------- Your original from_dict, with one-line change ----------
+
+def from_dict_auto(data_class: Type[T], data: Dict[str, Any], config: Optional[Config] = None) -> T:
+    init_values: MutableMapping[str, Any] = {}
+    post_init_values: MutableMapping[str, Any] = {}
+    config = config or Config()
+
+    try:
+        data_class_hints = cache(get_type_hints)(data_class, localns=config.hashable_forward_references)
+    except NameError as error:
+        raise ForwardReferenceError(str(error))
+    data_class_fields = cache(get_fields)(data_class)
+
+    if config.strict:
+        extra_fields = set(data.keys()) - {f.name for f in data_class_fields}
+        if extra_fields:
+            raise UnexpectedDataError(keys=extra_fields)
+
+    for field in data_class_fields:
+        field_type = data_class_hints[field.name]
+        if field.name in data:
+            try:
+                field_data = data[field.name]
+                # >>> the only change: use generic coercion <<<
+                value = coerce_to_type(field_data, field_type, config)
+            except DaciteFieldError as error:
+                error.update_path(field.name)
+                raise
+            if config.check_types and not is_instance(value, field_type):
+                raise WrongTypeError(field_path=field.name, field_type=field_type, value=value)
+        else:
+            try:
+                value = get_default_value_for_field(field, field_type)
+            except DefaultValueNotFoundError:
+                if not field.init:
+                    continue
+                raise MissingValueError(field.name)
+
+        if field.init:
+            init_values[field.name] = value
+        elif not is_frozen(data_class):
+            post_init_values[field.name] = value
+
     instance = data_class(**init_values)
     for key, value in post_init_values.items():
         setattr(instance, key, value)

@@ -1,0 +1,35 @@
+plan:
+  id: corners
+  actions:
+    - type: move
+      id: move_frodo1
+      agent_id: frodo1
+      blocking: false
+      element:
+        type: MoveTo
+        x: 1.25
+        y: 1.25
+    - type: move
+      id: move_frodo2
+      agent_id: frodo2
+      blocking: false
+      element:
+        type: MoveTo
+        x: 1.75
+        y: 1.75
+    - type: move
+      id: move_frodo3
+      agent_id: frodo3
+      blocking: false
+      element:
+        type: MoveTo
+        x: 1.75
+        y: 1.25
+    - type: move
+      id: move_frodo4
+      agent_id: frodo4
+      blocking: false
+      element:
+        type: MoveTo
+        x: 1.25
+        y: 1.75

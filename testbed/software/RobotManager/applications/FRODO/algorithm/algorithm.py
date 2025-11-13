@@ -96,7 +96,7 @@ def get_covariance_ellipse(P_xy) -> tuple[float, float, float]:
     eigvals = np.maximum(eigvals, 0.0)
     # Choose confidence: 95% for 2 DoF → chi2 = 5.991
     # (68%: 2.279, 95%: 5.991, 99%: 9.210)
-    chi2 = 5.991
+    chi2 = 1
     # chi2 = 1
 
     # Semi-axes (meters). NOTE: rx, ry are *radii* of the ellipse, not diameters.

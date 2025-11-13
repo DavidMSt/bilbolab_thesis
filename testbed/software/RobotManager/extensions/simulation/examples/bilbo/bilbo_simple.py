@@ -1,5 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
+from numpy.random import normal
 
 from core.utils.control.lib_control.il.ilc import BILBO_STANDARD_REFERENCE_TRAJECTORY, getTransitionMatrixFromSystem, \
     getLearningMatricesOptimal
@@ -17,21 +18,30 @@ def main():
     bilbo_dynamics = BILBO_Dynamics_2D(model=DEFAULT_BILBO_MODEL, Ts=0.01)
     bilbo_dynamics.polePlacement(poles=BILBO_2D_POLES, apply_poles_to_system=True)
 
-    bilbo_dynamics_linear = BILBO_Dynamics_2D_Linear(model=DEFAULT_BILBO_MODEL, Ts=0.01)
-    bilbo_dynamics_linear.polePlacement(poles=BILBO_2D_POLES, apply_poles_to_system=True)
+    t = np.linspace(0, 5, N)  # 5 seconds over N points
+    u = 0.2 * np.sin(2 * np.pi * 0.5 * t)  # 0.2 amplitude, 0.5 Hz frequency
 
-    u = -1 * np.ones(N)
+    plt.plot(u)
+    plt.show()
 
     states = bilbo_dynamics.simulate(u)
-    states_linear = bilbo_dynamics_linear.simulate(u)
 
     theta = [state.theta for state in states]
-    theta_linear = [state.theta for state in states_linear]
-
     v = [state.v for state in states]
-    v_linear = [state.v for state in states_linear]
-    plt.plot(theta, label='nonlinear')
-    plt.plot(theta_linear, label='linear')
+
+    # Add Gaussian noise to theta
+    noise_std = 0.005  # Standard deviation of the noise
+    noise = normal(0, noise_std, len(theta))
+    theta = np.array(theta) + noise
+
+    noise_v_std = 0.005
+    noise_v = normal(0, noise_v_std, len(theta))
+    v = np.array(v) + noise_v
+
+    plt.plot(theta, label='theta')
+    plt.plot(v, label='v')
+
+    plt.legend()
     plt.grid()
     plt.show()
 

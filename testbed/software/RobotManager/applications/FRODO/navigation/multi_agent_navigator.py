@@ -28,37 +28,43 @@ from core.utils.time import IntervalTimer, TimeoutTimer, setTimeout
 
 
 # ======================================================================================================================
-
-
-# ======================================================================================================================
 # EVENT BUS
 # ======================================================================================================================
 @dataclass
 class EventBusSubscriber:
+    """Simple (topic, callback) pair registered on the EventBus."""
     topic: str
     callback: Callable | Callback | None = None
 
 
 class EventBus:
+    """
+    Minimal pub/sub bus with in-memory history and replay-on-subscribe for the latest topic payload.
+
+    Notes:
+      * History is kept unbounded (by design here). If you push lots of events, consider pruning.
+      * All history access is guarded by a single lock for simplicity.
+    """
+
     def __init__(self):
         self._subscribers: List[EventBusSubscriber] = []
         self._lock = threading.Lock()
         self.logger = Logger('EventBus', 'DEBUG')
-        self.history = []
+        self.history: list[tuple[str, Any]] = []
 
     def publish(self, topic: str, data: Any = None):
+        """Publish data under a topic; immediately invokes matching subscribers."""
         with self._lock:
             subs = list(self._subscribers)
+            # History checks must be done under the same lock to avoid races
+            already = self._topic_in_history(topic)
+            if already:
+                self.logger.warning(f"Topic {topic} already in the history. Republishing ...")
+            else:
+                self.logger.debug(f"Publishing new topic \"{topic}\"")
+            self.history.append((topic, data))
 
-        # Check if the topic is already in the history
-        if self._topic_in_history(topic):
-            self.logger.warning(f"Topic {topic} already in the history. Republishing ...")
-        else:
-            # Save the topic in the history
-            self.logger.debug(f"Publishing new topic \"{topic}\"")
-        self.history.append((topic, data))
-
-        # Check the currently registered subscribers
+        # Invoke outside the lock to avoid subscriber reentrancy deadlocks
         for sub in subs:
             try:
                 if sub.topic == topic:
@@ -69,15 +75,23 @@ class EventBus:
                 self.logger.error(f"[EventBus] subscriber error on {topic}: {e}")
 
     def set_signal(self, signal_id, data: Any = None):
+        """Convenience wrapper to publish to 'signal/<name>'."""
         signal = self.topic_signal(signal_id)
         self.publish(signal, data)
 
     def subscribe(self, subscriber: EventBusSubscriber):
+        """
+        Subscribe to a topic and immediately replay the last known payload for that topic
+        (if present).
+        """
         with self._lock:
             self._subscribers.append(subscriber)
             replay_data = self._get_topic_from_history(subscriber.topic)
         if replay_data is not None and subscriber.callback is not None:
-            subscriber.callback(subscriber.topic, replay_data)
+            try:
+                subscriber.callback(subscriber.topic, replay_data)
+            except Exception as e:
+                self.logger.error(f"[EventBus] replay to subscriber failed on {subscriber.topic}: {e}")
 
     def unsubscribe(self, subscriber: EventBusSubscriber):
         with self._lock:
@@ -85,10 +99,12 @@ class EventBus:
                 self._subscribers.remove(subscriber)
 
     def clear(self):
+        """Remove all subscribers and clear history."""
         with self._lock:
             self._subscribers.clear()
             self.history.clear()
 
+    # --- internals (guard all history access with the lock) ----------------------
     def _topic_in_history(self, topic: str) -> bool:
         return any(t == topic for t, _ in self.history)
 
@@ -377,6 +393,12 @@ class ActionState(enum.StrEnum):
 
 
 class Action(abc.ABC):
+    """
+    Base action with a condition gate and optional abort signal.
+
+    Lifecycle:
+      initialize() -> run() -> (internally) _wait_for_conditions() -> _execute_action() -> _on_finished()
+    """
     id: str  # ID of the action
     finished_emit_signal: str | None  # Topic to emit when the action is finished
     conditions: List[Condition]  # Conditions that must be true before the action can be executed
@@ -430,6 +452,7 @@ class Action(abc.ABC):
 
     # === METHODS ======================================================================================================
     def initialize(self, navigator: MultiAgentNavigator):
+        """Bind the action to a navigator and reset runtime flags."""
         self.navigator = navigator
         self.started = False
         self.finished = False
@@ -437,6 +460,9 @@ class Action(abc.ABC):
 
     # ------------------------------------------------------------------------------------------------------------------
     def run(self) -> bool:
+        """
+        Start the action. If non-blocking, the core logic runs in a daemon thread and this returns True immediately.
+        """
         self.logger.info(f"Run action {self.id}")
         if self.comment:
             self.logger.info(f"Comment: {self.comment}")
@@ -446,7 +472,7 @@ class Action(abc.ABC):
         if self.blocking:
             result = self._run()
         else:
-            thread = threading.Thread(target=self._run)
+            thread = threading.Thread(target=self._run, daemon=True)
             thread.start()
             result = True
 
@@ -465,7 +491,6 @@ class Action(abc.ABC):
 
     # === PRIVATE METHODS ==============================================================================================
     def _run(self) -> bool:
-
         # 1. Wait for conditions
         if not self._wait_for_conditions():
             return False
@@ -485,13 +510,20 @@ class Action(abc.ABC):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _wait_for_conditions(self) -> bool:
-
+        """
+        Wait for the action's condition set (AND of all conditions), or optional abort signal.
+        """
         self.logger.debug(f"Waiting for {len(self.conditions)} conditions")
+
+        # No conditions -> ready immediately
+        if not self.conditions:
+            self.logger.debug("No conditions; proceeding immediately.")
+            return True
+
         for condition in self.conditions:
             condition.attach(self.navigator.bus)
 
         condition_events = [condition.events.satisfied for condition in self.conditions]
-
         condition_subscriber = AND(*condition_events)
 
         if self.abort_condition:
@@ -511,19 +543,17 @@ class Action(abc.ABC):
             self.events.timeout.set()
             return False
 
-        if self.abort_condition:
-            if trace.caused_by(self.abort_condition.events.satisfied):
-                self.logger.debug(f"Action {self.id} aborted waiting for conditions.")
-                return False
+        if self.abort_condition and trace.caused_by(self.abort_condition.events.satisfied):
+            self.logger.debug(f"Action {self.id} aborted waiting for conditions.")
+            return False
 
-        if trace.caused_by_group(condition_subscriber):
-            pass
-
+        # All conditions path
         self.logger.debug(f"Conditions satisfied")
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_finished(self):
+        """Emit per-action finished signals, optional custom signal, and local events/callbacks."""
         self.finished = True
         self.state = ActionState.FINISHED
         self.logger.info(f"Action {self.id} finished.")
@@ -547,6 +577,7 @@ class Action(abc.ABC):
 
 # ----------------------------------------------------------------------------------------------------------------------
 class Wait(Action):
+    """Blocking wait that completes when given conditions/signals/timeout occur."""
     conditions: list[Condition]
 
     # === INIT =========================================================================================================
@@ -578,7 +609,6 @@ class Wait(Action):
     def _execute_action(self):
         # Since the waiting part is already done in self._wait_for_conditions(),
         # we just need to emit the finished signal.
-
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -612,6 +642,9 @@ class Wait(Action):
 
 # ----------------------------------------------------------------------------------------------------------------------
 class Move(Action):
+    """
+    Dispatch a navigation element to an agent; waits for a matching finish/error/abort/timeout.
+    """
     element: NavigationElement
     agent_id: str
 
@@ -679,22 +712,24 @@ class Move(Action):
 
         # 2. Send the element to the agent
         self.logger.debug(f"Movement: {self.element.id} -> {self.agent_id}")
-        # self.logger.debug(f"Sending element \"{self.element.id}\" to agent \"{self.agent_id}\"")
         agent.add_navigation_element(self.element)
 
-        events = [agent.events.finished, pred_flag_equals('id', self.element.id),
-                  agent.events.error,
-                  agent.events.aborted,
-                  agent.events.timeout]
+        # Gate the 'finished' event by checking the element id to avoid cross-element matches.
+        # finished_guard = (agent.events.finished, pred_flag_equals('id', self.element.id))
+
+        finished_guard = agent.events.finished
+
+        event_list = [finished_guard,
+                      agent.events.error,
+                      agent.events.aborted,
+                      agent.events.timeout]
 
         if self.abort_condition:
-            events.append(self.abort_condition.events.satisfied)
+            event_list.append(self.abort_condition.events.satisfied)
 
-        # # 3. Wait for the agent's events
+        # 3. Wait for any of the agent's terminal events (or abort)
         data, trace = wait_for_events(
-            events=[
-                OR(*events)
-            ],
+            events=OR(*event_list),
             timeout=self.execution_timeout,
             stale_event_time=1,
         )
@@ -705,20 +740,22 @@ class Move(Action):
             return False
 
         if self.abort_condition and trace.caused_by(self.abort_condition.events.satisfied):
-            self.logger.debug(f"Action {self.id} aborted waiting for agent {self.agent_id} to finish.")
-            agent = self.navigator.get_agent_by_id(self.agent_id)
-            agent.abort_current_element()
-            # TODO: I have to abort on the agent too I guess
-            return True
-        elif trace.caused_by(agent.events.finished):
-            self.logger.debug(f"Agent {self.agent_id} finished.")
+            self.logger.debug(f"Action {self.id} aborted while waiting for agent {self.agent_id}. Aborting on agent.")
+            try:
+                agent.abort_current_element()
+            except Exception as e:
+                self.logger.warning(f"Abort request to agent {self.agent_id} raised: {e}")
+            return False
+
+        if trace.caused_by(agent.events.finished):
+            self.logger.debug(f"Agent {self.agent_id} finished element {self.element.id}.")
             return True
         elif trace.caused_by(agent.events.error):
             self.logger.error(f"Agent {self.agent_id} failed.")
             self._on_error(trace.data)
             return False
         elif trace.caused_by(agent.events.aborted):
-            self.logger.debug(f"Movement {self.id} aborted on the agent waiting for agent {self.agent_id} to finish.")
+            self.logger.debug(f"Movement {self.id} aborted on agent {self.agent_id}.")
             return False
         elif trace.caused_by(agent.events.timeout):
             self.logger.warning(f"Movement {self.id} timed out on agent {self.agent_id}")
@@ -731,6 +768,9 @@ class Move(Action):
 
 # ----------------------------------------------------------------------------------------------------------------------
 class ActionGroup(Action):
+    """
+    Sequence/group of actions executed via plan's stepping.
+    """
     actions: list[Action]
 
     # === INIT =========================================================================================================
@@ -789,7 +829,6 @@ class ActionGroup(Action):
             result = action.run()
             if not result:
                 return False
-
         return True
 
 
@@ -823,6 +862,10 @@ class NavigatorPlanCallback:
 
 
 class NavigatorPlan:
+    """
+    A linear plan: executes actions in order. Non-blocking actions are dispatched
+    and the plan advances; completion is detected via the combined finished events.
+    """
     id: str
 
     current_action: Action | None = None
@@ -846,6 +889,7 @@ class NavigatorPlan:
 
     # === METHODS ======================================================================================================
     def initialize(self, navigator: MultiAgentNavigator) -> bool:
+        """Bind to a navigator, check preconditions, and initialize actions."""
         self.navigator = navigator
         self.current_action = None
         self.current_action_index = 0
@@ -903,20 +947,27 @@ class NavigatorPlan:
 
     # ------------------------------------------------------------------------------------------------------------------
     def run(self, blocking: bool = False) -> bool:
+        """
+        Start the plan. If non-empty, we register a combined finished listener so
+        the plan can resolve when all actions report finished.
+        """
         self.logger.info(f"Run plan")
         self.state = NavigatorPlanState.RUNNING
 
-        # Register the finished callback to the last action
-        # self.actions[-1].callbacks.finished.register(self._on_last_action_finished)
-        finished_events = AND(*[action.events.finished for action in self.actions])
+        # If there are no actions, finish immediately.
+        if not self.actions:
+            self._on_last_action_finished()
+            return True
 
+        # Register the finished callback for the last action group (all actions finished)
+        finished_events = AND(*[action.events.finished for action in self.actions])
         finished_events.on(callback=self._on_last_action_finished, once=True)
 
         if blocking:
             self._task()
             return True
         else:
-            self._thread = threading.Thread(target=self._task)
+            self._thread = threading.Thread(target=self._task, daemon=True)
             self._thread.start()
             return True
 
@@ -963,7 +1014,10 @@ class NavigatorPlan:
 
     # === PRIVATE METHODS ==============================================================================================
     def _task(self) -> None:
-
+        """
+        Core stepping loop: dispatch actions in order. Non-blocking actions are dispatched
+        (and may finish later); blocking actions complete before we advance the index.
+        """
         while True:
             # 1. Take the next action
             if self.current_action_index >= len(self.actions):
@@ -979,7 +1033,12 @@ class NavigatorPlan:
                 self.events.error.set()
                 return
 
-            self.logger.info(f"Finished action {action.id} ({self.current_action_index + 1}/{len(self.actions)})")
+            # Logging reflects actual behavior for blocking vs non-blocking actions
+            if action.blocking:
+                self.logger.info(f"Finished action {action.id} ({self.current_action_index + 1}/{len(self.actions)})")
+            else:
+                self.logger.info(f"Dispatched action {action.id} ({self.current_action_index + 1}/{len(self.actions)})")
+
             self.current_action_index += 1
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -993,10 +1052,19 @@ class NavigatorPlan:
 # ======================================================================================================================
 # NAVIGATOR
 # ======================================================================================================================
+class MultiAgentNavigator_State(enum.StrEnum):
+    RUNNING = 'running'
+    IDLE = 'idle'
+
+
 class MultiAgentNavigator:
+    """
+    Orchestrates agents and a single active plan over an EventBus.
+    """
     bus: EventBus
     agents: dict[str, agent_navigator.NavigatedObject]
     current_plan: NavigatorPlan | None
+    state: MultiAgentNavigator_State = MultiAgentNavigator_State.IDLE
 
     # === INIT =========================================================================================================
     def __init__(self):
@@ -1026,6 +1094,13 @@ class MultiAgentNavigator:
 
     # ------------------------------------------------------------------------------------------------------------------
     def load_plan(self, plan: NavigatorPlan, start: bool = False):
+        """
+        Load a plan (replacing the current plan once it's finished), clear the bus, and optionally start it.
+        """
+        if self.state == MultiAgentNavigator_State.RUNNING:
+            self.logger.warning("Cannot load a plan while the navigator is running.")
+            return
+
         if self.current_plan is not None and self.current_plan.state != NavigatorPlanState.FINISHED:
             self.logger.warning(f"Plan {plan.id} not finished. Exiting plan.")
             return
@@ -1047,11 +1122,26 @@ class MultiAgentNavigator:
             self.run_current_plan()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def load_plan_from_file(self, plan_file: str, start: bool = False):
+        """
+        Load a plan from a YAML file (replacing the current plan once it's finished), clear the bus, and optionally
+        start it.
+        """
+        if not fileExists(plan_file):
+            self.logger.warning(f"File {plan_file} not found. Exiting.")
+            return
+        plan = NavigatorPlan.from_yaml(plan_file)
+        self.load_plan(plan, start)
+    # ------------------------------------------------------------------------------------------------------------------
     def stop_current_plan(self):
         raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_current_plan(self):
+        if not self.current_plan:
+            self.logger.warning("No current plan to start.")
+            return
+
         if self.current_plan.state != NavigatorPlanState.IDLE:
             self.logger.warning(f"Plan {self.current_plan.id} not idle. Exiting plan.")
             return
@@ -1071,11 +1161,13 @@ class MultiAgentNavigator:
     def _plan_finished_callback(self, *args, **kwargs):
         self.logger.info(f" ✅ Finished plan {self.current_plan.id}")
         self.current_plan = None
+        self.state = MultiAgentNavigator_State.IDLE
 
     # ------------------------------------------------------------------------------------------------------------------
     def _plan_error_callback(self, error: Exception):
         self.logger.error(f"❌ Error in plan {self.current_plan.id}: {error}")
         self.current_plan = None
+        self.state = MultiAgentNavigator_State.IDLE
 
 
 # === HELPERS ==========================================================================================================
@@ -1120,128 +1212,5 @@ def action_from_config(config: dict) -> 'Action':
     return cls.from_config(config)
 
 
-# ----------------------------------------------------------------------------------------------------------------------
-
-
-# === TESTS AND EXAMPLES ===============================================================================================
-def test_wait_actions_1():
-    man = MultiAgentNavigator()
-
-    # Wait for one single event
-    wait_action_1 = Wait(
-        id='wait1',
-        finished_emit_signal='wait1_finished',
-        conditions=[EventCondition('event1')],
-    )
-
-    wait_action_1.initialize(man)
-
-    setTimeout(lambda: man.bus.publish("event1", "data"), 5)
-
-    wait_action_1.run()
-
-    infinite_loop()
-
-
-def test_wait_actions_2():
-    man = MultiAgentNavigator()
-
-    # Wait for multiple events
-    wait_action_2 = Wait(
-        id='wait2',
-        finished_emit_signal='wait2_finished',
-        conditions=[
-            EventCondition('event1'),
-            EventCondition('event2'),
-        ],
-    )
-
-    wait_action_3 = Wait(
-        id='wait3',
-        finished_emit_signal='wait3_finished',
-        conditions=[
-            EventCondition('signal/wait2_finished'),
-        ],
-    )
-    # wait_action_3.condition_timeout = 5
-    wait_action_2.initialize(man)
-    wait_action_3.initialize(man)
-
-    setTimeout(lambda: man.bus.publish("event1", "data"), 2)
-    setTimeout(lambda: man.bus.publish("event2", "data"), 3)
-    wait_action_2.run()
-    wait_action_3.run()
-
-    infinite_loop()
-
-
-def test_wait_actions_3():
-    man = MultiAgentNavigator()
-
-    condition = EventCondition('signal/wait2_finished')
-    wait_action_3 = Wait(
-        id='wait3',
-        finished_emit_signal='wait3_finished',
-        conditions=[
-            condition
-        ],
-    )
-    wait_action_3.initialize(man)
-
-    def test():
-        man.bus.publish("signal/wait2_finished", "data")
-
-    # setTimeout(condition.events.satisfied.set, 1)
-    setTimeout(test, 2)
-    time.sleep(10)
-    wait_action_3.run()
-
-
-def test_abort_action():
-    man = MultiAgentNavigator()
-
-    wait_action_3 = Wait(
-        id='wait3',
-        finished_emit_signal='wait3_finished',
-        abort_signal='abort_signal',
-        conditions=[
-            EventCondition('signal/wait2_finished')
-        ],
-    )
-
-    def emit_abort():
-        man.bus.publish('abort_signal', 'abort')
-
-    def emit_right_signal():
-        man.bus.publish('signal/wait2_finished', 'data')
-
-    setTimeout(emit_right_signal, 1)
-
-    wait_action_3.initialize(man)
-    result = wait_action_3.run()
-    print(result)
-
-
 if __name__ == '__main__':
-    test_abort_action()
-    # print("X")
-    # navigator = MultiAgentNavigator()
-    #
-    # event_condition = EventCondition("event1")
-    # event_condition.attach(navigator.bus)
-    #
-    # all_of = AllOf(['event1', 'event2', Timeout(12)])
-    # all_of.attach(navigator.bus)
-    #
-    # setTimeout(
-    #     lambda: navigator.bus.publish("event1", "data"),
-    #     5,
-    # )
-    #
-    # setTimeout(
-    #     lambda: navigator.bus.publish("event2", "data"),
-    #     7,
-    # )
-    # while True:
-    #     time.sleep(1)
-    #     print("tick")
+    ...

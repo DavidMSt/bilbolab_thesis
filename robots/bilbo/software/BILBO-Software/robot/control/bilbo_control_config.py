@@ -6,7 +6,7 @@ from robot.control.bilbo_control_data import BILBO_ControlConfig, BILBO_Control_
     ExternalInputsConfig, TWIPR_Balancing_Control_Config, TIC_Config, VIC_Config
 from core.utils.json_utils import writeJSON, readJSON
 from core.utils.dataclass_utils import asdict_optimized, from_dict
-from robot.settings import control_config_path
+from robot.paths import CONTROL_PATH
 
 config_bilbo_normal = BILBO_ControlConfig(
     name='default_normal',
@@ -170,10 +170,10 @@ config_bilbo_small = BILBO_ControlConfig(
 
 def load_config(name: str) -> BILBO_ControlConfig:
     # Check if the file exists
-    if not fileExists(f"{control_config_path}{name}.json"):
-        raise FileNotFoundError(f"Config file '{name}.json' not found in '{control_config_path}'")
+    if not fileExists(f"{CONTROL_PATH}{name}.json"):
+        raise FileNotFoundError(f"Config file '{name}.json' not found in '{CONTROL_PATH}'")
 
-    control_config_dict = readJSON(f"{control_config_path}{name}.json")
+    control_config_dict = readJSON(f"{CONTROL_PATH}{name}.json")
 
     return from_dict(BILBO_ControlConfig, control_config_dict)
 
@@ -192,9 +192,9 @@ def generate_default_config(model: str):
 
 
     config_dict = asdict_optimized(config)
-    file = f"{control_config_path}default.json"
+    file = f"{CONTROL_PATH}default.json"
     writeJSON(file, config_dict)
-    print(f"Config file 'default.json' generated in '{control_config_path}'")
+    print(f"Config file 'default.json' generated in '{CONTROL_PATH}'")
 
 
 if __name__ == '__main__':

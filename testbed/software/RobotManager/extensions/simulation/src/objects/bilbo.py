@@ -26,19 +26,19 @@ DEFAULT_SAMPLE_TIME = 0.01
 
 @dataclasses.dataclass
 class BilboModel:
-    m_b: float
-    m_w: float
-    l: float
-    d_w: float
-    I_w: float
-    I_y: float
-    I_x: float
-    I_z: float
-    c_alpha: float
-    r_w: float
-    tau_theta: float
-    tau_x: float
-    max_pitch: float
+    m_b: float  # Mass of body
+    m_w: float  # Mass of wheels
+    l: float  # COG position
+    d_w: float  # Distance between of the wheels
+    I_w: float  # Inertia of the wheels
+    I_y: float  # Inertia of the body
+    I_x: float # Inertia of the body
+    I_z: float  # Inertia of the body
+    c_alpha: float  # Drag coefficient, speed dependent
+    r_w: float  # Radius of the wheels
+    tau_theta: float  # Drag coefficient, theta dependent
+    tau_x: float  # Drag coefficient, speed dependent
+    max_pitch: float  # Max pitch for floor contact
 
 
 DEFAULT_BILBO_MODEL = BilboModel(

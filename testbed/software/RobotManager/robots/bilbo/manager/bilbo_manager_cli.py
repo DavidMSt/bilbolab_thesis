@@ -25,7 +25,7 @@ class BILBO_Manager_CommandSet(CommandSet):
     def _list_robots(self):
         output = ""
         for robot in self.bilbo_manager.robots.values():
-            output += f"{robot.id} \t {robot.device.information.revision} \n"
+            output += f"{robot.id} \t {robot.device.config.revision} \n"
 
         if output == "":
             output = "No robots connected"

@@ -10,7 +10,7 @@ from typing import Callable
 from robot.bilbo_definitions import BILBO_DynamicState
 # === OWN PACKAGES =====================================================================================================
 from robot.core import set_logging_provider, LoggingProvider, get_main_provider
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from robot.drive.bilbo_drive import BILBO_Drive
@@ -29,8 +29,7 @@ from core.utils.logging_utils import Logger
 from core.utils.h5 import H5PyDictLogger
 from core.utils.exit import register_exit_callback
 from core.utils.delayed_executor import delayed_execution
-from robot.settings import experiments_path
-
+from robot.paths import EXPERIMENTS_PATH
 # === GLOBAL SETTINGS ==================================================================================================
 SAMPLE_TIMEOUT_TIME = 0.5
 
@@ -51,7 +50,7 @@ class BILBO_Logging_Events:
 
 # === BILBO Logging ====================================================================================================
 class BILBO_Logging(LoggingProvider):
-    core: BILBO_Core
+    core: BILBO_Common
     comm: BILBO_Communication
     control: BILBO_Control
     sensors: BILBO_Sensors
@@ -81,7 +80,7 @@ class BILBO_Logging(LoggingProvider):
 
     # === INIT =========================================================================================================
     def __init__(self,
-                 core: BILBO_Core,
+                 core: BILBO_Common,
                  comm: BILBO_Communication,
                  control: BILBO_Control,
                  sensors: BILBO_Sensors,

@@ -3,6 +3,7 @@ import os
 import sys
 import time
 
+from applications.BILBO.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
 from core.utils.callbacks import Callback
 from robots.bilbo.robot.bilbo import BILBO
 
@@ -36,20 +37,22 @@ ENABLE_SPEECH_OUTPUT = True
 
 # ======================================================================================================================
 class BILBO_Application:
-    robot_manager: BILBO_Manager
-    tracker: BILBO_Tracker
+    manager: BILBO_TestbedManager
 
     soundsystem: SoundSystem
 
     def __init__(self):
-        self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
+        # self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
+        #
+        # # self.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
+        # self.robot_manager.callbacks.new_robot.register(self._newRobot_callback)
+        # self.robot_manager.callbacks.robot_disconnected.register(self._robotDisconnected_callback)
 
-        # self.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
-        self.robot_manager.callbacks.new_robot.register(self._newRobot_callback)
-        self.robot_manager.callbacks.robot_disconnected.register(self._robotDisconnected_callback)
+        self.manager = BILBO_TestbedManager()
+        self.manager.events.new_robot.on(self._newRobot_callback)
+        # self.manager.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
 
-        # Joystick Control
-        self.joystick_control = BILBO_JoystickControl(bilbo_manager=self.robot_manager, run_in_thread=True)
+
 
         # CLI
         self.cli = CLI(id='bilbo_app_cli')
@@ -63,11 +66,12 @@ class BILBO_Application:
         self.soundsystem.start()
 
         # GUI
-        self.gui = BILBO_Application_GUI(host=self.robot_manager.host,
+        self.gui = BILBO_Application_GUI(host=self.manager.robot_manager.host,
+                                         testbed_manager=self.manager,
                                          cli=self.cli,
-                                         joystick_control=self.joystick_control,)
+                                         joystick_control=self.manager.joystick_control)
 
-        self.gui.callbacks.emergency_stop.register(self.robot_manager.emergencyStop)
+        self.gui.callbacks.emergency_stop.register(self.manager.emergency_stop)
 
         # Exit Handling
         register_exit_callback(self.close)
@@ -76,19 +80,16 @@ class BILBO_Application:
     def init(self):
         setLoggerLevel(logger=['tcp', 'server', 'UDP', 'UDP Socket', 'Sound'], level=logging.WARNING)
 
-        self.robot_manager.init()
-        self.joystick_control.init()
+        self.manager.init()
 
-        self.cli.root.addChild(self.robot_manager.cli)
-        self.cli.root.addChild(self.joystick_control.cli_command_set)
+        self.cli.root.addChild(self.manager.robot_manager.cli)
+        self.cli.root.addChild(self.manager.joystick_control.cli_command_set)
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        # self.cli_server.start()
-        self.joystick_control.start()
         self.logger.info('Starting Bilbo application')
         speak('Start Bilbo application')
-        self.robot_manager.start()
+        self.manager.start()
         self.gui.start()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -100,24 +101,20 @@ class BILBO_Application:
         ENABLE_SPEECH_OUTPUT = False
 
     # ==================================================================================================================
-    def _newRobot_callback(self, bilbo: BILBO, *args, **kwargs):
-        if ENABLE_SPEECH_OUTPUT:
-            speak(f"Robot {bilbo.id} connected")
+    def _newRobot_callback(self, bilbo: BILBO_TestbedAgent, *args, **kwargs):
 
         # Wait until the first sample is received
-        if not bilbo.core.initialized:
-            bilbo.core.events.initialized.on(callback=Callback(function=self.gui.addRobot,
-                                                               inputs={'robot': bilbo},
+        if not bilbo.robot.core.initialized:
+            bilbo.robot.core.events.initialized.on(callback=Callback(function=self.gui.addRobot,
+                                                               inputs={'robot': bilbo.robot},
                                                                discard_inputs=True),
                                              once=True,
                                              discard_data=True)
         else:
-            self.gui.addRobot(bilbo)
+            self.gui.addRobot(bilbo.robot)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _robotDisconnected_callback(self, bilbo, *args, **kwargs):
-        if ENABLE_SPEECH_OUTPUT:
-            speak(f"Robot {bilbo.id} disconnected")
         self.gui.removeRobot(bilbo)
 
 

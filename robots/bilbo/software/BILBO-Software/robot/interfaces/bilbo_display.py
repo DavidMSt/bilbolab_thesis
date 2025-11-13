@@ -3,7 +3,7 @@ import time
 from core.utils.events import EventListener
 from core.utils.exit import register_exit_callback
 from core.utils.network import get_wifi_ssid, check_internet, getSignalStrength
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.logging.bilbo_sample import BILBO_Sample
 from robot.utilities.display.display import Display
 from robot.utilities.display.pages import StatusPage
@@ -13,12 +13,12 @@ from robot.utilities.display.pages import StatusPage
 class BILBO_Display:
     display: Display
 
-    core: BILBO_Core
+    core: BILBO_Common
 
     _display_started: bool = False
 
     # === INIT =========================================================================================================
-    def __init__(self, core: BILBO_Core):
+    def __init__(self, core: BILBO_Common):
         self.core = core
         self.display = Display()
 
@@ -58,10 +58,10 @@ class BILBO_Display:
             level = 'empty'
         self.status_page.set_battery(level, battery_voltage)
 
-        information = self.core.information
+        config = self.core.config
 
-        self.status_page.set_ip_address(information.address)
-        self.status_page.set_user_and_hostname(information.username, information.id)
+        self.status_page.set_ip_address(config.network.address)
+        self.status_page.set_user_and_hostname(config.network.username, config.general.id)
         self.status_page.set_ssid(get_wifi_ssid())
 
         self.status_page.set_internet_status(check_internet(timeout=1))

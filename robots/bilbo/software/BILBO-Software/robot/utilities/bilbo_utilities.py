@@ -3,9 +3,8 @@ from typing import Union
 from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import Callback
 from hardware.control_board import RobotControl_Board
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.hardware import readHardwareDefinition
 from core.utils.events import event_definition, Event
 from core.utils.sound.sound import SoundSystem
 
@@ -18,18 +17,19 @@ class BILBO_Utilities_Events:
 # ======================================================================================================================
 class BILBO_Utilities:
     sound_system: Union[SoundSystem, None]
-    core: BILBO_Core
+    core: BILBO_Common
 
     board: RobotControl_Board
 
-    def __init__(self, core: BILBO_Core, board: RobotControl_Board, communication: BILBO_Communication):
-        hardware_definition = readHardwareDefinition()
+    def __init__(self, core: BILBO_Common, board: RobotControl_Board, communication: BILBO_Communication):
 
         self.core = core
         self.board = board
 
-        if hardware_definition.electronics.sound.active:
-            self.sound_system = SoundSystem(hardware_definition.electronics.sound.gain * 0.2)
+        config = self.core.config
+
+        if config.electronics.sound.active:
+            self.sound_system = SoundSystem(config.electronics.sound.gain, add_robot_filter=False)
         else:
             self.sound_system = None
 

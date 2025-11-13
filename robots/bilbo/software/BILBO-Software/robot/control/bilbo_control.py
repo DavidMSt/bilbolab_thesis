@@ -1,6 +1,6 @@
 from core.utils.dataclass_utils import from_dict, asdict_optimized
 from core.utils.dict_utils import format_floats
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common, error_handler
 from robot.communication.serial.bilbo_serial_messages import BILBO_Control_Event_Message
 from robot.control.bilbo_control_config import load_config
 # Importing low-level sample class from STM32 interface
@@ -93,7 +93,7 @@ class BILBO_Control:
     # _updateTimer: IntervalTimer = IntervalTimer(0.1)
 
     # === INIT =========================================================================================================
-    def __init__(self, core: BILBO_Core, comm: BILBO_Communication):
+    def __init__(self, core: BILBO_Common, comm: BILBO_Communication):
         """
         Initialize the BILBO_Control instance.
 

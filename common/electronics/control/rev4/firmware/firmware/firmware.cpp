@@ -112,7 +112,9 @@ void firmware_update() {
 		timer_led_update = 0;
 		updateInternRGBLEDsFromRegisters();
 		updateStatusLEDFromRegisters();
+		update_external_rgb_led();
 
+//
 		neopixel_extern.update();
 		neopixel_extern.send();
 		HAL_Delay(10);
@@ -190,7 +192,6 @@ void updateInternRGBLEDsFromRegisters() {
 			register_map[REG_STATUS_RGB_LED_3_BLINK_TIME],
 			register_map[REG_STATUS_RGB_LED_3_BLINK_COUNTER]);
 
-	set_external_rgb_led();
 
 	register_map[REG_STATUS_RGB_LED_1_BLINK_COUNTER] = 0;
 	register_map[REG_STATUS_RGB_LED_2_BLINK_COUNTER] = 0;
@@ -214,7 +215,7 @@ void updateBuzzerFromRegisters() {
 
 }
 
-void set_external_rgb_led() {
+void update_external_rgb_led() {
 	for (int i = 0; i < 16; ++i) {
 		uint16_t base = REG_EXTERNAL_RGB_LED_1_CONFIG + (i * 6);
 		uint8_t r = register_map[base + 1]; // RED

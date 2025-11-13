@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "gizmo_symbols")(type "KiCad")(uri "${KIPRJMOD}/gizmo_symbols.pretty")(options "")(descr ""))
+)

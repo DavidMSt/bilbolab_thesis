@@ -13,7 +13,7 @@ from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 from robots.bilbo.robot.bilbo_data import bilboSampleFromDict
 from core.utils.callbacks import CallbackContainer, callback_definition, Callback
-from core.utils.events import event_definition, Event, EventListener, pred_flag_contains
+from core.utils.events import event_definition, Event, pred_flag_contains, SubscriberListener
 from core.utils.exit import register_exit_callback
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robots.bilbo.robot.bilbo_utilities import BILBO_Utilities
@@ -44,7 +44,7 @@ class BILBO_Interfaces:
     joystick_thread: threading.Thread | None
     _exit_joystick_thread: bool
 
-    _joystick_event_listeners: list[EventListener]
+    _joystick_event_listeners: list[SubscriberListener]
 
     # ------------------------------------------------------------------------------------------------------------------
     def __init__(self, core: BILBO_Core,

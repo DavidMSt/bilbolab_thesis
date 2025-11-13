@@ -3,7 +3,7 @@ import dataclasses
 import numpy as np
 
 from robots.bilbo.robot.bilbo_data import BILBO_DynamicState
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_Information, BILBO_ControlConfig
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_Config, BILBO_ControlConfig
 
 INPUT_TRAJECTORY_FILE_EXTENSION = '.bitrj'
 EXPERIMENT_FILE_EXTENSION = '.biexp'
@@ -59,7 +59,7 @@ class BILBO_OutputTrajectory:
 @dataclasses.dataclass
 class BILBO_TrajectoryExperimentMeta:
     robot_id: str
-    robot_information: BILBO_Information
+    robot_config: BILBO_Config
     control_config: BILBO_ControlConfig
     description: str
     software_revision: str
@@ -112,6 +112,7 @@ class BILBO_InputFileData:
 class BILBO_TrajectoryExperimentFile:
     data: BILBO_TrajectoryExperiment
 
+
 # ======================================================================================================================
 
 @dataclasses.dataclass
@@ -120,6 +121,7 @@ class BILBO_SystemIdentificationData:
 
 
 BILBO_SYSTEM_ID_FILE_EXTENSION = '.bid'
+
 
 @dataclasses.dataclass
 class BILBO_SystemIdentificationFile:

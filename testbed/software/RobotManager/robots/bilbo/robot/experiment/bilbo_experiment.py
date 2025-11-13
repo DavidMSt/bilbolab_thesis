@@ -9,6 +9,7 @@ import threading
 from dataclasses import asdict
 import numpy as np
 from dacite import Config
+from matplotlib.collections import EventCollection
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.dataclass_utils import from_dict, from_dict_auto
@@ -19,12 +20,12 @@ from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from core.utils.data import generate_time_vector, generate_random_input, resample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_CONTROL_DT, MAX_STEPS_TRAJECTORY
-from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals, waitForEvents
+from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals, wait_for_events, OR, TIMEOUT, \
+    EventContainer
 from core.utils.plotting import UpdatablePlot
 from core.utils.sound.sound import speak, playSound
 from core.utils.ilc.ILC_DAMN_bib import noilc_self_para_v2, noilc_design, lift_vec2mat, \
     plot_bilbo_ilc_progression, generate_q_filter
-from core.utils.archives.events import pred_flag_key_equals
 from core.utils.colors import get_shaded_color
 from core.utils.ilc.ILC_DAMN_bib import reference as ilc_reference
 from robots.bilbo.robot.experiment.definitions import BILBO_InputTrajectory, BILBO_InputTrajectoryStep, \
@@ -43,7 +44,7 @@ class BILBO_Experiment_Status(enum.StrEnum):
 
 
 @event_definition
-class BILBO_Experiment_Events:
+class BILBO_Experiment_Events(EventContainer):
     started: Event
     finished: Event
     aborted: Event
@@ -160,7 +161,7 @@ class BILBO_ExperimentHandler:
 
         self.events = BILBO_Experiments_Events()
         self.device.events.event.on(self._trajectory_event_callback,
-                                    predicate=pred_flag_key_equals('event', 'trajectory')
+                                    predicate=pred_flag_equals('event', 'trajectory')
                                     )
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -217,25 +218,22 @@ class BILBO_ExperimentHandler:
         )
 
         # Wait for either "finished" or "aborted" for this trajectory id
-        res = waitForEvents(
-            events=[self.events.ll_trajectory_finished, self.events.ll_trajectory_aborted],
-            predicates=[pred_flag_key_equals('trajectory_id', trajectory.id), None],
-            wait_for_all=False,
+
+        data, result = wait_for_events(
+            events=
+            OR((self.events.ll_trajectory_finished, pred_flag_equals('trajectory_id', int(trajectory.id))),
+                self.events.ll_trajectory_aborted),
             timeout=float(trajectory.time_vector[-1] + 5.0),
-            stale_event_time=0.5,  # catch just-before waits
+            stale_event_time=0.5,
         )
 
-        if res.timeout or not res.ok:
+        if data is TIMEOUT:
             self.logger.error(f"Trajectory \"{trajectory.name}\" failed due to timeout")
             return None
 
-        if res.first and res.first.event is self.events.ll_trajectory_aborted:
+        if result.caused_by(self.events.ll_trajectory_aborted):
             self.logger.error(f"Trajectory \"{trajectory.name}\" aborted")
             return None
-
-        # Finished: use the exact snapshot payload from the matched event
-        finished_match = res.first  # first is the finished event here
-        data = (finished_match.data if finished_match else self.events.ll_trajectory_finished.getData()) or {}
 
         output_data_dict: dict | None = data.get('data', None)
 
@@ -292,7 +290,8 @@ class BILBO_ExperimentHandler:
                 self._loadedTrajectory = None
                 # self.status = BILBO_ExperimentHandler_Status.IDLE
                 self.events.ll_trajectory_finished.set(data=message.data,
-                                                       flags={'trajectory_id': message.data['trajectory_id']})
+                                                       flags={'trajectory_id': int(message.data['trajectory_id'])})
+
                 self.events.status_changed.set(data=self.status, flags={'status': self.status})
 
             case 'started':

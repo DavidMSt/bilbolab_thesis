@@ -5,9 +5,10 @@ import enum
 import numpy as np
 
 import robot.lowlevel.stm32_addresses as addresses
-from robot.bilbo_definitions import BILBO_DynamicState
+from robot.bilbo_common import BILBO_Common
+from robot.bilbo_definitions import BILBO_DynamicState, BILBO_ConfigurationState
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.hardware import readHardwareDefinition
+from robot.estimation.optitrack_tracker import BILBO_OptiTrackListener
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 from core.utils.logging_utils import Logger
 
@@ -17,16 +18,11 @@ class TWIPR_Estimation_Status(enum.IntEnum):
     NORMAL = 1,
 
 
-class TWIPR_Estimation_Mode(enum.IntEnum):
-    TWIPR_ESTIMATION_MODE_VEL = 0,
-    TWIPR_ESTIMATION_MODE_POS = 1
-
-
 @dataclasses.dataclass(frozen=True)
 class TWIPR_Estimation_Sample:
     status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.ERROR
     state: BILBO_DynamicState = dataclasses.field(default_factory=BILBO_DynamicState)
-    mode: TWIPR_Estimation_Mode = TWIPR_Estimation_Mode.TWIPR_ESTIMATION_MODE_VEL
+    state_optitrack: BILBO_ConfigurationState | None = dataclasses.field(default_factory=BILBO_ConfigurationState)
 
 
 # ======================================================================================================================
@@ -36,15 +32,17 @@ class BILBO_Estimation:
 
     state: BILBO_DynamicState
     status: TWIPR_Estimation_Status
+    tracker: BILBO_OptiTrackListener
 
-    mode: TWIPR_Estimation_Mode
-
-    def __init__(self, comm: BILBO_Communication):
+    def __init__(self, common: BILBO_Common, comm: BILBO_Communication):
         self._comm = comm
-
+        self.common = common
         self.state = BILBO_DynamicState()
+
+        self.tracker = BILBO_OptiTrackListener(common=self.common)
+
         self.status = TWIPR_Estimation_Status.NORMAL
-        self.mode = TWIPR_Estimation_Mode.TWIPR_ESTIMATION_MODE_VEL
+        self._comm.events.rx_stm32_sample.on(self._onSample)
         # self._comm.callbacks.rx_stm32_sample.register(self._onSample)
 
         self.logger = Logger('Estimation')
@@ -52,22 +50,34 @@ class BILBO_Estimation:
 
     # ==================================================================================================================
     def init(self):
-        hardware_definition = readHardwareDefinition()
-        theta_offset = hardware_definition.model.theta_offset
+        theta_offset = self.common.config.model.theta_offset
         self.setThetaOffset(theta_offset)
+        self.tracker.init()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getSample(self) -> TWIPR_Estimation_Sample:
+    def start(self):
+        self.tracker.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def getSample(self) -> TWIPR_Estimation_Sample | dict:
         # sample = TWIPR_Estimation_Sample(
         #     mode=self.mode,
         #     status=self.status,
         #     state=self.state
         # )
+        tracker_state = self.tracker.get_state()
+
+        if tracker_state is None:
+            tracker_state = BILBO_ConfigurationState()
+
+        tracker_state = dataclasses.asdict(tracker_state)
+
         sample = {
-            'mode': self.mode,
             'status': self.status,
-            'state': dataclasses.asdict(self.state)
+            'state': dataclasses.asdict(self.state),
+            'state_optitrack': tracker_state,
         }
+
         return sample
 
     # ------------------------------------------------------------------------------------------------------------------

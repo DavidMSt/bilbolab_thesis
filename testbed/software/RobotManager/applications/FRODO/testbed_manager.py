@@ -312,7 +312,7 @@ class FRODO_TestbedManager:
             return None
 
         if measured_object is None:
-            self.logger.warning(f"Object {measurement.measured_aruco_id} does not exist")
+            # self.logger.warning(f"Object {measurement.measured_aruco_id} does not exist")
             return None
 
         # 1. Convert the measurement into a VisionMeasurement

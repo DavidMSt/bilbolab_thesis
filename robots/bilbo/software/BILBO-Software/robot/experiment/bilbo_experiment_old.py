@@ -278,7 +278,7 @@ class BILBO_ExperimentHandler:
 
         output_signals = {}
         if signals is not None:
-            output_signals = self.logging.getData(
+            output_signals = self.logging.get_data(
                 signals=signals,
                 index_start=start_tick,
                 index_end=end_tick

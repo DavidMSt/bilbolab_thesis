@@ -685,6 +685,7 @@ export class App {
 
     // -----------------------------------------------------------------------------------------------------------------
     onWsMessage(msg) {
+        console.log('Received message:', msg);
         switch (msg.type) {
             case 'init':
                 this.initializeContent(msg);
@@ -698,7 +699,6 @@ export class App {
             case 'update':
                 console.warn('This is deprecated!!!')
                 console.log('Received update message:', msg);
-                this._update(msg);
                 break;
             case 'gui_update':
                 this._handleGuiUpdate(msg);
@@ -710,6 +710,9 @@ export class App {
                 this._handleRemoveMessage(msg);
                 break;
             case 'widget_message':
+                this._handleMessageForWidget(msg);
+                break;
+            case 'object_message':
                 this._handleMessageForWidget(msg);
                 break;
             default:

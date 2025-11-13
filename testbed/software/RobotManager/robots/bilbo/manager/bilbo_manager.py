@@ -1,9 +1,8 @@
 from core.communication.device_server import DeviceServer, Device
 from core.communication.protocol import JSON_Message
-from core.utils.archives.events import pred_flag_key_equals
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.dataclass_utils import from_dict
-from core.utils.events import event_definition, Event
+from core.utils.dataclass_utils import from_dict, from_dict_auto
+from core.utils.events import event_definition, Event, pred_flag_equals
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
@@ -12,7 +11,7 @@ from extensions.cli.cli import CommandSet
 from robots.bilbo.manager.bilbo_manager_cli import BILBO_Manager_CommandSet
 from robots.bilbo.manager.bilbo_scanner import BILBO_NetworkScanner
 from robots.bilbo.robot.bilbo import BILBO
-from robots.bilbo.robot.bilbo_definitions import (BILBO_Information, BILBO_HOST_NAMES, BILBO_USER_NAME,
+from robots.bilbo.robot.bilbo_definitions import (BILBO_Config, BILBO_HOST_NAMES, BILBO_USER_NAME,
                                                   BILBO_PASSWORD, PATH_TO_MAIN, PYENV_SHIM_PATH)
 
 
@@ -67,10 +66,10 @@ class BILBO_Manager:
         # self.device_server.events.new_device.on(flags={'type': 'bilbo'}, callback=self._newDevice_event)
 
         self.device_server.events.new_device.on(callback=self._newDevice_event,
-                                                predicate=pred_flag_key_equals('type', 'bilbo'))
+                                                predicate=pred_flag_equals('type', 'bilbo'))
 
         self.device_server.events.device_disconnected.on(callback=self._deviceDisconnected_event,
-                                                         predicate=pred_flag_key_equals('type', 'bilbo'))
+                                                         predicate=pred_flag_equals('type', 'bilbo'))
 
         # Scanner
         if enable_scanner:
@@ -106,7 +105,7 @@ class BILBO_Manager:
 
         if self.autostop_robots:
             for robot in self.robots.values():
-                self._stopBilboRemotely(robot.information.id, robot.information.address)
+                self._stopBilboRemotely(robot.config.id, robot.config.address)
 
     # ------------------------------------------------------------------------------------------------------------------
     def emergencyStop(self):
@@ -147,27 +146,27 @@ class BILBO_Manager:
         # Check if the event is a BILBO handshake. Only then do we accept it as a BILBO
         if event_message.event == 'bilbo_handshake':
             try:
-                bilbo_information = from_dict(BILBO_Information, event_message.data)
+                bilbo_config = from_dict_auto(BILBO_Config, event_message.data)
             except Exception as e:
                 self.logger.error(f"Error in bilbo handshake: {e}. Message: {event_message}")
                 return
 
             # Check if this device is already registered
-            if bilbo_information.id in self.robots:
-                self.logger.warning(f"Device with ID {bilbo_information.id} already registered")
+            if bilbo_config.general.id in self.robots:
+                self.logger.warning(f"Device with ID {bilbo_config.general.id} already registered")
                 return
 
-            self._addNewBilbo(device, bilbo_information)
+            self._addNewBilbo(device, bilbo_config)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _addNewBilbo(self, device: Device, information: BILBO_Information):
+    def _addNewBilbo(self, device: Device, config: BILBO_Config):
 
         # Remove the callback for the event
         device.callbacks.event.remove(self._deviceEvent_callback)
 
         # Create a new BILBO robot
-        new_robot = BILBO(device, information)
-        self.robots[information.id] = new_robot
+        new_robot = BILBO(device, config)
+        self.robots[config.general.id] = new_robot
 
         # Add the robot's CLI command set
         self.cli.addChild(new_robot.interfaces.cli_command_set)
@@ -176,7 +175,7 @@ class BILBO_Manager:
         self.callbacks.new_robot.call(new_robot)
         self.events.new_robot.set(data=new_robot)
 
-        self.logger.info(f"New Bilbo \"{information.id}\" connected")
+        self.logger.info(f"New Bilbo \"{config.general.id}\" connected")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _removeBilbo(self, robot: BILBO):

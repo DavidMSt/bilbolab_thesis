@@ -571,25 +571,35 @@ if __name__ == '__main__':
             covariance=CovarianceModel(
                 # x-position uncertainties
                 x=ErrorModel(
-                    distance=ErrorModelSingleParam(baseline=0.02, gain_1=0.02, gain_2=0.12, corner=1.2),
-                    bearing=ErrorModelSingleParam(baseline=0.00, gain_1=0.02, gain_2=1, corner=np.deg2rad(30)),
-                    psi=ErrorModelSingleParam(baseline=0.00, gain_1=0.02, gain_2=0.5, corner=np.deg2rad(45)),
-                    v=ErrorModelSingleParam(baseline=0.00, gain_1=0.3, gain_2=None, corner=None),
-                    psi_dot=ErrorModelSingleParam(baseline=0.00, gain_1=0.05, gain_2=0.2, corner=np.deg2rad(45.0)),
+                    distance=ErrorModelSingleParam(baseline=0.02, gain_1=0.1, gain_2=0.75, corner=1.5),
+
+                    bearing=ErrorModelSingleParam(baseline=0.00, gain_1=0.25, gain_2=None, corner=None),
+
+                    psi=ErrorModelSingleParam(baseline=0.00, gain_1=0.1 / np.deg2rad(45), gain_2=0.5 / np.deg2rad(45),
+                                              corner=np.deg2rad(45)),
+
+                    v=ErrorModelSingleParam(baseline=0.00, gain_1=0.1 / 0.2, gain_2=None, corner=None),
+
+                    psi_dot=ErrorModelSingleParam(baseline=0.00, gain_1=0.2 / np.deg2rad(45), gain_2=None,
+                                                  corner=None),
                 ),
 
                 # y-position uncertainties (often a bit worse near edges)
                 y=ErrorModel(
-                    distance=ErrorModelSingleParam(baseline=0.02, gain_1=0.02, gain_2=0.12, corner=1.2),
-                    bearing=ErrorModelSingleParam(baseline=0.00, gain_1=0.01, gain_2=1, corner=np.deg2rad(45)),
-                    psi=ErrorModelSingleParam(baseline=0.00, gain_1=0.00, gain_2=1, corner=1),
-                    v=ErrorModelSingleParam(baseline=0.00, gain_1=0.3, gain_2=None, corner=None),
-                    psi_dot=ErrorModelSingleParam(baseline=0.00, gain_1=0.1, gain_2=0.4, corner=np.deg2rad(45.0)),
+                    distance=ErrorModelSingleParam(baseline=0.02, gain_1=0.1, gain_2=0.75, corner=1.5),
+                    bearing=ErrorModelSingleParam(baseline=0.00, gain_1=0.25, gain_2=None, corner=None),
+
+                    psi=ErrorModelSingleParam(baseline=0.00, gain_1=0.1 / np.deg2rad(45), gain_2=0.5 / np.deg2rad(45),
+                                              corner=np.deg2rad(45)),
+
+                    v=ErrorModelSingleParam(baseline=0.00, gain_1=0.1 / 0.2, gain_2=None, corner=None),
+                    psi_dot=ErrorModelSingleParam(baseline=0.00, gain_1=0.2 / np.deg2rad(45), gain_2=None,
+                                                  corner=None),
                 ),
 
                 # angular uncertainties (radians)
                 psi=ErrorModel(
-                    distance=ErrorModelSingleParam(baseline=0.01, gain_1=0.02, gain_2=0.12, corner=1.2),
+                    distance=ErrorModelSingleParam(baseline=np.deg2rad(5), gain_1=0.02, gain_2=0.12, corner=1.2),
                     bearing=ErrorModelSingleParam(baseline=0.00, gain_1=0.01, gain_2=1, corner=np.deg2rad(45)),
                     psi=ErrorModelSingleParam(baseline=0.00, gain_1=0.00, gain_2=1, corner=1),
                     v=ErrorModelSingleParam(baseline=0.00, gain_1=0.3, gain_2=None, corner=None),
@@ -597,6 +607,7 @@ if __name__ == '__main__':
                 ),
             ))
     )
+
     # analyze_measurement_model(model, 'x')
 
     measurement_model_to_file(model, './model.yaml')

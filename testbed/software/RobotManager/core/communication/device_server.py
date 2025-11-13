@@ -14,6 +14,7 @@ from core.utils.dataclass_utils import asdict_optimized, from_dict
 from core.utils.events import event_definition, Event, EventFlag
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
+from core.utils.time import precise_sleep
 from core.utils.websockets import WebsocketServer, WebsocketServerClient
 
 # ======================================================================================================================
@@ -255,6 +256,7 @@ class Device:
         while not self._exit:
             message = self.client.rx_queue.get()
             self._rxMessageCallback(message)
+            precise_sleep(0.001)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _send(self, message: JSON_Message):
@@ -294,6 +296,9 @@ class Device:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleEventMessage(self, message: JSON_Message):
+        if message.event != 'log':
+            if message.event == 'control':
+                self.logger.important(f"Received event message: {message.data['event']}")
         self.callbacks.event.call(message)
         self.events.event.set(data=message, flags={'event': message.event})
 

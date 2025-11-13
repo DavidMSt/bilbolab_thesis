@@ -272,7 +272,7 @@ class IdeenExpoManager:
                     # Check if it is assigned to another robot in the list of robots
                     if joystick_id in self.joystick_assignments.keys():
                         connected_robot_id = self.joystick_assignments[joystick_id][
-                            'robot'].device.information.device_id
+                            'robot'].device.config.device_id
 
                         if connected_robot_id == robot_id:
                             # Do nothing, we have already assigned this robot

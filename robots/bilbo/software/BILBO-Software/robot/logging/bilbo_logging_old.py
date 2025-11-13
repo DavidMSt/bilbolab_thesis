@@ -7,7 +7,7 @@ import threading
 from typing import Callable
 
 # === OWN PACKAGES =====================================================================================================
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from robot.drive.bilbo_drive import BILBO_Drive
@@ -41,7 +41,7 @@ class BILBO_Logging_Callbacks:
 
 # === BILBO Logging ====================================================================================================
 class BILBO_Logging:
-    core: BILBO_Core
+    core: BILBO_Common
     comm: BILBO_Communication
     control: BILBO_Control
     sensors: BILBO_Sensors
@@ -63,7 +63,7 @@ class BILBO_Logging:
     _rx_stm32_event_listener: EventListener
 
     def __init__(self,
-                 core: BILBO_Core,
+                 core: BILBO_Common,
                  comm: BILBO_Communication,
                  control: BILBO_Control,
                  sensors: BILBO_Sensors,

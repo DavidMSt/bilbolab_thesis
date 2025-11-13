@@ -1,11 +1,12 @@
 import dataclasses
 import threading
+import time
 
 import numpy as np
 
 from applications.FRODO.algorithm.algorithm_centralized import CentralizedAgent
 from applications.FRODO.algorithm.algorithm_distributed import DistributedAgent
-from applications.FRODO.navigation.multi_agent_navigator import MultiAgentNavigator
+from applications.FRODO.navigation.multi_agent_navigator import MultiAgentNavigator, NavigatorPlan
 from applications.FRODO.navigation.navigator import NavigatedObject
 from applications.FRODO.navigation.utilities import FRODO_Real_NavigatedObject, FRODO_Sim_NavigatedObject
 from applications.FRODO.testbed_manager import TestbedObject_FRODO, TestbedObject_STATIC, FRODO_TestbedManager, \
@@ -14,6 +15,8 @@ from applications.FRODO.simulation.frodo_simulation import FRODO_VisionAgent, FR
     FRODO_VisionAgent_Config
 from applications.FRODO.tracker.frodo_tracker import FRODO_Tracker
 from core.utils.events import Event, event_definition, EventFlag
+from core.utils.exit import register_exit_callback
+from core.utils.files import fileExists
 from core.utils.logging_utils import Logger
 from core.utils.states import State
 from robots.frodo.frodo import FRODO
@@ -120,7 +123,6 @@ class SimulatedStaticContainer(StaticContainer):
 
 @event_definition
 class FRODO_AgentManager_Events:
-    initialized: Event
     update: Event
     error: Event  # Error coming from one of the real agents or the testbed manager
     new_agent: Event = Event(copy_data_on_set=False, flags=[EventFlag('id', str), EventFlag('type', str)])
@@ -140,6 +142,8 @@ class FRODO_AgentManager:
     navigator: MultiAgentNavigator
 
     _agent_lock: threading.Lock
+    _exit: bool = False
+    _thread: threading.Thread
 
     # === INIT =========================================================================================================
     def __init__(self,
@@ -167,6 +171,9 @@ class FRODO_AgentManager:
         self.logger = Logger('AgentManager', 'DEBUG')
         self._agent_lock = threading.Lock()
 
+        self._thread = threading.Thread(target=self._task, daemon=True)
+        register_exit_callback(self.close)
+
     # === PROPERTIES ===================================================================================================
     @property
     def real_agents(self) -> dict[str, RealAgentContainer]:
@@ -186,7 +193,14 @@ class FRODO_AgentManager:
 
     # === METHODS ======================================================================================================
     def start(self):
-        ...
+        self.logger.warning("This starts the agent manager in a separate thread. This is for debug purposes only.")
+        self._thread.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def close(self, *args, **kwargs):
+        self._exit = True
+        if self._thread.is_alive():
+            self._thread.join()
 
     # ------------------------------------------------------------------------------------------------------------------
     def reset(self):
@@ -354,3 +368,17 @@ class FRODO_AgentManager:
             del self.statics[static.id]
             self.logger.info(f"Removed real static {static.id} from agent manager")
             self.events.removed_static.set(static, flags={'type': 'real', 'id': static.id})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _task(self):
+        while not self._exit:
+            self.update()
+            time.sleep(0.05)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_plan_from_file(self, plan_file):
+        if not fileExists(plan_file):
+            self.logger.error(f"Plan file {plan_file} does not exist")
+            return
+
+        self.navigator.load_plan_from_file(plan_file, start=True)

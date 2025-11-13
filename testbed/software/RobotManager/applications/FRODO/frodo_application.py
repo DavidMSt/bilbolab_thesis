@@ -9,6 +9,7 @@ from applications.FRODO.agent_manager import FRODO_AgentManager
 from applications.FRODO.algorithm.algorithm import AlgorithmAgentState, AlgorithmAgentMeasurement, AlgorithmAgentInput
 from applications.FRODO.algorithm.algorithm_centralized import CentralizedAgent, CentralizedAlgorithm
 from applications.FRODO.algorithm.algorithm_distributed import DistributedAlgorithm, DistributedAgent
+from applications.FRODO.definitions import PLANS_DIR
 from applications.FRODO.navigation.multi_agent_navigator import NavigatorPlan, Move
 from applications.FRODO.navigation.navigator import MoveTo
 from applications.FRODO.testbed_manager import FRODO_TestbedManager, TestbedObject_FRODO, TestbedObject_STATIC
@@ -19,6 +20,7 @@ from applications.FRODO.tracker.frodo_tracker import FRODO_Tracker
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
+from core.utils.files import fileExists
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
 from core.utils.sound.sound import SoundSystem, speak
@@ -388,6 +390,7 @@ class FRODO_Application:
     #     self.events.algorithm_started.set()
 
     # ------------------------------------------------------------------------------------------------------------------
+
     def stop_algorithm(self):
         self.algorithm_state = AlgorithmState.STOPPED
         self.logger.info("Stop FRODO Algorithm")
@@ -477,6 +480,66 @@ class FRODO_Application:
         )
 
         self.agent_manager.navigator.load_plan(plan, start=True)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def test2(self):
+        self.logger.info("Running Test")
+
+        plan = NavigatorPlan(
+            id='test',
+            actions=[
+                Move(
+                    id='move1',
+                    agent_id='vfrodo1',
+                    element=MoveTo(
+                        x=2.75,
+                        y=2.75,
+                    ),
+                    blocking=False
+                ),
+                # Move(
+                #     id='move2',
+                #     agent_id='frodo2',
+                #     element=MoveTo(
+                #         x=2.75,
+                #         y=0.25,
+                #     ),
+                #     blocking=False
+                # ),
+                Move(
+                    id='move3',
+                    agent_id='vfrodo3',
+                    element=MoveTo(
+                        x=0.25,
+                        y=2.75,
+                    ),
+                    blocking=False
+                ),
+                Move(
+                    id='move4',
+                    agent_id='vfrodo4',
+                    element=MoveTo(
+                        x=0.25,
+                        y=0.25,
+                    ),
+                    blocking=False
+                )
+            ]
+        )
+
+        self.agent_manager.navigator.load_plan(plan, start=True)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_plan(self, plan_file: str):
+
+        if not fileExists(plan_file):
+            extended_plan_file = f"{PLANS_DIR}/{plan_file}"
+            if not fileExists(extended_plan_file):
+                self.logger.error(f"Plan file {plan_file} does not exist")
+                return
+            plan_file = extended_plan_file
+
+        self.agent_manager.run_plan_from_file(plan_file)
 
     # === PRIVATE METHODS ==============================================================================================
 
@@ -592,18 +655,34 @@ class FRODO_Application_CLI(CommandSet):
 
         joystick_command_set.addCommand(remove_joystick_command)
 
-        start_command = Command(name='init',
-                                function=self.app.init_application, )
+        # start_command = Command(name='init',
+        #                         function=self.app.init_application, )
 
-        self.addCommand(start_command)
+        # self.addCommand(start_command)
 
-        test_command = Command(
-            name='test',
-            function=self.app.test,
-            description='Test the application',
+        # test_command = Command(
+        #     name='test',
+        #     function=self.app.test2,
+        #     description='Test the application',
+        #
+        # )
+        # self.addCommand(test_command)
+
+        rum_plan_command = Command(
+            name='plan',
+            function=self.app.run_plan,
+            description='Run a plan',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='plan',
+                                 type=str,
+                                 short_name='p',
+                                 description='Name of the plan to run'),
+            ]
 
         )
-        self.addCommand(test_command)
+        self.addCommand(rum_plan_command)
+
         self.addChild(joystick_command_set)
 
     # ------------------------------------------------------------------------------------------------------------------

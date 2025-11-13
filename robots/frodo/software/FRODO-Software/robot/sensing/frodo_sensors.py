@@ -178,7 +178,7 @@ class FRODO_Sensors:
 
             # Check if the axis is mostly around the z-axis
             if not is_mostly_z_axis(axis):
-                self.logger.warning(f"Aruco Measurement not mostly around z-axis: {measurement}")
+                self.logger.debug(f"Aruco Measurement not mostly around z-axis: {measurement}")
                 continue
 
             psi = qmt.wrapToPi(angle - np.deg2rad(180))

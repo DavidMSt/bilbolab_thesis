@@ -8,7 +8,7 @@ import math
 from core.utils.delayed_executor import delayed_execution
 from hardware.control_board import RobotControl_Board
 from hardware.stm32.stm32 import resetSTM32
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.core import MainProvider, set_main_provider
 from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
@@ -51,7 +51,7 @@ class BILBO_Events:
 class BILBO(MainProvider):
     id: str
 
-    core: BILBO_Core
+    common: BILBO_Common
     board: RobotControl_Board
 
     communication: BILBO_Communication
@@ -91,10 +91,10 @@ class BILBO(MainProvider):
             resetSTM32()
             time.sleep(3)
 
-        self.core = BILBO_Core()
+        self.common = BILBO_Common()
 
         # Read the ID from the ID file
-        self.id = self.core.getID()
+        self.id = self.common._get_id()
 
         self.loop_time = 0
         self.update_time = 0
@@ -109,22 +109,22 @@ class BILBO(MainProvider):
         self.board = RobotControl_Board()
 
         # Start the communication module (WI-FI, Serial and SPI)
-        self.communication = BILBO_Communication(board=self.board, core=self.core)
+        self.communication = BILBO_Communication(board=self.board, core=self.common)
 
         # Set up the individual modules
-        self.control = BILBO_Control(core=self.core, comm=self.communication)
-        self.estimation = BILBO_Estimation(comm=self.communication)
+        self.control = BILBO_Control(core=self.common, comm=self.communication)
+        self.estimation = BILBO_Estimation(common=self.common, comm=self.communication)
         self.drive = BILBO_Drive(comm=self.communication)
         self.sensors = BILBO_Sensors(comm=self.communication)
         self.supervisor = TWIPR_Supervisor(comm=self.communication)
 
-        self.utilities = BILBO_Utilities(core=self.core, communication=self.communication, board=self.board)
-        self.experiment_handler = BILBO_ExperimentHandler(core=self.core,
+        self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
+        self.experiment_handler = BILBO_ExperimentHandler(core=self.common,
                                                           communication=self.communication,
                                                           utils=self.utilities,
                                                           control=self.control, )
 
-        self.logging = BILBO_Logging(core=self.core,
+        self.logging = BILBO_Logging(core=self.common,
                                      comm=self.communication,
                                      control=self.control,
                                      estimation=self.estimation,
@@ -135,7 +135,7 @@ class BILBO(MainProvider):
 
         self.interfaces = BILBO_Interfaces(communication=self.communication,
                                            control=self.control,
-                                           core=self.core)
+                                           core=self.common)
 
         # Test Command
         self.communication.wifi.newCommand(identifier='test',
@@ -182,6 +182,7 @@ class BILBO(MainProvider):
 
         self.supervisor.start()
         self.sensors.start()
+        self.estimation.start()
         self.logging.start()
 
         self._last_update_time = time.perf_counter()

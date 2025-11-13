@@ -7,7 +7,7 @@ from core.utils.files import fileExists, deleteFile, relativeToFullPath
 from hardware.shields.definitions import BILBO_SHIELD_REV_2_ID, SHIELD_ID_ADDRESS, BILBO_SHIELD_REV2_CONFIG_FILE
 from core.utils.json_utils import writeJSON
 from core.utils.button import Button
-from robot.settings import config_path
+from robot.paths import CONFIG_PATH
 
 bilbo_shield_rev_2_config = {
     'id': BILBO_SHIELD_REV_2_ID,
@@ -76,7 +76,7 @@ def write_shield_address():
 
 # ======================================================================================================================
 def generate_shield_config():
-    config_file = relativeToFullPath(f"{config_path}{BILBO_SHIELD_REV2_CONFIG_FILE}")
+    config_file = relativeToFullPath(f"{CONFIG_PATH}{BILBO_SHIELD_REV2_CONFIG_FILE}")
     if fileExists(config_file):
         deleteFile(config_file)
 

@@ -6,7 +6,7 @@ from core.utils.control.lib_control.il.ilc import BILBO_BUMPED_REFERENCE_TRAJECT
 from core.utils.control.lib_control.il.q_filter import design_zero_phase_fir, build_Qf_zero_padded
 from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix, liftedMatrix2Vec
 from core.utils.data import generate_time_vector, generate_random_input, generate_time_vector_by_length
-from core.utils.events import event_definition, waitForEvents, Event
+from core.utils.events import event_definition, Event, OR, wait_for_events, EventFlag
 from core.utils.logging_utils import Logger
 from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.robot.bilbo_control import BILBO_Control
@@ -20,7 +20,11 @@ from robots.bilbo.robot.experiment.helpers import trajectoryInputToVector, gener
 
 # ======================================================================================================================
 @event_definition
-class DILC_Experiment_Events(BILBO_Experiment_Events):
+class DILC_Experiment_Events:
+    started: Event
+    finished: Event
+    aborted: Event
+    status_changed: Event = Event(flags=EventFlag('status', BILBO_Experiment_Status))
     trajectory_finished: Event
     trajectory_failed: Event
     experiment_started: Event
@@ -249,17 +253,18 @@ class DILC_Experiment(BILBO_Experiment):
         self.core.speakOnHost(f"DILC trial {self.trial_index}")
 
         self.status = BILBO_Experiment_Status.WAITING_FOR_USER
-        res = waitForEvents(
-            events=[self.core.interface_events.resume, self.core.interface_events.stop],
-            predicates=None,
-            wait_for_all=False,
+
+        data, trace = wait_for_events(
+            events=OR(self.core.interface_events.resume, self.core.interface_events.stop),
             timeout=None,
-            stale_event_time=None,  # Do not catch old resumes
+            stale_event_time=None,
         )
 
-        if res.first.event == self.core.interface_events.stop:
-            self.logger.important("I want to stop here. Not implemented yet.")
-        elif res.first.event == self.core.interface_events.resume:
+        if trace.caused_by(self.core.interface_events.stop):
+            self.logger.info("Experiment stopped by user. Not implemented yet")
+            return False
+
+        if trace.caused_by(self.core.interface_events.resume):
             self.logger.info(f"Resume with trajectory {self.trial_index}...")
 
         # Check the current control mode
@@ -295,15 +300,14 @@ class DILC_Experiment(BILBO_Experiment):
         # Now we emit the data and ask the user to resume or revert
         self.status = BILBO_Experiment_Status.WAITING_FOR_USER
         self.logger.info(f"Accept the trial or revert it?")
-        res = waitForEvents(
-            events=[self.core.interface_events.resume, self.core.interface_events.revert],
-            predicates=None,
-            wait_for_all=False,
+
+        data, trace = wait_for_events(
+            events=OR(self.core.interface_events.resume, self.core.interface_events.revert),
             timeout=None,
-            stale_event_time=None,  # Do not catch old resumes
+            stale_event_time=None,
         )
 
-        if res.first.event == self.core.interface_events.revert:
+        if trace.caused_by(self.core.interface_events.revert):
             self.logger.info(f"Reverting trial {self.trial_index}")
             self.core.speakOnHost(f"Reverting trial {self.trial_index}")
             return False
@@ -521,6 +525,10 @@ class DILC_Experiment(BILBO_Experiment):
         if dc_gain != 0:
             Q_iml = Q_iml / dc_gain
         self.Q_u_iml = Q_iml
+
+
+
+
 # ======================================================================================================================
 # class IML_Experiment(BILBO_Experiment):
 #     FILE_ENDING = '.iml'

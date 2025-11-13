@@ -99,7 +99,7 @@ class GTTSVoiceEngine(VoiceEngine):
 class EdgeTTSVoiceEngine(VoiceEngine):
     offline = False
 
-    def __init__(self, voice="de-DE-KatjaNeural"):
+    def __init__(self, voice="en-US-JennyNeural"):
         self.voice = voice
 
     async def _generate_async(self, text, file_path):
@@ -372,11 +372,11 @@ class SoundSystem:
 if __name__ == "__main__":
     # Example usage:
     primary_engine = EdgeTTSVoiceEngine()
-    sound_system = SoundSystem(volume=0.9, primary_engine=primary_engine, add_robot_filter=False)
+    sound_system = SoundSystem(volume=1, primary_engine=primary_engine, add_robot_filter=False)
     sound_system.start()
     cleanTTS()
     playSound('warning')
-    speak("Hello, this is an asynchronous test.", volume=0.8)
+    speak("I will dominate the world", volume=0.8)
 
     # Allow time for background tasks to run; in a full application the main loop would run indefinitely.
     time.sleep(10)

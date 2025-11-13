@@ -207,22 +207,25 @@ class BILBO_DynamicState:
     psi: float = 0.0
     psi_dot: float = 0.0
 
+@dataclasses.dataclass
+class BILBO_ConfigurationState:
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    theta: float = 0.0
+    psi: float = 0.0
+
 
 class TWIPR_Estimation_Status(enum.IntEnum):
-    TWIPR_ESTIMATION_STATUS_ERROR = 0,
-    TWIPR_ESTIMATION_STATUS_NORMAL = 1,
+    ERROR = 0,
+    NORMAL = 1,
 
 
-class TWIPR_Estimation_Mode(enum.IntEnum):
-    TWIPR_ESTIMATION_MODE_VEL = 0,
-    TWIPR_ESTIMATION_MODE_POS = 1
-
-
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class TWIPR_Estimation_Sample:
-    status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.TWIPR_ESTIMATION_STATUS_ERROR
+    status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.ERROR
     state: BILBO_DynamicState = dataclasses.field(default_factory=BILBO_DynamicState)
-    mode: TWIPR_Estimation_Mode = TWIPR_Estimation_Mode.TWIPR_ESTIMATION_MODE_VEL
+    state_optitrack: BILBO_ConfigurationState | None = dataclasses.field(default_factory=BILBO_ConfigurationState)
 
 
 class TWIPR_Drive_Status(enum.IntEnum):
@@ -307,7 +310,6 @@ type_hooks = {
     TWIPR_Control_Status_LL: TWIPR_Control_Status_LL,
     TWIPR_Control_Mode_LL: TWIPR_Control_Mode_LL,
     TWIPR_Estimation_Status: TWIPR_Estimation_Status,
-    TWIPR_Estimation_Mode: TWIPR_Estimation_Mode,
     TWIPR_Drive_Status: TWIPR_Drive_Status,
     TWIPR_ErrorType: TWIPR_ErrorType,
     TWIPR_ErrorCodes: TWIPR_ErrorCodes

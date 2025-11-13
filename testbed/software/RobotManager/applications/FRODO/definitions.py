@@ -3,8 +3,13 @@ import dataclasses
 import numpy as np
 
 from core.utils.colors import NamedColor, Colors
+from core.utils.files import relativeToFullPath
 
+# ======================================================================================================================
+EXPERIMENT_DIR = relativeToFullPath("./experiments")
+PLANS_DIR = relativeToFullPath("./experiments/utilities/plans")
 
+# ======================================================================================================================
 @dataclasses.dataclass
 class SimulatedAgentDefinition:
     id: str

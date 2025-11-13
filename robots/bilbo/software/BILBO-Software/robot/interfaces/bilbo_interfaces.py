@@ -6,7 +6,7 @@ from core.communication.wifi.data_link import CommandArgument
 # === CUSTOM PACKAGES ==================================================================================================
 from core.utils.joystick.joystick_manager import JoystickManager, Joystick
 from core.utils.logging_utils import Logger
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from core.utils.exit import register_exit_callback
@@ -47,16 +47,16 @@ class BILBO_Interfaces:
     _joystick_thread: threading.Thread
     _exit_joystick_task: bool
 
-    def __init__(self, core: BILBO_Core, communication: BILBO_Communication, control: BILBO_Control):
+    def __init__(self, core: BILBO_Common, communication: BILBO_Communication, control: BILBO_Control):
         self.logger = Logger('interfaces')
         self.logger.setLevel('DEBUG')
         self.core = core
         self.communication = communication
         self.control = control
 
-        hardware = self.core.getHardwareDefinition()
+        config = self.core.config
 
-        self.has_display = hardware.electronics.display.active is not False
+        self.has_display = config.electronics.display.active is not False
 
         if self.has_display:
             self.display = BILBO_Display(core=self.core)

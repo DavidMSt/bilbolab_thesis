@@ -1,15 +1,15 @@
-from core.utils.archives.events import pred_flag_key_equals
 from core.utils.callbacks import callback_definition, CallbackContainer
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
-from core.utils.events import event_definition, Event, EventFlag
+from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 
 
 @event_definition
 class BILBO_Control_Events:
     mode_changed: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
     configuration_changed: Event
+    tic_mode_changed: Event
     error: Event
 
 
@@ -37,10 +37,9 @@ class BILBO_Control:
         self.mode = None
 
         self.device.events.event.on(callback=self.handleEventMessage,
-                                    predicate=pred_flag_key_equals('event', 'control'),
-                                    input_data=True)
+                                    predicate=pred_flag_equals('event', 'control'))
 
-        self.core.events.stream.on(callback=self._sampleStreamHandler, input_data=True)
+        self.core.events.stream.on(callback=self._sampleStreamHandler)
 
     # ------------------------------------------------------------------------------------------------------------------
     def setControlMode(self, mode: int | BILBO_Control_Mode, *args, **kwargs):
@@ -83,11 +82,14 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def handleEventMessage(self, message):
+        self.logger.important(f"Robot {self.id}: Received control event message: {message.data['event']}")
         match message.data['event']:
             case 'mode_change':
                 self._handleModeChangeEvent(message.data)
             case 'configuration_change':
                 self._handleConfigurationChangeEvent(message.data)
+            case 'tic_change':
+                self._handle_tic_change_event(message.data)
             case 'error':
                 ...
             case _:
@@ -102,6 +104,11 @@ class BILBO_Control:
     def _handleConfigurationChangeEvent(self, data):
         self.callbacks.configuration_changed.call(data['configuration'])
         self.events.configuration_changed.set(data['configuration'])
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handle_tic_change_event(self, data):
+        tic_enabled = data['tic_enabled']
+        self.events.tic_mode_changed.set(tic_enabled)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sampleStreamHandler(self, sample: BILBO_Sample):

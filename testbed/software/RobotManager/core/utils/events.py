@@ -222,6 +222,8 @@ class Event:
             spawn_new_threads=spawn_new_threads,
             auto_stop_on_first=once,  # NEW: stop listener after first emit when once=True
             timeout=timeout,
+            discard_data=discard_data,
+            discard_match_data=discard_match_data,
         )
         listener.start()
         return listener

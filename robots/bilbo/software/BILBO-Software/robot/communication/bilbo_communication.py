@@ -2,7 +2,7 @@
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.exit import register_exit_callback
 from hardware.control_board import RobotControl_Board
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 from robot.communication.serial.bilbo_comm_serial import BILBO_Serial_Communication
 from robot.communication.spi.twipr_comm_spi import BILBO_SPI_Interface
 from robot.communication.wifi.bilbo_wifi import BILBO_WIFI_Interface
@@ -41,7 +41,7 @@ class BILBO_Communication:
     events: BILBO_Communication_Events
     callbacks: BILBO_Communication_Callbacks
 
-    def __init__(self, board: RobotControl_Board, core: BILBO_Core):
+    def __init__(self, board: RobotControl_Board, core: BILBO_Common):
         self.board = board
         self.core = core
 

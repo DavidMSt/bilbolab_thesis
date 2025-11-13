@@ -20,19 +20,107 @@ class BILBO_Control_Mode(enum.IntEnum):
     POSITION = 4
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+
+# === CONFIG ==========================================================================================================
 @dataclasses.dataclass
-class BILBO_Information:
-    id: str = ''
-    type: str = ''
-    version: str = ''
-    color: list | None = None
-    address: str = ''
-    data_stream_port: int = ''
-    gui_port: int = ''
-    ssid: str = ''
-    username: str = ''
-    password: str = ''
-    hardware: dict = dataclasses.field(default_factory=dict)
+class BILBO_PhysicalModel:
+    type: str
+    wheel_diameter: float
+    vertical_offset: float
+    mass: float
+    height: float
+    width: float
+    depth: float
+    distance_wheels: float
+    l_cg: float
+    theta_offset: float
+
+
+@dataclasses.dataclass
+class BILBO_OptiTrack_Definition:
+    points: list[int]
+    point_x_axis_start: int
+    point_x_axis_end: int
+    point_y_axis_start: int
+    point_y_axis_end: int
+    marker_size: float
+
+
+@dataclasses.dataclass
+class BILBO_General_Information:
+    id: str
+    short_id: str
+    type: str
+    version: str
+    color: list | None
+
+
+@dataclasses.dataclass
+class BILBO_Network_Information:
+    address: str
+    data_stream_port: int
+    gui_port: int
+    ssid: str
+    username: str
+    password: str
+
+
+# === HARDWARE DEFINITIONS =============================================================================================
+@dataclasses.dataclass
+class DisplaySettings:
+    active: bool
+    resolution: list | None
+
+
+@dataclasses.dataclass
+class SoundSettings:
+    active: bool
+    gain: float | None
+
+
+@dataclasses.dataclass
+class ButtonSettings:
+    type: str | None  # Can be 'internal', 'sx1508', 'sx1509' or None
+    pin: int | None
+
+
+@dataclasses.dataclass
+class Buttons:
+    primary: ButtonSettings
+    secondary: ButtonSettings
+
+
+class BILBO_Shields(enum.StrEnum):
+    BILBO_SHIELD_REV2 = 'bilbo_shield_rev2'
+    NONE = 'none'
+
+
+@dataclasses.dataclass
+class BILBO_Hardware_Electronics:
+    board_revision: str
+    compute_module: str
+    shield: BILBO_Shields
+    display: DisplaySettings
+    sound: SoundSettings
+    battery_cells: int
+    buttons: Buttons
+
+
+@dataclasses.dataclass
+class Model:
+    type: str
+    theta_offset: float = 0.0
+
+
+# ======================================================================================================================
+@dataclasses.dataclass
+class BILBO_Config:
+    general: BILBO_General_Information
+    network: BILBO_Network_Information
+    optitrack: BILBO_OptiTrack_Definition
+    model: BILBO_PhysicalModel
+    electronics: BILBO_Hardware_Electronics
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -99,3 +187,17 @@ class BILBO_ControlConfig:
     balancing_control: TWIPR_Balancing_Control_Config = dataclasses.field(
         default_factory=TWIPR_Balancing_Control_Config)
     speed_control: SpeedControl_Config = dataclasses.field(default_factory=SpeedControl_Config)
+
+
+
+@dataclasses.dataclass
+class BILBO_OriginConfig:
+    id: str
+    points: list
+    origin: int
+    x_axis_end: int
+    y_axis_end: int
+    marker_size: float
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    offset_z: float = 0.0

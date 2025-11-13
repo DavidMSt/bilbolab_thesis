@@ -15,7 +15,7 @@ from robots.bilbo.robot.bilbo_utilities import BILBO_Utilities
 class BILBO:
     device: Device
 
-    information: BILBO_Information
+    config: BILBO_Config
 
     core: BILBO_Core
     control: BILBO_Control
@@ -24,10 +24,10 @@ class BILBO:
     data: BILBO_Sample
 
     # ==================================================================================================================
-    def __init__(self, device: Device, information: BILBO_Information, *args, **kwargs):
+    def __init__(self, device: Device, config: BILBO_Config, *args, **kwargs):
         self.device = device
 
-        self.information = information
+        self.config = config
 
         self.core = BILBO_Core(device=device, robot_id=self.device.information.device_id)
 

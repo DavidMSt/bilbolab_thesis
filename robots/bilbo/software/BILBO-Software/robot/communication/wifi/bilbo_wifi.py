@@ -1,3 +1,4 @@
+import threading
 import time
 from typing import Callable, Union
 
@@ -9,7 +10,7 @@ from core.utils.callbacks import CallbackContainer, callback_definition, Callbac
 from core.utils.delayed_executor import delayed_execution
 from core.utils.events import event_definition, Event
 from core.utils.websockets import WebsocketServer
-from robot.bilbo_core import BILBO_Core
+from robot.bilbo_common import BILBO_Common
 
 
 # === BILBO WIFI INTERFACE =============================================================================================
@@ -33,17 +34,21 @@ class BILBO_WIFI_Interface:
     callbacks: BILBO_Wifi_Callbacks
     events: BILBO_Wifi_Events
 
+    _send_lock: threading.Lock
+
     # === INIT =========================================================================================================
-    def __init__(self, core: BILBO_Core):
+    def __init__(self, core: BILBO_Common):
 
         self.core = core
 
         self.address = network.getLocalIP_RPi()
 
-        self.core.information.address = self.address
+        self.core.config.network.address = self.address
 
         self.callbacks = BILBO_Wifi_Callbacks()
         self.events = BILBO_Wifi_Events()
+
+        self._send_lock = threading.Lock()
 
         device_information = self._gatherDeviceInformation()
 
@@ -68,12 +73,14 @@ class BILBO_WIFI_Interface:
 
     def sendStream(self, data, stream_id: str = 'sample'):
         if self.connected:
-            self.wifi.sendStream(data, stream_id)
+            with self._send_lock:
+                self.wifi.sendStream(data, stream_id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendEvent(self, event, data=None):
         if self.connected:
-            self.wifi.sendEvent(event, data)
+            with self._send_lock:
+                self.wifi.sendEvent(event, data)
 
     # ------------------------------------------------------------------------------------------------------------------
     def getTime(self):
@@ -101,7 +108,7 @@ class BILBO_WIFI_Interface:
     def _gatherDeviceInformation(self) -> DeviceInformation:
 
         information = DeviceInformation()
-        information.device_id = self.core.getID()
+        information.device_id = self.core._get_id()
         information.device_type = 'bilbo'
         information.device_class = 'bilbo'
         information.device_name = 'Bilbo'
@@ -118,8 +125,8 @@ class BILBO_WIFI_Interface:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sendBilboHandshakeMessage(self):
-        information = self.core.information
-        self.sendEvent('bilbo_handshake', information)
+        config = self.core.config
+        self.sendEvent('bilbo_handshake', config)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _disconnected_event(self, *args, **kwargs):

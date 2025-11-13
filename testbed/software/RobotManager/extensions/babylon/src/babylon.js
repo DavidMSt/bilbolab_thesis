@@ -167,6 +167,15 @@ export class Babylon extends Scene {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     removeObject(object) {
+
+        // CHeck if object is a string
+        if (typeof object === 'string') {
+            object = this.getObjectByUID(object);
+            if (!object) {
+                console.warn(`Object with id ${object} does not exist`);
+                return;
+            }
+        }
         if (object.id in this.objects) {
             delete this.objects[object.id];
         } else {
@@ -689,8 +698,9 @@ export class Babylon extends Scene {
 
     /* --------------------------------------------------------------------------------------------------------------- */
     _handleRemoveObjectMessage(msg) {
-        this.log(`Received remove object message:`);
-        this.log(msg);
+        console.log(`Received remove object message:`);
+        console.log(msg);
+        this.removeObject(msg.id);
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
