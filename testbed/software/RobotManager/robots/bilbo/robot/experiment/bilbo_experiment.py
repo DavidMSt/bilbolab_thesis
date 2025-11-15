@@ -1,36 +1,25 @@
 from __future__ import annotations
 
 import abc
-import dataclasses
 import enum
-import math
-import pickle
 import threading
 from dataclasses import asdict
-import numpy as np
+
 from dacite import Config
-from matplotlib.collections import EventCollection
 
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.dataclass_utils import from_dict, from_dict_auto
-from core.utils.logging_utils import Logger
-from robots.bilbo.robot.bilbo_control import BILBO_Control
-
-# === CUSTOM PACKAGES ==================================================================================================
-from robots.bilbo.robot.bilbo_core import BILBO_Core
-from core.utils.data import generate_time_vector, generate_random_input, resample
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_CONTROL_DT, MAX_STEPS_TRAJECTORY
+from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals, wait_for_events, OR, TIMEOUT, \
     EventContainer
-from core.utils.plotting import UpdatablePlot
-from core.utils.sound.sound import speak, playSound
-from core.utils.ilc.ILC_DAMN_bib import noilc_self_para_v2, noilc_design, lift_vec2mat, \
-    plot_bilbo_ilc_progression, generate_q_filter
-from core.utils.colors import get_shaded_color
-from core.utils.ilc.ILC_DAMN_bib import reference as ilc_reference
-from robots.bilbo.robot.experiment.definitions import BILBO_InputTrajectory, BILBO_InputTrajectoryStep, \
-    BILBO_TrajectoryExperimentData, BILBO_TrajectoryExperiment
-from robots.bilbo.robot.experiment.helpers import generateRandomTestTrajectory, plotTrajectoryExperimentData
+from core.utils.logging_utils import Logger
+from core.utils.plotting import new_figure_agg
+from core.utils.sound.sound import speak
+from robots.bilbo.robot.bilbo_control import BILBO_Control
+# === CUSTOM PACKAGES ==================================================================================================
+from robots.bilbo.robot.bilbo_core import BILBO_Core
+from robots.bilbo.robot.bilbo_definitions import MAX_STEPS_TRAJECTORY
+from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_TrajectoryData
+from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory
 
 
 # ======================================================================================================================
@@ -129,7 +118,7 @@ class BILBO_Experiments_Events:
     ll_trajectory_started: Event = Event(flags=EventFlag('trajectory_id', int))
 
     trajectory_finished: Event = Event(flags=EventFlag('trajectory_id', (int, str)),
-                                       data_type=BILBO_TrajectoryExperiment)
+                                       data_type=BILBO_TrajectoryData)
 
     trajectory_loaded: Event = Event()
 
@@ -203,7 +192,7 @@ class BILBO_ExperimentHandler:
         self.events.experiment_status_changed.set(data=None)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def runTrajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryExperimentData | None:
+    def run_trajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryData | None:
         assert len(trajectory.inputs) <= MAX_STEPS_TRAJECTORY
         assert trajectory.length == len(trajectory.inputs)
         assert trajectory.time_vector.shape[0] == trajectory.length
@@ -222,7 +211,7 @@ class BILBO_ExperimentHandler:
         data, result = wait_for_events(
             events=
             OR((self.events.ll_trajectory_finished, pred_flag_equals('trajectory_id', int(trajectory.id))),
-                self.events.ll_trajectory_aborted),
+               self.events.ll_trajectory_aborted),
             timeout=float(trajectory.time_vector[-1] + 5.0),
             stale_event_time=0.5,
         )
@@ -248,12 +237,12 @@ class BILBO_ExperimentHandler:
         self.events.trajectory_finished.set(data=experiment_data, flags={'trajectory_id': trajectory.id})
 
         self.logger.important(f"Trajectory \"{trajectory.name}\" finished.")
-        return experiment_data.data
+        return experiment_data
 
     # ------------------------------------------------------------------------------------------------------------------
-    def runRandomTestTrajectory(self, time_s, frequency=2, gain=0.25):
+    def run_random_trajectory(self, time_s, frequency=2, gain=0.25):
 
-        trajectory = generateRandomTestTrajectory(1, time_s, frequency, gain)
+        trajectory = generate_random_input_trajectory(1, time_s, frequency, gain)
         self.logger.info(
             f"Generated random trajectory: {trajectory.id} (Length: {trajectory.time_vector[-1]} s). "
             f"Waiting for resume event...")
@@ -263,19 +252,47 @@ class BILBO_ExperimentHandler:
         self.events.waiting_for_user.set(data=trajectory)
 
         self.core.interface_events.resume.wait(timeout=None)
-        return self.runTrajectory(trajectory=trajectory)
+        data = self.run_trajectory(trajectory=trajectory)
+        if data is None:
+            return
+
+        # Plot the input and output data
+
+
+        fig, (ax1, ax2) = new_figure_agg(nrows=2, figsize=(10, 10))
+# time_vector = data.input_trajectory.time_vector
+#
+# # Plot input trajectory
+# ax1.plot(time_vector, data.input_trajectory.inputs)
+# ax1.set_xlabel('Time [s]')
+# ax1.set_ylabel('Input')
+# ax1.set_title('Input Trajectory')
+# ax1.grid(True)
+#
+# # Plot states
+# ax2.plot(time_vector, data.states)
+# ax2.set_xlabel('Time [s]')
+# ax2.set_ylabel('States')
+# ax2.set_title('System States')
+# ax2.grid(True)
+#
+# fig.tight_layout()
+#
+
+
+# return self.run_trajectory(trajectory=trajectory)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def startTrajectory(self):
-        ...
+    def start_trajectory(self):
+        raise NotImplementedError("Not implemented yet")
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendTrajectory(self):
-        ...
+        raise NotImplementedError("Not implemented yet")
 
     # ------------------------------------------------------------------------------------------------------------------
     def stopTrajectory(self):
-        ...
+        raise NotImplementedError("Not implemented yet")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _trajectory_event_callback(self, message, *args, **kwargs):
@@ -323,9 +340,9 @@ class BILBO_ExperimentHandler:
 
     # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
-    def getTrajectoryExperimentDataFromDict(data: dict) -> BILBO_TrajectoryExperiment:
+    def getTrajectoryExperimentDataFromDict(data: dict) -> BILBO_TrajectoryData:
         config = Config(
             cast=[int, float],  # allow casting numbers where JSON gives str/float
             strict=False,  # ignore unknown fields if the device returns extra data
         )
-        return from_dict_auto(BILBO_TrajectoryExperiment, data)
+        return from_dict_auto(BILBO_TrajectoryData, data)

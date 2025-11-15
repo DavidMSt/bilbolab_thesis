@@ -1,16 +1,12 @@
-import yaml
+from core.utils.plotting import new_figure_agg, open_figure_preview
 
 if __name__ == '__main__':
-    example_dict = {
-        'x': 2,
-        'y': "Hello"
-    }
+    fig, (ax1, ax2) = new_figure_agg(subplots=(2, 1), figsize=(5, 4), dpi=100)
 
-    yaml.dump(example_dict, open('test.yaml', 'w'))
+    data1 = [1, 2, 3]
+    data2 = [1, 4, 9]
 
-    # load the yaml back
-    with open('test.yaml', 'r') as f:
-        # print(yaml.load(f, Loader=yaml.FullLoader))
-        x = yaml.safe_load(f)
+    ax1.plot(data1)
+    ax2.plot(data2)
 
-    print(x)
+    open_figure_preview(fig)

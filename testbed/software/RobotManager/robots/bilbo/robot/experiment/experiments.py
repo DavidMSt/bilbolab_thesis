@@ -277,7 +277,7 @@ class DILC_Experiment(BILBO_Experiment):
         self.status = BILBO_Experiment_Status.RUNNING_TRAJECTORY
         self.core.speakOnHost(f"Trajectory {self.trial_index}...")
 
-        data = self.experiment_handler.runTrajectory(input_trajectory)
+        data = self.experiment_handler.run_trajectory(input_trajectory)
 
         if data is None:
             self.logger.warning("Trajectory failed")

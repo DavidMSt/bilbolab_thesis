@@ -206,7 +206,7 @@ private:
 
 	TWIPR_Estimation *_estimation = NULL;
 
-	uint32_t _tick;
+	uint32_t _tick = 0;
 
 	twipr_speed_control_output_t _update_velocity_control(
 			twipr_speed_control_input_t input, twipr_estimation_state_t state);

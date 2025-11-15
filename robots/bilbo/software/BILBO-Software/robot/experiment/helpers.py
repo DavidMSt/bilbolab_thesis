@@ -1,9 +1,11 @@
 from core.utils.data import generate_time_vector, generate_random_input
+from robot.bilbo_definitions import BILBO_DynamicState
 from robot.control.bilbo_control_data import BILBO_Control_Mode
 from robot.experiment.definitions import BILBO_InputTrajectoryStep, BILBO_InputTrajectory
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL, MAX_STEPS_TRAJECTORY
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 def generateTrajectoryInputsFromList(trajectory_inputs: list) -> list:
     """
     Generates a dictionary of `BILBO_InputTrajectoryStep` objects from a list of inputs.
@@ -44,7 +46,6 @@ def generateTrajectoryInputsFromList(trajectory_inputs: list) -> list:
     return trajectory_inputs_list
 
 
-
 # ----------------------------------------------------------------------------------------------------------------------
 def generateRandomTestTrajectory(trajectory_id, time_s, frequency, gain) -> BILBO_InputTrajectory | None:
     """
@@ -82,3 +83,75 @@ def generateRandomTestTrajectory(trajectory_id, time_s, frequency, gain) -> BILB
     )
 
     return trajectory
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def get_state_trajectory_from_logging_samples(samples: dict) -> list[BILBO_DynamicState]:
+    """
+    Build a list of BILBO_DynamicState from flat-list logging samples.
+
+    Expected keys (lists of equal length ideally):
+      - 'lowlevel.estimation.state.v'
+      - 'lowlevel.estimation.state.theta'
+      - 'lowlevel.estimation.state.theta_dot'
+      - 'lowlevel.estimation.state.psi'
+      - 'lowlevel.estimation.state.psi_dot'
+
+    Missing keys (or those explicitly set to None) are treated as zeros.
+    If series have differing lengths, the longest length is used and shorter
+    series are padded with zeros.
+    """
+    # Mapping from dataclass field -> logging key
+    keymap = {
+        "v": 'lowlevel.estimation.state.v',
+        "theta": 'lowlevel.estimation.state.theta',
+        "theta_dot": 'lowlevel.estimation.state.theta_dot',
+        "psi": 'lowlevel.estimation.state.psi',  # psi_key from your prep is None -> leave default if missing
+        "psi_dot": 'lowlevel.estimation.state.psi_dot',
+        # x_key, y_key are intentionally None -> default to 0.0
+        "x": None,
+        "y": None,
+    }
+
+    # Pull series from samples; normalize to lists or None
+    series: dict[str, list | None] = {}
+    for field, key in keymap.items():
+        if key is None:
+            series[field] = None
+        else:
+            seq = samples.get(key, None)
+            # Accept both list and tuple; otherwise treat as missing
+            if isinstance(seq, (list, tuple)):
+                series[field] = list(seq)
+            else:
+                series[field] = None
+
+    # Determine trajectory length (use the longest available series)
+    lengths = [len(seq) for seq in series.values() if isinstance(seq, list)]
+    n = max(lengths) if lengths else 0
+    if n == 0:
+        return []
+
+    def get_val(field: str, i: int) -> float:
+        seq = series.get(field)
+        if isinstance(seq, list) and i < len(seq):
+            try:
+                return float(seq[i])
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
+    traj: list[BILBO_DynamicState] = []
+    for i in range(n):
+        state = BILBO_DynamicState(
+            x=get_val("x", i),  # will be 0.0 since key is None
+            y=get_val("y", i),  # will be 0.0 since key is None
+            v=get_val("v", i),
+            theta=get_val("theta", i),
+            theta_dot=get_val("theta_dot", i),
+            psi=get_val("psi", i),  # 0.0 if key missing/None
+            psi_dot=get_val("psi_dot", i),
+        )
+        traj.append(state)
+
+    return traj

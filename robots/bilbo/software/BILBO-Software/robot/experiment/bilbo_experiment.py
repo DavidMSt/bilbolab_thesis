@@ -19,6 +19,7 @@ from robot.core import get_logging_provider
 from robot.experiment.definitions import BILBO_InputTrajectory, BILBO_InputTrajectoryStep, BILBO_ExperimentHandler_Mode, \
     BILBO_LL_Sequencer_Event_Type, BILBO_TrajectoryExperimentData, BILBO_StateTrajectory, BILBO_TrajectoryExperiment, \
     BILBO_TrajectoryExperimentMeta
+from robot.experiment.helpers import get_state_trajectory_from_logging_samples
 from robot.lowlevel.stm32_general import MAX_STEPS_TRAJECTORY, LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sequencer import bilbo_sequence_input_t, bilbo_sequence_description_t, BILBO_Sequence_LL
 import robot.lowlevel.stm32_addresses as addresses
@@ -129,10 +130,6 @@ class BILBO_ExperimentHandler:
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def runTrajectoryFromFile(self):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
     def runTrajectory(self, trajectory: BILBO_InputTrajectory):
         self.logger.info(f"Running trajectory {trajectory.id} ...")
 
@@ -171,6 +168,9 @@ class BILBO_ExperimentHandler:
             self.logger.warning(f"Trajectory {trajectory.id} aborted before start completed")
             return None
 
+        # Beep to indicate the trajectory started
+        self.utils.beep(1000, 250, 1)
+
         start_tick = (res_start.first.data or {}).get('tick') if res_start.first else None
         if start_tick is None:
             self.logger.warning(f"Trajectory {trajectory.id}: STARTED tick missing")
@@ -199,6 +199,8 @@ class BILBO_ExperimentHandler:
             self.logger.warning(f"Trajectory {trajectory.id} aborted")
             return None
 
+        self.utils.beep(1000, 250, 2)
+
         end_tick = (res_end.first.data or {}).get('tick') if res_end.first else None
         if end_tick is None:
             self.logger.warning(
@@ -217,26 +219,24 @@ class BILBO_ExperimentHandler:
             end_index=end_tick
         )
 
-        from robot.logging.bilbo_logging import getStateTrajectoryFromLoggingSamples
-
         output_data = BILBO_TrajectoryExperimentData(
             input_trajectory=trajectory,
             state_trajectory=BILBO_StateTrajectory(
                 time_vector=trajectory.time_vector,
-                states=getStateTrajectoryFromLoggingSamples(output_signals)
+                states=get_state_trajectory_from_logging_samples(output_signals)
             )
         )
 
         experiment = BILBO_TrajectoryExperiment(
             id=str(trajectory.id),
             data=output_data,
-            meta = BILBO_TrajectoryExperimentMeta(
-                robot_id = self.core._get_id(),
+            meta=BILBO_TrajectoryExperimentMeta(
+                robot_id=self.core._get_id(),
                 robot_information=self.core.information,
                 control_config=self.control.config,
-                description = '',
+                description='',
                 software_revision='',
-                timestamp = start_time_stamp
+                timestamp=start_time_stamp
             )
         )
 

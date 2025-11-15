@@ -232,11 +232,11 @@ class Event:
     def wait(self, predicate: Predicate = None, timeout: float = None,
              stale_event_time: float = None) -> tuple[Any | _TimeoutSentinel, SubscriberMatch | None]:
         subscriber = Subscriber(
-                                events=(self, predicate) if predicate is not None else self,
-                                timeout=timeout,
-                                stale_event_time=stale_event_time,
-                                once=True,
-                                )
+            events=(self, predicate) if predicate is not None else self,
+            timeout=timeout,
+            stale_event_time=stale_event_time,
+            once=True,
+        )
         return subscriber.wait(timeout=timeout, stale_event_time=stale_event_time)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -1068,7 +1068,7 @@ class SubscriberListener:
 
         # Check if the callback does accept the correct arguments
         # check_signature(callback, kwarg_names=["data", "match"])
-
+        self.SENTINEL = object()
         self.callbacks = SubscriberListenerCallbacks()
         self.subscriber = subscriber
         self.callback = callback
@@ -1084,20 +1084,13 @@ class SubscriberListener:
 
         self.logger = Logger(f"Subscriber {self.subscriber.id} listener", "DEBUG")
 
-        self._stop_event = Event(id=f"{id(self)}_stop")
-
-        self._compound_subscriber = Subscriber(
-            events=[
-                self.subscriber,
-                self._stop_event,
-            ],
-            type=SubscriberType.OR,
-        )
+        self.queue = queue.Queue()
 
         register_exit_callback(self.stop)
 
     # === METHODS ======================================================================================================
     def start(self):
+        self.subscriber.callbacks.finished.register(self._subscriber_callback)
         self._thread = threading.Thread(target=self._task, daemon=True)
         self._thread.start()
 
@@ -1112,10 +1105,14 @@ class SubscriberListener:
     # === PRIVATE METHODS ==============================================================================================
     def _task(self):
         while not self._exit:
-            data, trace = self._compound_subscriber.wait(timeout=self._timeout)
-
-            if data is TIMEOUT:
-                self.logger.warning("Subscriber wait time out. Not implemented yet")
+            try:
+                if self._timeout is not None:
+                    data, trace = self.queue.get(timeout=self._timeout)
+                else:
+                    data, trace = self.queue.get()
+            except queue.Empty:
+                # listener-level timeout
+                self.logger.warning("SubscriberListener wait timeout.")
                 self.callbacks.timeout.call()
                 self.stop()
                 continue
@@ -1123,33 +1120,26 @@ class SubscriberListener:
             if self._exit:
                 break
 
-            # Check if it is the stop event
-            if trace.match is self._stop_event or trace.match_id == self._stop_event.uid:
-                self.logger.debug("Received stop event. Stopping.")
-                self._request_stop()
+            if data is self.SENTINEL:
                 break
 
             if self._max_rate:
                 now = time.monotonic()
                 min_interval = 1.0 / self._max_rate
-
-                # If we've fired before and the interval not met → drop this event
                 if self._last_callback_time is not None and (now - self._last_callback_time) < min_interval:
-                    continue  # just skip this event
-
-                # Update the timestamp for the allowed callback
+                    continue
                 self._last_callback_time = now
 
-            # Strip the stop event from the compound subscriber
-            result = trace.trace_data[self.subscriber]
-
-            self._execute_callback(result.data, result, spawn_thread=self._spawn_new_threads)
+            self._execute_callback(data, trace, spawn_thread=self._spawn_new_threads)
 
             if self._auto_stop_on_first:
                 self._request_stop()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _subscriber_callback(self, data: Any, match: SubscriberMatch):
+        self.queue.put((data, match))
 
+    # ------------------------------------------------------------------------------------------------------------------
     def _execute_callback(self, data, result, spawn_thread: bool):
         # Build call signature once
         args = [] if self._discard_data else [data]
@@ -1166,14 +1156,10 @@ class SubscriberListener:
     def _request_stop(self):
         """Signal the thread to exit, without joining (safe to call from worker)."""
         self._exit = True
-        try:
-            self._stop_event.set()
-        except Exception:
-            pass  # safe: may already be stopping
+        self.queue.put((self.SENTINEL, None))
+        self.subscriber.callbacks.finished.remove(self._subscriber_callback)
 
 
-# === UTILITIES ========================================================================================================
-# Internal marker classes for inline building when you want to write AND(…), OR(…) inside other calls.
 class _EventExpr:  # not exported
     __slots__ = ("children",)
 

@@ -341,9 +341,9 @@ class BILBO_CLI_CommandSet(CommandSet):
             read_control_config_command,
         ])
 
-        test_trajectory_command = Command(name='test',
+        test_trajectory_command = Command(name='traj',
                                           allow_positionals=True,
-                                          function=self.experiments.runRandomTestTrajectory,
+                                          function=self.experiments.run_random_trajectory,
                                           execute_in_thread=True,
                                           arguments=[
                                               CommandArgument(name='time_s',

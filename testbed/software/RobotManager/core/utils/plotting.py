@@ -552,25 +552,22 @@ def choose_gui_backend(preferred: Iterable[str] = ("macosx", "QtAgg", "TkAgg")) 
 # ==============================================================================
 # Figure creation (Agg-only, thread/process safe)
 # ==============================================================================
-
 def new_figure_agg(
-        figsize: tuple[float, float] = (5, 4),
-        dpi: int = 120,
+        figsize=(5, 4),
+        dpi=120,
+        subplots=None,  # e.g. (2, 1)
 ):
-    """
-    Create a headless Matplotlib Figure using Agg, without importing pyplot.
-    Returns (fig, ax).
-
-    Example:
-        fig, ax = new_figure_agg((5,4), 120)
-        ax.plot(x, y)
-        uri = fig_to_data_uri(fig)
-    """
-    use_headless_backend()  # ensure Agg
+    use_headless_backend()
     from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: F401 (ensures Agg canvas)
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
 
     fig = Figure(figsize=figsize, dpi=dpi)
+
+    if subplots:
+        nrows, ncols = subplots
+        axs = fig.subplots(nrows, ncols)
+        return fig, axs
+
     ax = fig.add_subplot(111)
     return fig, ax
 
@@ -893,6 +890,8 @@ def open_figure_preview(fig):
     previewer = AggPDFPreviewer()
     pdf_path = previewer.save_to_temp_pdf(fig, save_figure)  # saves temp .pdf
     previewer.open_pdf(pdf_path)
+
+
 # ======================================================================================================================
 
 # ======================================================================================================================

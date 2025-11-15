@@ -77,7 +77,7 @@ public:
 
 private:
 
-	twipr_logging_buffer_status_t sample_buffer_state;
+	twipr_logging_buffer_status_t sample_buffer_state = TWIPR_LOGGING_BUFFER_NOT_FULL;
 
 	elapsedMillis timer_control_mode_led;
 
