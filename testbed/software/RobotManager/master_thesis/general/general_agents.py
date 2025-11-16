@@ -1,19 +1,16 @@
+# third party
 import math
 import time
 import copy
-
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Any
 import logging
 
+# bilbolab
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FRODO_ENVIRONMENT_ACTIONS, FRODO_SimulationObject, FRODO_VisionAgent_CommandSet
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
-from applications.FRODO.simulation.frodo_simulation import FRODO_VisionAgent, FRODO_VisionAgent_Config
-from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
-from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS, Object
+from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
-
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
 
@@ -165,8 +162,6 @@ class PhaseRunner:
 @dataclass
 class FRODO_General_Config:
     color: tuple[float, float, float] = (1.0, 1.0, 1.0)
-    Ts: float = 0.5
-
 
 class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     """
@@ -204,8 +199,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.runner = PhaseRunner(simulation_dt=self.config.Ts, logger=self.logger)
 
         self.setup_scheduling()
-
-       
 
     def setup_scheduling(self):
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION,
@@ -276,15 +269,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     # ----------------------------------------------------------------------
     def change_phase(self, name: str, reset: bool = True):
         self.runner.change_phase(name, reset)
-
-
-    # def getPhaseInputs(self, phase: str) -> np.ndarray:
-    #     try:
-    #         ph = self.runner.get_phase(phase)
-    #         return np.array(ph.inputs, dtype=float)
-    #     except Exception:
-    #         self.logger.error(f'Selected phase: "{phase}" does not have any input to return!')
-    #         return np.empty((0, 2), dtype=float)
 
 class FRODO_GeneralAgent_CommandSet(CommandSet):
     def __init__(self, agent: FRODOGeneralAgent):
@@ -361,27 +345,8 @@ if __name__ == '__main__':
     sim = FRODO_Simulation()
     sim.init()
 
-    # agent = FRODOGeneralAgent(
-    #     start_config=[0.0, 0.0, 0.0],
-    #     agent_id="my_agent",
-    #     Ts=sim.Ts
-    # )
-    # cfg = FRODO_VisionAgent_Config(
-    # fov=np.deg2rad(100),
-    # vision_radius=1.5,
-    # color=[1, 0, 0],
-    # size=0.2
-    # )
-
-    # agent = FRODO_VisionAgent(
-    #     agent_id="frodo1",
-    #     Ts=sim.Ts,
-    #     config=cfg
-    # )
-
     cfg = FRODO_General_Config(
         color = (1, 0, 0), 
-        Ts = sim.Ts
     )
 
     agent = FRODOGeneralAgent(agent_id = 'frodo01', start_config= [0.0,0.0,0.0])
