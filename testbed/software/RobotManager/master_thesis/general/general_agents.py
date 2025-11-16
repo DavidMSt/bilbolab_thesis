@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 from typing import List, Any
 import logging
 
-from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FRODO_ENVIRONMENT_ACTIONS, FRODO_SimulationObject
+from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FRODO_ENVIRONMENT_ACTIONS, FRODO_SimulationObject, FRODO_VisionAgent_CommandSet
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
-# from applications.FRODO.frodo_application_sim import FRODO_VisionAgent
+from applications.FRODO.simulation.frodo_simulation import FRODO_VisionAgent, FRODO_VisionAgent_Config
 from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
+from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS, Object
+from extensions.cli.cli import CommandSet, Command, CommandArgument
 
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
@@ -160,220 +162,196 @@ class PhaseRunner:
         
         self.change_phase("idle", reset=True)
 
-# class InterfaceLogger(logging.LoggerAdapter):
-#     def __init__(self, logger: Any, interface_name: str) -> None:
-#             # Ensure the underlying logger is a stdlib logging.Logger
-#             if not isinstance(logger, logging.Logger):
-#                 logger = logging.getLogger(getattr(logger, "name", __name__))
-#             # Store static context (printed by formatter via %(iface)s)
-#             super().__init__(logger, {"iface": interface_name})
-        
-    # def process(self, msg: Any, kwargs):
-    #         # Merge static context with any per-call extra; per-call wins on conflicts
-    #     extra = kwargs.get("extra")
+@dataclass
+class FRODO_General_Config:
+    color: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    Ts: float = 0.5
 
-    #     merged = {**self.extra, **extra}
 
-    #     kwargs["extra"] = merged
-    #     return msg, kwargs
+class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
+    """
+    Lightweight general agent:
+    - uses FRODO_DynamicAgent for motion
+    - uses FRODO_SimulationObject for world representation
+    - optional PhaseRunner for scripted inputs
+    """
 
-class FRODOGeneralAgent(FRODO_DynamicAgent,  FRODO_SimulationObject):
-# class FRODO_GeneralAgent(FRODO_Agent_Virtual_Vision):
+    def __init__(
+        self,
+        agent_id: str,
+        start_config: list[float],
+        config: FRODO_General_Config | None = None
+    ):
 
-    length: float
-    width: float
-    height: float 
-    runner: PhaseRunner
+        if config is None:
+            config = FRODO_General_Config()
 
-    def __init__(self, start_config: List[float], fov_deg = 360, view_range = 1.5, runner: bool = True, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+                # Init dynamic + simulation 
+        FRODO_DynamicAgent.__init__(self, agent_id=agent_id, Ts=config.Ts)
+        FRODO_SimulationObject.__init__(self, agent_id)
 
-        # physical representations, TODO: Use Frodo physical class already existing? But seems to do collision on its own so might not be suited perfectly
-        self.length = 0.157
-        self.width = 0.115
-        self.height = 0.052
+        self.config = config
+        self.color = config.color
+        self.size = getattr(config, "size", 0.2)  # if you add size later
+        self.logger = Logger(agent_id)
 
-        # intialize configuration        
-        self.setPosition(x = start_config[0], y = start_config[1])
-        self.setOrientation(start_config[2])
+        # set initial pose
+        self.state.x, self.state.y, self.state.psi = map(float, start_config)
 
-        # For web interface
-        # self.measurements = {} 
-        # self._plotting_group = None
-        # self.fov = math.radians(fov_deg)
-        # self.view_range = view_range
+        self.cli = FRODO_GeneralAgent_CommandSet(self)
 
-        # logging
-        self.logger = Logger(self.agent_id)
-        self.logger.setLevel('INFO')
+        # Runner
+        self.runner = PhaseRunner(simulation_dt=self.config.Ts, logger=self.logger)
 
-        # runner
-        if runner: 
-            self.create_runner()
+        self.setup_scheduling()
 
+       
+
+    def setup_scheduling(self):
+        core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION,
+                    object=self,
+                    function=self.action_frodo_communication,
+                    priority=2)
+
+        # Attach input function into scheduling (mirroring VisionAgent behavior)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
+
+    def action_frodo_communication(self):
+        ...
+
+    # ----------------------------------------------------------------------
     def _input_function(self):
-        # FIRST: Let your runner decide the input
-        if self.runner is not None:
-            u = self.runner.step()
-            self.input.v = float(u[0])
-            self.input.psi_dot = float(u[1])
-            self.logger.debug(f"{self.scheduling.tick}: Runner input applied ({self.input})")
+        """
+        Custom input logic:
+        1. If runner exists → use its control
+        2. else → fallback to parent behavior (usually joystick/no-op)
+        """
+        u = self.runner.step()
+        self.input.v = float(u[0])
+        self.input.psi_dot = float(u[1])
 
-        # THEN: fall back to BilboLab parent behavior
-        super()._input_function()
-
-    def create_runner(self):
-        self.runner = PhaseRunner(simulation_dt=self.Ts, logger=self.logger)
-
-    # def _execute_next_input_action(self):
-    #     # idle or no active phase? send zero input
-    #     if self.runner is None:
-    #         self.setInput(0.0, 0.0)
-    #         self.logger.debug(f"No runnner configured for the agent, setting the input to zero")
-    #         return
-
-    #     # get input from the runner
-    #     u = self.runner.step()
-
-    #     self.setInput(float(u[0]), float(u[1]))
-    #     self.logger.debug(f"{self.scheduling.tick}: ({self.agent_id}) Action Frodo Input (Phase: {self.runner.active}, agent input: {self.input})")
-    #     # self.logger.debug(f'current configuration: {self.state}')
-
-    def add_input_phase(self, name:str, inputs: tuple[np.ndarray, ...], 
-                        durations: tuple[int, ...] | None = None, delta_t: float = 0.1, 
-                        states: tuple[core.spaces.State, ...] | None = None, compute_states: bool = False, origin_state = None):
-        
+    # ----------------------------------------------------------------------
+    def add_input_phase(
+        self,
+        name: str,
+        inputs: tuple[np.ndarray, ...],
+        durations: tuple[int, ...] | None = None,
+        delta_t: float = 0.1,
+        origin_state=None,
+    ):
         if durations is None:
             durations = tuple([1] * len(inputs))
 
-        if compute_states:
-            if states is not None:
-                self.logger.error("Tried to add phase, compute states is true but states already exists, won't override")
+        if origin_state is None:
+            origin_state = self.state
 
-            else:
-                # take current as origin state for the integration
-                if origin_state is None:
-                    origin_state = self.getConfiguration()
+        states = self.compute_states(inputs, durations, origin_state, delta_t)
+        phase = ExecutionPhase(inputs, states, durations, delta_t)
+        self.runner.add_phase(name, phase)
 
-                if not isinstance(origin_state, core.spaces.State):
-                    raise TypeError(f"origin_state must be a core.spaces.State, got {type(origin_state)}")
-                
-                states = self.compute_states(inputs, durations, origin_state, delta_t)
-
-        # TODO: Make this more pretty
-        new_phase = ExecutionPhase(inputs, tuple(states) if states is not None else None, tuple(durations), delta_t)
-        self.runner.add_phase(name, new_phase)
-
-    def compute_states(self,
-                    inputs: tuple[np.ndarray, ...],
-                    durations: tuple[int, ...],
-                    initial_state: core.spaces.State,
-                    delta_t: float) -> tuple[core.spaces.State, ...]:
-
+    # ----------------------------------------------------------------------
+    def compute_states(self, inputs, durations, initial_state, delta_t):
         ratio = delta_t / self.Ts
         r_int = round(ratio)
-        if not math.isclose(ratio, r_int, rel_tol=0.0, abs_tol=1e-12):
-            raise ValueError(f"delta_t ({delta_t}) must be an integer multiple of Ts ({self.Ts}).")
+        if not math.isclose(ratio, r_int, abs_tol=1e-12):
+            raise ValueError(f"delta_t {delta_t} not integer multiple of Ts {self.Ts}")
 
         x = copy.deepcopy(initial_state)
-        states = [copy.deepcopy(x)]  # s0
+        states = [copy.deepcopy(x)]
 
         for duration, u_arr in zip(durations, inputs):
-            # total sim ticks for this input segment
             sim_ticks = duration * r_int
 
-            # map the numpy input to a Space State once
             u = self.input_space.getState()
-            u['v'] = float(u_arr[0])
-            u['psi_dot'] = float(u_arr[1])
+            u["v"] = float(u_arr[0])
+            u["psi_dot"] = float(u_arr[1])
 
             for _ in range(sim_ticks):
                 x = self.dynamics._dynamics(state=x, input=u)
 
-            states.append(copy.deepcopy(x))  # boundary at segment end
+            states.append(copy.deepcopy(x))
 
-        # len(states) == len(inputs) + 1
         return tuple(states)
 
-    def change_phase(self, phase: str, reset: bool = True) -> None:
-        self.runner.change_phase(phase, reset=reset)
+    # ----------------------------------------------------------------------
+    def change_phase(self, name: str, reset: bool = True):
+        self.runner.change_phase(name, reset)
 
-    def getPhaseInputs(self, phase: str) -> np.ndarray:
-        try:
-            ph = self.runner.get_phase(phase)
-            return np.array(ph.inputs, dtype=float)
-        except Exception:
-            self.logger.error(f'Selected phase: "{phase}" does not have any input to return!')
-            return np.empty((0, 2), dtype=float)
-        
-# def main():
-#     sim = FRODO_Simulation(Ts = 0.1, use_web_interface = False,)
-#     sim.init()
-#     sim.start()
 
-#     # ---------- Option A: using simulations add virtual agent ----------
-#     test_agent_a = sim.add_agent("test_agent_a", agent_class= FRODO_SimulatedVisionAgent, start_config = [0.0, 0.0, 0.0], dt = sim.env.Ts)
-#     test_agent_a = sim.addVirtualAgent("test_agent_a", agent_class= FRODO_GeneralAgent, start_config = [0.0, 0.0, 0.0], dt = sim.env.Ts)
-#     # giving constant input
-#     test_agent_a.setInput(v= 0.5, psi_dot = 0)
+    # def getPhaseInputs(self, phase: str) -> np.ndarray:
+    #     try:
+    #         ph = self.runner.get_phase(phase)
+    #         return np.array(ph.inputs, dtype=float)
+    #     except Exception:
+    #         self.logger.error(f'Selected phase: "{phase}" does not have any input to return!')
+    #         return np.empty((0, 2), dtype=float)
 
-#     # create test_input phase
-#     inputs = [np.array([1.0, 0.0]) for _ in range(10)]
-#     durations = [1] * len(inputs)
+class FRODO_GeneralAgent_CommandSet(CommandSet):
+    def __init__(self, agent: FRODOGeneralAgent):
+        super().__init__(name=agent.agent_id)
+        self.agent = agent
 
-#     # ---------- Option B: Adding the agent manually ----------
-#     agent_id = 'test_agent'
-#     test_agent_b = FRODO_GeneralAgent(start_config = [0.0, 0.0, 0.0], fov_deg=360, view_range=1.5, agent_id=agent_id, Ts=sim.env.Ts) 
-    
-#     sim.agents[agent_id] = test_agent_b
+        # ---- Command: set state -----------------------------------------
+        cmd_set_state = Command(
+            name='set_state',
+            description='Set agent pose directly',
+            arguments=[
+                CommandArgument('x', type=float, optional=True, default=None),
+                CommandArgument('y', type=float, optional=True, default=None),
+                CommandArgument('psi', type=float, optional=True, default=None),
+            ],
+            function=self._set_state,
+            allow_positionals=True
+        )
 
-#     sim.env.addObject(test_agent_b)
-#     test_agent_b.logger.setLevel('DEBUG')
+        # ---- Command: set input -----------------------------------------
+        cmd_set_input = Command(
+            name='set_input',
+            description='Set velocity inputs (v, psi_dot)',
+            arguments=[
+                CommandArgument('v', type=float),
+                CommandArgument('psi_dot', type=float),
+            ],
+            function=self._set_input,
+            allow_positionals=True
+        )
 
-#     # pick different delta t -> one step for phase now equals 4 steps in the simulation
-#     test_agent_b.add_input_phase('test_phase', inputs = inputs, durations= durations, delta_t=0.4)
-#     test_agent_b.change_phase('test_phase', reset= True)
+        # ---- Command: switch phase --------------------------------------
+        cmd_phase = Command(
+            name='phase',
+            description='Switch to existing phase by name',
+            arguments=[
+                CommandArgument('name', type=str),
+            ],
+            function=self._change_phase,
+            allow_positionals=True
+        )
 
-#     while True:
-#         time.sleep(1)
+        self.addCommand(cmd_set_state)
+        self.addCommand(cmd_set_input)
+        self.addCommand(cmd_phase)
+
+    # ------------------------------------------------------------------
+    def _set_state(self, x=None, y=None, psi=None):
+        if x is not None:
+            self.agent.state.x = x
+        if y is not None:
+            self.agent.state.y = y
+        if psi is not None:
+            self.agent.state.psi = psi
+
+    # ------------------------------------------------------------------
+    def _set_input(self, v, psi_dot):
+        self.agent.input.v = v
+        self.agent.input.psi_dot = psi_dot
+
+    # ------------------------------------------------------------------
+    def _change_phase(self, name):
+        self.agent.change_phase(name)
+
 
 def main():
-    # # --- 1) Create a standard BilboLab FRODO simulation ---
-    # sim = FRODO_Simulation(
-    #     Ts=0.1,
-    # )
-    # sim.init()
-
-    # # --- 2) Add ONE vanilla BilboLab agent ---
-    # # FRODO_Simulation.add_agent() expects: (id, agent_class, **kwargs)
-    # start_config = [0.0, 0.0, 0.0]
-
-    # agent = FRODO_VisionAgent(Ts = 0.1, config=)
-
-    # agent = sim.add_agent(
-    #     id="frodo1",
-    #     agent_class=FRODO_VisionAgent,
-    #     start_config=start_config,
-    #     dt=sim.env.Ts
-    # )
-
-    # # (Optional) Apply a constant input for testing
-    # agent.setInput(v=0.3, psi_dot=0.0)
-
-    # # --- 3) Start simulation ---
-    # sim.start()
-
-    # # --- 4) Keep program alive ---
-    # while True:
-    #     time.sleep(1)
-    sim = FRODO_Simulation()
-    sim.init()
-
-
-    # Example: add one simulated agent
-    sim.new_agent(agent_id='frodo1', fov_deg=100, vision_radius=1.5)
-
-    sim.start()
+    ...
 
     while True:
         time.sleep(10)
@@ -383,7 +361,33 @@ if __name__ == '__main__':
     sim = FRODO_Simulation()
     sim.init()
 
-    sim.new_agent(agent_id='frodo1', fov_deg=100, vision_radius=1.5)
+    # agent = FRODOGeneralAgent(
+    #     start_config=[0.0, 0.0, 0.0],
+    #     agent_id="my_agent",
+    #     Ts=sim.Ts
+    # )
+    # cfg = FRODO_VisionAgent_Config(
+    # fov=np.deg2rad(100),
+    # vision_radius=1.5,
+    # color=[1, 0, 0],
+    # size=0.2
+    # )
+
+    # agent = FRODO_VisionAgent(
+    #     agent_id="frodo1",
+    #     Ts=sim.Ts,
+    #     config=cfg
+    # )
+
+    cfg = FRODO_General_Config(
+        color = (1, 0, 0), 
+        Ts = sim.Ts
+    )
+
+    agent = FRODOGeneralAgent(agent_id = 'frodo01', start_config= [0.0,0.0,0.0])
+
+    # sim.new_agent(agent_id='vfrodo1', fov_deg=100, vision_radius=1.5)
+    sim.add_agent(agent)
 
     sim.start()
 
