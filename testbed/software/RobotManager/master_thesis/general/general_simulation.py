@@ -130,7 +130,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         self.logger.debug(f"{self.scheduling.tick}: Action Frodo Input")
 
     def collision_checking(self):
-        print('collisions not implemented!')
+
         for object_key in self.objects:
             print(object_key)
             print(self.objects[object_key].configuration)
@@ -288,68 +288,64 @@ class FRODO_general_Simulation(FRODO_Simulation):
             agent.change_phase(phase)
 
 def main():
-    # create simulation (no web gui)
+    # === Simulation setup ===
     env_size_half = 10
-    sim = FRODO_general_Simulation(Ts=0.1, use_web_interface=True, limits=((-env_size_half, env_size_half), (-env_size_half, env_size_half)))
+    sim = FRODO_general_Simulation(
+        Ts=0.1,
+        use_web_interface=True,
+        limits=((-env_size_half, env_size_half), (-env_size_half, env_size_half)),
+    )
     sim.init()
 
-    # minimal agent start poses: [x, y, yaw]
+    # === Initial agent poses ===
     start_a = [0.0, 0.0, 0.0]
     start_b = [1.0, 0.5, 0.0]
 
-    # set colors for the web gui
-    color_ag1 = [0.7, 0, 0]
-    color_ag2 = [0, 0, 0.7]
+    # === Colors (GUI) ===
+    color_ag1 = (0.7, 0, 0)
+    color_ag2 = (0, 0, 0.7)
 
-     # ---------- Option A: using simulations add virtual agent ----------
-    test_agent_a = sim.new_agent(agent_id = "frodo1_v", 
-                                        agent_class= FRODOGeneralAgent, 
-                                        start_config = start_a,
-                                        dt = sim.environment.Ts,
-                                        vision_radius=1.5,
-                                        vision_fov=math.radians(120),
-                                        color=color_ag1
-                                        )
+    # === Add agents using new_general_agent ===
+    config = FRODO_General_Config(color=color_ag1)
+    agent_a = sim.new_agent(
+        agent_id="vfrodo1",
+        agent_class=FRODOGeneralAgent,
+        start_config=start_a,
+        config=config,
+    )
 
+    config = FRODO_General_Config(color=color_ag2)
+    agent_b = sim.new_agent(
+        agent_id="vfrodo2",
+        agent_class=FRODOGeneralAgent,
+        start_config=start_b,
+        config=config,
+    )
 
-    # # ---------- Option B: Adding the agent manually - TODO: Not sure if this should be done at all ----------
-    # agent_id = 'frodo2_v'
-    # test_agent_b = FRODOGeneralAgent(start_config = start_b, fov_deg=360, view_range=1.5, agent_id = agent_id, Ts=sim.environment.Ts, color = color_ag2) 
-    
-    # sim.addExistingVirtualAgent(test_agent_b)
-
+    # === Add virtual obstacle (optional) ===
     # sim.addVirtualObstacle(
     #     obstacle_id="wall1",
     #     position={"x": 3.0, "y": -1.0},
-    #     orientation = 90,
-    #     length= 2.0,
-    #     width = 0.5,
-    #     height = 1.0,
+    #     orientation=90,
+    #     length=2.0,
+    #     width=0.5,
+    #     height=1.0,
     # )
 
-    # # create test_input phase
-    # inputs_a = tuple([np.array([1.0, 0.0]) for _ in range(1000)])
-    # inputs_b = tuple([np.array([-1.0, 0.0]) for _ in range(1000)])
-    # durations = tuple([1] * len(inputs_a))
+    # === Example: input phases for scripted motion (optional) ===
+    # inputs = tuple([np.array([1.0, 0.0]) for _ in range(100)])
+    # durations = tuple([1] * len(inputs))
+    # agent_a.add_input_phase("forward", inputs=inputs, durations=durations, delta_t=0.4)
+    # sim.set_phase_all_agents("forward")
 
+    # === Start simulation ===
+    sim.start()
 
-
-    # # pick different delta t -> one step for phase now equals 4 steps in the simulation
-    # test_agent_a.add_input_phase('test_phase', inputs = inputs_a, durations= durations, delta_t=0.4)
-    # test_agent_b.add_input_phase('test_phase', inputs = inputs_a, durations= durations, delta_t=0.4)
-    # # test_agent_b.change_phase('test_phase', reset= True)
-    
-    # sim.start()
-    
-    # sim.set_phase_all_agents('test_phase')
-
+    # === Infinite keep-alive ===
     while True:
         time.sleep(1)
 
 if __name__ == "__main__":
-    # main()
-    sim = FRODO_general_Simulation()
-    sim.new_agent(agent_id = "vfrodo1")
-    sim.init()
-    sim.start()
+    main()
+    
 
