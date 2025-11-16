@@ -7,12 +7,13 @@ from dataclasses import dataclass, field
 from typing import List, Any
 import logging
 
-from bilbolab.applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS
-from bilbolab.applications.FRODO.frodo_application_sim import FRODO_VisionAgent
-from bilbolab.applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
+from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FRODO_ENVIRONMENT_ACTIONS, FRODO_SimulationObject
+from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
+# from applications.FRODO.frodo_application_sim import FRODO_VisionAgent
+from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
-import bilbolab.extensions.simulation.src.core as core
-from bilbolab.core.utils.logging_utils import Logger
+import extensions.simulation.src.core as core
+from core.utils.logging_utils import Logger
 
 @dataclass
 class PhaseState():
@@ -176,7 +177,7 @@ class PhaseRunner:
     #     kwargs["extra"] = merged
     #     return msg, kwargs
 
-class FRODOGeneralAgent(FRODO_VisionAgent):
+class FRODOGeneralAgent(FRODO_DynamicAgent,  FRODO_SimulationObject):
 # class FRODO_GeneralAgent(FRODO_Agent_Virtual_Vision):
 
     length: float
@@ -378,10 +379,13 @@ def main():
         time.sleep(10)
 
 if __name__ == '__main__':
-    from bilbolab.applications.FRODO.simulation.frodo_app_standalone import FRODO_App_Standalone
-    app = FRODO_App_Standalone()
-    app.init()
-    app.start()
+    
+    sim = FRODO_Simulation()
+    sim.init()
+
+    sim.new_agent(agent_id='frodo1', fov_deg=100, vision_radius=1.5)
+
+    sim.start()
 
     while True:
         time.sleep(10)

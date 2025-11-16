@@ -32,7 +32,7 @@ class RobotContainer:
 
 
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
-class Example_David:
+class HHI_demo:
     joystick_manager: JoystickManager
     babylon_visualization: BabylonVisualization
     robots: dict[str, RobotContainer]
@@ -234,7 +234,7 @@ class Example_David:
 # === BILBO INTERACTIVE CLI ============================================================================================
 class BILBO_Interactive_CommandSet(CommandSet):
 
-    def __init__(self, example: Example_David):
+    def __init__(self, example: HHI_demo):
         super().__init__('example_david')
         self.example = example
 
@@ -251,7 +251,7 @@ class BILBO_Interactive_CommandSet(CommandSet):
 
 
 def main():
-    example = Example_David()
+    example = HHI_demo()
 
     example.init()
     example.start()
