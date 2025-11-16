@@ -1,7 +1,5 @@
-# TODO: Fix this incredibly ugly bugfix - i have to import object via a second 
-from bilbolab.applications.FRODO.frodo_application_sim import Object
-
-import bilbolab.extensions.simulation.src.core.spaces as spaces
+from extensions.simulation.src.core.environment import Object
+import extensions.simulation.src.core.spaces as spaces
 
 class ObstacleObject(Object):
     object_type = "obstacle"

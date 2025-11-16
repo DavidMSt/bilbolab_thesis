@@ -171,18 +171,17 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     - optional PhaseRunner for scripted inputs
     """
 
-    def __init__(
-        self,
-        agent_id: str,
-        start_config: list[float],
-        config: FRODO_General_Config | None = None
+    def __init__(self, agent_id: str,
+        Ts = None,
+        config: FRODO_General_Config | None = None,
+        start_config: list[float] = [0.0, 0.0, 0.0]
     ):
 
         if config is None:
             config = FRODO_General_Config()
 
                 # Init dynamic + simulation 
-        FRODO_DynamicAgent.__init__(self, agent_id=agent_id, Ts=config.Ts)
+        FRODO_DynamicAgent.__init__(self, agent_id=agent_id, Ts=Ts)
         FRODO_SimulationObject.__init__(self, agent_id)
 
         self.config = config
@@ -196,7 +195,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.cli = FRODO_GeneralAgent_CommandSet(self)
 
         # Runner
-        self.runner = PhaseRunner(simulation_dt=self.config.Ts, logger=self.logger)
+        self.runner = PhaseRunner(simulation_dt=Ts, logger=self.logger)
 
         self.setup_scheduling()
 

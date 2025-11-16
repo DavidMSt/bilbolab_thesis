@@ -42,6 +42,8 @@ class FRODO_ENVIRONMENT_ACTIONS(enum.StrEnum):
     COMMUNICATION = 'frodo_communication'
     ESTIMATION = 'frodo_estimation'
     CORRECTION = 'frodo_correction'
+    # master thesis
+    COLLISION = 'frodo_collision'
 
 
 # ======================================================================================================================
