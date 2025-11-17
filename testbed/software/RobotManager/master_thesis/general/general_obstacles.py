@@ -25,6 +25,7 @@ class GeneralObstacle(Object):
         if config is None:
             config = Obstacle_Config()
 
+
         # define geometry / footprint
         self.space.dimensions[0].limits = [
             [-config.length/2, config.length/2],

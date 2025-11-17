@@ -156,7 +156,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     events: FRODO_Simulation_Events
 
-    def __init__(self, Ts=0.1, use_web_interface: bool = False, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment):
+    def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment):
         
         super().__init__(Ts)
 

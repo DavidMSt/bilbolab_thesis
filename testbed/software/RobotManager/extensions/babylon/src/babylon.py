@@ -398,7 +398,7 @@ class BabylonVisualization:
             'coordinate_system_length': 0.5,
 
             'background_color': [31 / 255, 32 / 255, 35 / 255],
-            'title': 'Dustin Babylon.JS',
+            'title': 'HHI-Demo Babylon.JS',
 
             'scene': {
                 'add_fog': True,

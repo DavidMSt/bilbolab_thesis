@@ -3,9 +3,13 @@ from __future__ import annotations
 import dataclasses
 import random
 import time
+import os
+import signal
+import subprocess
 
 import numpy as np
 
+# bilbolab imports
 from core.utils.callbacks import Callback
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
@@ -25,10 +29,20 @@ from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Co
     BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
 
+# thesis imports
+from master_thesis.general.general_simulation import FRODO_general_Simulation
+from master_thesis.general.general_agents import FRODOGeneralAgent
+from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 
 @dataclasses.dataclass
 class RobotContainer:
     babylon: BabylonFrodo
+    sim_agent: FRODOGeneralAgent
+
+@dataclasses.dataclass
+class ObstacleContainer:
+    babylon: WallFancy | None
+    sim_obstacle: GeneralObstacle
 
 
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
@@ -47,6 +61,7 @@ class HHI_demo:
         self.logger = Logger('BILBO_InteractiveExample', 'DEBUG')
 
         self.robots = {}
+        self.obstacles = {}
 
         self.command_set = BILBO_Interactive_CommandSet(self)
 
@@ -56,14 +71,12 @@ class HHI_demo:
         self.gui.cli_terminal.setCLI(self.cli)
 
         self.babylon_visualization = BabylonVisualization(id='babylon', babylon_config={
-            'title': 'Example David'})
+            'title': 'HHI demo'})
 
-        # Sound System for speaking and sounds
-        self.soundsystem = SoundSystem(primary_engine='etts', volume=1)
-        self.soundsystem.start()
+        # Simulation Environment 
+        self.env = BaseEnvironment(Ts=0.01, run_mode='rt') # TODO: put here my adjusted environment? 
+        self.sim = FRODO_general_Simulation(Ts=0.01)
 
-        # Simulation Environment
-        self.env = BaseEnvironment(Ts=0.01, run_mode='rt')
 
         self.env.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._simulationOutputStep)
 
@@ -80,19 +93,22 @@ class HHI_demo:
         self.env.init()
         self.env.initialize()
 
+        self.sim.init()
+
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
+        self.free_port(8098)
+        self.free_port(8400)
         self.gui.start()
         self.babylon_visualization.start()
         self.env.start()
-        self.logger.info("Example David started")
-        self.soundsystem.speak('Start Example David')
+        self.sim.start()
+        self.logger.info("HHI demo started")
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
-        self.soundsystem.speak('Example David stopped')
         self.joystick_manager.exit()
-        self.logger.info("Example David stopped")
+        self.logger.info("HHI demo stopped")
         time.sleep(2)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -103,25 +119,79 @@ class HHI_demo:
             self.logger.warning(f'Robot with ID {robot_id} already exists')
             return None
 
+        # babylon visualization
         robot_babylon = BabylonFrodo(object_id=robot_id, color=[1, 0, 0], fov=0, text='1')
         self.babylon_visualization.addObject(robot_babylon)
 
-        self.robots[robot_id] = RobotContainer(babylon=robot_babylon)
+        # simulation
+        robot_sim = self.sim.new_agent(agent_id=robot_id)
+        assert robot_sim is not None
+
+        # store both
+        self.robots[robot_id] = RobotContainer(
+            babylon=robot_babylon,
+            sim_agent=robot_sim)
         self.logger.info(f'Robot with ID {robot_id} added')
 
         return self.robots[robot_id]
+    
+    # ------------------------------------------------------------------------------------------------------------------
+    
+    def addObstacle(self, obstacle_id: str,
+                x: float = 0.0,
+                y: float = 0.0,
+                length: float = 1.0,
+                width: float = 0.3) -> ObstacleContainer | None:
+
+        # Check if it already exists
+        if obstacle_id in self.obstacles:
+            self.logger.warning(f'Obstacle with ID {obstacle_id} already exists')
+            return None
+
+        # babylon visualization
+        # (Use WallFancy to match your environment)
+        wall_visual = WallFancy(obstacle_id, length=length, include_end_caps=True)
+        wall_visual.setPosition(x=x, y=y)
+        self.babylon_visualization.addObject(wall_visual)
+
+        # simulation
+        sim_obstacle = self.sim.new_obstacle(
+            obstacle_id=obstacle_id,
+            x=x,
+            y=y,
+            config=Obstacle_Config(length=length, width=width)
+        )
+
+        assert sim_obstacle is not None
+
+        # Store both
+        container = ObstacleContainer(
+            babylon=wall_visual,
+            sim_obstacle=sim_obstacle
+        )
+
+        self.obstacles[obstacle_id] = container
+        self.logger.info(f'Obstacle with ID {obstacle_id} added')
+
+        return container
+
+
+    # ------------------------------------------------------------------------------------------------------------------
+
+    def free_port(self, port):
+        try:
+            pid = (
+                subprocess.check_output(["lsof", "-ti", f":{port}"])
+                .decode()
+                .strip()
+            )
+            if pid:
+                os.kill(int(pid), signal.SIGKILL)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------------------------------------------------------
     def removeRobot(self, robot: str | RobotContainer):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def assignJoystick(self, joystick: int, robot: str | RobotContainer):
-
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def removeJoystick(self, robot: str | RobotContainer):
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -132,14 +202,7 @@ class HHI_demo:
             return None
 
     # === PRIVATE METHODS ==============================================================================================
-    def _newJoystick_callback(self, joystick: Joystick):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _joystickDisconnected_callback(self, joystick: Joystick):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
+    
     def reset(self):
 
         ...
@@ -214,10 +277,14 @@ class HHI_demo:
     def _simulationOutputStep(self):
         ...
         for robot in list(self.robots.values()):
+            cfg = robot.sim_agent.configuration_global
+            pos = cfg['pos']
+            ori = cfg['ori'][0] if 'ori' in cfg else 0 # TODO: watch out for potential errors!
+
             robot.babylon.setState(
-                x=random.uniform(-2, 2),
-                y=random.uniform(-2, 2),
-                psi=random.uniform(-np.pi, np.pi),
+                x = pos[0],
+                y = pos[1],
+                psi = ori,
             )
         # # Update all BILBOs
         # for robot in self.robots.values():
@@ -247,7 +314,23 @@ class BILBO_Interactive_CommandSet(CommandSet):
                 CommandArgument(name='robot_id', type=str, description='ID of the robot to add')
             ]
         )
+
+        add_obstacle_command = Command(
+            function=self.example.addObstacle,
+            name='add_obstacle',
+            description='Add an obstacle (visual + simulation)',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='obstacle_id', type=str),
+                CommandArgument(name='x', type=float, default=0.0),
+                CommandArgument(name='y', type=float, default=0.0),
+                CommandArgument(name='length', type=float, default=1.0),
+                CommandArgument(name='width', type=float, default=0.3),
+            ]
+        )
+
         self.addCommand(add_robot_command)
+        self.addCommand(add_obstacle_command)
 
 
 def main():
