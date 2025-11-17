@@ -16,14 +16,16 @@ from extensions.cli.cli import CommandSet, Command, CommandArgument
 
 # master thesis
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config, FRODO_GeneralAgent_CommandSet
-from master_thesis.general.general_obstacles import ObstacleObject
+from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
 SIMULATED_STATICS: dict[str, FRODO_Static] = {}
+SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
 
 # ======================================================================================================================
 USE_AGENT_DEFINITIONS = True
+USE_OBSTACLE_DEFINITIONS = True
 
 class FRODO_General_CommandSet(CommandSet):
     def __init__(self, sim: "FRODO_general_Simulation"):
@@ -176,18 +178,24 @@ class FRODO_general_Simulation(FRODO_Simulation):
     def check_collisions(self):
         ...
         
-    def addVirtualObstacle(self, obstacle_id: str, obstacle_class: type[ObstacleObject] = ObstacleObject, **obstacle_kwargs) -> ObstacleObject:
-        # log
-        self.logger.info(f"Add Virtual Obstacle: {obstacle_id}")
-
-        # instantiate obstacle
-        obstacle = obstacle_class(object_id=obstacle_id, **obstacle_kwargs)
+    def new_obstacle(self,
+                    obstacle_id: str,
+                    config: Obstacle_Config | None,
+                    obstacle_class: type[GeneralObstacle] = GeneralObstacle, **obstacle_kwargs) -> GeneralObstacle | None:
         
-        # register into environment
-        self.environment.addObject(obstacle)
+        if obstacle_id in SIMULATED_OBSTACLES:
+            self.logger.warning(f"Simulated agent {obstacle_id} already exists. Cannot add it again")
+            return None
 
-        # store locally
-        self.obstacles[obstacle_id] = obstacle
+        # TODO: Add option for predefined obstacles here like in new_agent()
+
+        if config is None:
+            config = Obstacle_Config()
+
+        obstacle = obstacle_class(
+            obstacle_id = obstacle_id,
+            config = config,
+        )
 
         return obstacle
     
@@ -247,41 +255,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
         
         self.add_agent(agent)
         return agent
-
-    # # TODO: check if this is even necessary or if i should use the add_agent of bilbolab from now on
-    # def addVirtualAgent(self, id: str,
-    #                     agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
-    #                     **agent_kwargs):
-
-    #     if not issubclass(agent_class, FRODOGeneralAgent):
-    #         raise TypeError(f"Only FRODOGeneralAgent allowed, got {agent_class.__name__}")
-
-    #     # Instantiate your custom agent
-    #     agent = agent_class(agent_id=id, Ts=self.environment.Ts, **agent_kwargs)
-
-    #     # register with original BilboLab
-    #     super().add_agent(agent)
-
-    #     # additional registry (optional)
-    #     self.agents[id] = agent
-
-    #     return agent
-
-    # def addExistingVirtualAgent(self, agent: FRODOGeneralAgent, logger_level: str = 'INFO'):
-    #     # same logger message as from the addVirtual methods from parent class 
-    #     self.logger.info(f"Add Virtual Agent: {agent.agent_id}")
-    #     # add the agent to the simulation
-    #     self.agents[agent.agent_id] = agent
-
-    #     # add agent to environment
-    #     self.environment.addObject(agent)
-    #     # configure the logger
-    #     agent.logger.setLevel(logger_level)
-
-    #     # extract id string from the agent
-    #     id = agent.agent_id
-
-    #     return self.agents[id]
     
     def set_phase_all_agents(self, phase :str):
         for agent in self.agents.values():
@@ -306,31 +279,29 @@ def main():
     color_ag2 = (0, 0, 0.7)
 
     # === Add agents using new_general_agent ===
-    config = FRODO_General_Config(color=color_ag1)
+    vfr1_config = FRODO_General_Config(color=color_ag1)
     agent_a = sim.new_agent(
         agent_id="vfrodo1",
         agent_class=FRODOGeneralAgent,
         start_config=start_a,
-        config=config,
+        config=vfr1_config,
     )
 
-    config = FRODO_General_Config(color=color_ag2)
+    vfr2_config = FRODO_General_Config(color=color_ag2)
     agent_b = sim.new_agent(
         agent_id="vfrodo2",
         agent_class=FRODOGeneralAgent,
         start_config=start_b,
-        config=config,
+        config=vfr2_config,
     )
 
     # === Add virtual obstacle (optional) ===
-    # sim.addVirtualObstacle(
-    #     obstacle_id="wall1",
-    #     position={"x": 3.0, "y": -1.0},
-    #     orientation=90,
-    #     length=2.0,
-    #     width=0.5,
-    #     height=1.0,
-    # )
+    vob1_config = Obstacle_Config()
+    obstacle_b = sim.new_obstacle(
+        obstacle_id="wall1",
+        config = vob1_config,
+        
+    )
 
     # === Example: input phases for scripted motion (optional) ===
     # inputs = tuple([np.array([1.0, 0.0]) for _ in range(100)])
