@@ -19,7 +19,7 @@ class GeneralObstacle(Object):
     object_type = "obstacle"
     static = True
 
-    def __init__(self, obstacle_id: str, x:float = 0.0, y:float = 0.0, config: Obstacle_Config | None = None, *args):
+    def __init__(self, obstacle_id: str, x:float, y:float, config: Obstacle_Config | None = None, *args):
         self.space = spaces.Space2D()         # <-- creates a 2D space
 
         if config is None:

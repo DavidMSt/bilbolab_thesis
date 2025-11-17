@@ -132,10 +132,18 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         self.logger.debug(f"{self.scheduling.tick}: Action Frodo Input")
 
     def collision_checking(self):
+        for key, obj in self.objects.items():
+            cfg = obj.configuration_global
+            print("DEBUG:", key, cfg)
 
-        for object_key in self.objects:
-            print(object_key)
-            print(self.objects[object_key].configuration)
+            if cfg['pos'] is None:
+                print("ERROR: object", key, "has no pos")
+                continue
+
+            x, y = cfg['pos'][0], cfg['pos'][1]
+            psi = cfg['ori'][0] if 'ori' in cfg else None
+
+            print(key, "pos:", x, y, "psi:", psi)
 
     @property
     def limits(self) ->list[list[float]]:
@@ -175,8 +183,19 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         self.obstacles = {}
 
-    def check_collisions(self):
-        ...
+    def add_obstacle(self,
+            obstacle: GeneralObstacle) -> GeneralObstacle:
+
+        global SIMULATED_OBSTACLES
+        SIMULATED_OBSTACLES[obstacle.obstacle_id] = obstacle
+
+        # Enforce Ts on obstacle
+        obstacle.scheduling.Ts = self.Ts
+
+        self.environment.addObject(obstacle)
+        self.logger.info(f"Simulated agent {obstacle.obstacle_id} added")
+
+        return obstacle
         
     def new_obstacle(self,
                     obstacle_id: str,
@@ -195,7 +214,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
         obstacle = obstacle_class(
             obstacle_id = obstacle_id,
             config = config,
+            x = 0.0,
+            y = 0.0
         )
+
+        self.add_obstacle(obstacle)
 
         return obstacle
     
@@ -265,7 +288,6 @@ def main():
     env_size_half = 10
     sim = FRODO_general_Simulation(
         Ts=0.1,
-        use_web_interface=True,
         limits=((-env_size_half, env_size_half), (-env_size_half, env_size_half)),
     )
     sim.init()

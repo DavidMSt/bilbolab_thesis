@@ -199,6 +199,15 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
         self.setup_scheduling()
 
+        x, y, psi = start_config
+
+        # local pose
+        self.setPosition([x, y])
+        self.setOrientation(psi)
+
+        # builds world configuration entry
+        self.update_global_configuration()
+
     def setup_scheduling(self):
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION,
                     object=self,
