@@ -180,33 +180,43 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         if config is None:
             config = FRODO_General_Config()
 
-                # Init dynamic + simulation 
-        FRODO_DynamicAgent.__init__(self, agent_id=agent_id, Ts=Ts)
-        FRODO_SimulationObject.__init__(self, agent_id)
+        # Store Ts before parent init
+        if Ts is None:
+            Ts = 0.1
+        self.Ts = Ts
 
+        # Init dynamic agent (this handles most initialization including state)
+        FRODO_DynamicAgent.__init__(self, agent_id=agent_id, Ts=Ts)
+        
+        # Set FRODO_SimulationObject attributes
+        self.agent_id = agent_id
         self.config = config
         self.color = config.color
-        self.size = getattr(config, "size", 0.2)  # if you add size later
+        self.size = getattr(config, "size", 0.2)
         self.logger = Logger(agent_id)
 
-        # set initial pose
-        self.state.x, self.state.y, self.state.psi = map(float, start_config)
+        # Initialize space and configuration for collision detection
+        if not hasattr(self, 'space') or self.space is None:
+            import extensions.simulation.src.core.spaces as spaces
+            self.space = spaces.Space2D()
+        if not hasattr(self, '_configuration') or self._configuration is None:
+            self._configuration = self.space.getState()
+
+        self._initial_start_config = list(start_config)
 
         self.cli = FRODO_GeneralAgent_CommandSet(self)
 
-        # Runner
-        self.runner = PhaseRunner(simulation_dt=Ts, logger=self.logger)
+        # Runner (use stored Ts)
+        self.runner = PhaseRunner(simulation_dt=self.Ts, logger=self.logger)
 
         self.setup_scheduling()
 
-        x, y, psi = start_config
-
-        # local pose
-        self.setPosition([x, y])
-        self.setOrientation(psi)
-
-        # builds world configuration entry
-        self.update_global_configuration()
+        # Apply initial start configuration
+        x0, y0, psi0 = self._initial_start_config
+        if hasattr(self, 'state'):
+            self.state.x = float(x0)
+            self.state.y = float(y0)
+            self.state.psi = float(psi0)
 
     def setup_scheduling(self):
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION,
@@ -277,6 +287,15 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     # ----------------------------------------------------------------------
     def change_phase(self, name: str, reset: bool = True):
         self.runner.change_phase(name, reset)
+
+    # ----------------------------------------------------------------------
+    def output(self, env):
+        """Populate configuration_global for collision detection."""
+        # Update the local configuration from the current state
+        if hasattr(self, '_configuration') and self._configuration is not None:
+            self._configuration['pos'] = [self.state.x, self.state.y]
+            if hasattr(self._configuration, 'ori') or 'ori' in dir(self._configuration):
+                self._configuration['ori'] = [self.state.psi]
 
 class FRODO_GeneralAgent_CommandSet(CommandSet):
     def __init__(self, agent: FRODOGeneralAgent):

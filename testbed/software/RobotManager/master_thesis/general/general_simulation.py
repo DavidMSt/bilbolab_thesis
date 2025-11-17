@@ -2,7 +2,7 @@
 import numpy as np
 import time
 import math
-from typing import overload, override, Type
+from typing import Type
 
 # bilbolab
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS, FrodoEnvironment, FRODO_Static, FRODO_Simulation_Events
@@ -13,6 +13,7 @@ import extensions.simulation.src.core.environment as core_env
 from applications.FRODO.definitions import get_simulated_agent_definition_by_id
 from core.utils.dataclass_utils import update_dataclass_from_dict
 from extensions.cli.cli import CommandSet, Command, CommandArgument
+from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # master thesis
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config, FRODO_GeneralAgent_CommandSet
@@ -121,6 +122,18 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                         function=self.collision_checking,
                         priority=65,
                         parent=self.scheduling.actions['objects'])
+        
+        # core.scheduling.Action(
+        #     action_id=BASE_ENVIRONMENT_ACTIONS.OUTPUT,
+        #     object=self,
+        #     function=self.action_output,
+        #     priority=70,
+        #     parent=self.scheduling.actions['objects']
+        # )
+
+    def action_output(self):
+        for obj in self.objects.values():
+            obj.output(self)
 
     def set_limits(self, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), wrapping = [False, False]):
         pos_dim = self.space.dimensions[0] # Get the first dimension of the space (E(2) vector)
@@ -133,17 +146,19 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
     def collision_checking(self):
         for key, obj in self.objects.items():
-            cfg = obj.configuration_global
-            print("DEBUG:", key, cfg)
-
-            if cfg['pos'] is None:
-                print("ERROR: object", key, "has no pos")
-                continue
-
-            x, y = cfg['pos'][0], cfg['pos'][1]
-            psi = cfg['ori'][0] if 'ori' in cfg else None
-
-            print(key, "pos:", x, y, "psi:", psi)
+            # Just use the state directly instead of configuration_global
+            if hasattr(obj, 'state'):
+                state = obj.state
+                x = getattr(state, 'x', None)
+                y = getattr(state, 'y', None)
+                psi = getattr(state, 'psi', 0.0)
+                
+                if x is not None and y is not None:
+                    print(key, "pos:", x, y, "psi:", psi)
+                else:
+                    print("ERROR: object", key, "has no x/y in state")
+            else:
+                print("ERROR: object", key, "has no state attribute")
 
     @property
     def limits(self) ->list[list[float]]:
@@ -184,7 +199,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         self.obstacles = {}
 
     def add_obstacle(self,
-            obstacle: GeneralObstacle) -> GeneralObstacle:
+        obstacle: GeneralObstacle) -> GeneralObstacle:
 
         global SIMULATED_OBSTACLES
         SIMULATED_OBSTACLES[obstacle.obstacle_id] = obstacle
@@ -193,6 +208,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
         obstacle.scheduling.Ts = self.Ts
 
         self.environment.addObject(obstacle)
+        # Ensure obstacle publishes its configuration immediately so collision checks can use it
+        try:
+            getattr(obstacle, 'output', lambda env: None)(self.environment)
+        except Exception:
+            pass
         self.logger.info(f"Simulated agent {obstacle.obstacle_id} added")
 
         return obstacle
@@ -222,7 +242,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return obstacle
     
-    @override
     def add_agent(self,
                 agent: FRODOGeneralAgent) -> FRODOGeneralAgent:
 
@@ -234,6 +253,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
         agent.dynamics.Ts = self.Ts
 
         self.environment.addAgent(agent)
+        # ensure the agent exposes its current configuration immediately (populate configuration_global)
+        try:
+            getattr(agent, 'output', lambda env: None)(self.environment)
+        except Exception:
+            pass
         self.logger.info(f"Simulated agent {agent.agent_id} added")
         self.cli.addChild(agent.cli)
 
@@ -241,7 +265,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agent
 
-    @override
     def new_agent(self,
                   agent_id: str,
                   config: FRODO_General_Config | None = None,
@@ -269,14 +292,28 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         update_dataclass_from_dict(config, kwargs)
 
+        start_config = kwargs.pop('start_config', None)
+
         agent = agent_class(
             agent_id=agent_id,
             Ts=self.Ts,
             config=config,
             **kwargs
-            )
+        )
         
         self.add_agent(agent)
+
+        if start_config is not None:
+            x, y, psi = start_config
+            agent.state.x = x
+            agent.state.y = y
+            agent.state.psi = psi
+            # call output if available to populate configuration_global without assuming method exists
+            try:
+                getattr(agent, 'output', lambda env: None)(self.environment)
+            except Exception:
+                pass
+
         return agent
     
     def set_phase_all_agents(self, phase :str):
@@ -341,4 +378,3 @@ def main():
 if __name__ == "__main__":
     main()
     
-
