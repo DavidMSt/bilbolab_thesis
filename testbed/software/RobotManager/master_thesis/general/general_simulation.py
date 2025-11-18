@@ -154,11 +154,14 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                 psi = getattr(state, 'psi', 0.0)
                 
                 if x is not None and y is not None:
-                    print(key, "pos:", x, y, "psi:", psi)
+                    pass
+                    # print(key, "pos:", x, y, "psi:", psi)
                 else:
-                    print("ERROR: object", key, "has no x/y in state")
+                    pass
+                    # print("ERROR: object", key, "has no x/y in state")
             else:
-                print("ERROR: object", key, "has no state attribute")
+                pass
+                # print("ERROR: object", key, "has no state attribute")
 
     @property
     def limits(self) ->list[list[float]]:

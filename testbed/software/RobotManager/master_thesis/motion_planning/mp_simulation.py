@@ -49,7 +49,7 @@ class FRODO_MP_Simulation(FRODO_general_Simulation):
         self.mpi = MPSimulationModule(agents=self.agents, logger=self.logger)  # type: ignore
 
 
-def motion_planning_task():
+def mp_task_example1():
     app = FRODO_MP_Simulation()
     app.init()
 
@@ -89,4 +89,4 @@ def motion_planning_task():
     
 
 if __name__ == '__main__':
-    motion_planning_task()
+    mp_task_example1()
