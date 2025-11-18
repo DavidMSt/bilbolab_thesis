@@ -9,17 +9,15 @@ from typing import Type, cast, List, Callable
 import logging
 
 # bilbolab
-from bilbolab.applications.FRODO.simulation.frodo_simulation_utils import frodo_virtual_agent_colors, is_in_fov
-from bilbolab.applications.FRODO.simulation.frodo_simulation import FRODO_ENVIRONMENT_ACTIONS
-from bilbolab.applications.FRODO.utilities.web_gui.FRODO_Web_Interface import FRODO_Web_Interface, Group 
-import bilbolab.extensions.simulation.src.core as core
-from bilbolab.core.utils.logging_utils import Logger
-from bilbolab.applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
+from applications.FRODO.simulation.frodo_simulation import FRODO_ENVIRONMENT_ACTIONS
+import extensions.simulation.src.core as core
+from core.utils.logging_utils import Logger
+from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
-from general.general_agents import FRODOGeneralAgent
-from general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerBase
-from general.general_agents import PhaseRunner, ExecutionPhase
+from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config
+from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
+from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerBase
+from master_thesis.general.general_agents import PhaseRunner, ExecutionPhase
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
@@ -76,7 +74,7 @@ class MPAgentModule():
     width: float = 0.115
     height: float = 0.052  
 
-    def __init__(self, env: FrodoGeneralEnvironment, runner: PhaseRunner, id: str, logger: Logger, plotting_group: Group | None = None) -> None:
+    def __init__(self, env: FrodoGeneralEnvironment, runner: PhaseRunner, id: str, logger: Logger, plotting_group = None) -> None:
         self.env = env
         self.runner = runner
         self.id = id
@@ -155,16 +153,16 @@ class MPAgentModule():
 class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
     mp_interface: MPAgentModule
  
-    def __init__(self, env, start_config: List[float], fov_deg = 360, view_range = 1.5, *args, **kwargs) -> None: # TODO: Change start config here and in the general class to tuple
-        super().__init__(start_config, fov_deg, view_range, runner = True, *args, **kwargs)
+    def __init__(self, env, agent_id: str, Ts=None, config: FRODO_General_Config | None = None, start_config=[0,0,0], *args, **kwargs) -> None:
+        super().__init__(agent_id=agent_id, Ts=Ts, config=config, start_config=start_config, *args, **kwargs)
 
         # motion_planning interface for OMPL configuration
         self.mpi = MPAgentModule(
-            env=env,  # will be bound later
+            env=env,
             id=self.agent_id,
-            runner= self.runner,
-            plotting_group = self._plotting_group,
-            logger = self.logger
+            runner=self.runner,
+            plotting_group=None,
+            logger=self.logger
         )
 
     # def plan_motion(self, phase_key):
@@ -223,18 +221,21 @@ class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
     #     return states
 
 if __name__ == '__main__':
-    sim = FRODO_general_Simulation(Ts = 0.1, use_web_interface=True, env = FrodoGeneralEnvironment)
+    sim = FRODO_general_Simulation(Ts=0.1, env=FrodoGeneralEnvironment)
     sim.init()
     sim.start()
-    start_config = [0.0,0.0,0.0]
-    goal_config = [1.0,1.0,np.pi]
-    agent = FRODO_MotionPlanning_Agent(env = sim.environment, agent_id = 'frodo1_v', start_config= start_config, dt = 0.1, Ts = 0.1) # TODO: Should not be needed to do dt and Ts here
-    sim.addExistingVirtualAgent(agent)
+    start_config = [0.0, 0.0, 0.0]
+    goal_config = [1.0, 1.0, np.pi]
+    agent = FRODO_MotionPlanning_Agent(
+        env=sim.environment, 
+        agent_id='frodo1_v', 
+        Ts=0.1,
+        start_config=start_config
+    )
+    sim.add_agent(agent)
     agent.mpi.plan_motion(phase_key='test_phase', start_config=start_config, goal_config=goal_config)
-    
     
     agent.runner.change_phase('test_phase')
 
     sleep(3)
-    # print(agent.getConfiguration())
     print(agent._configuration)

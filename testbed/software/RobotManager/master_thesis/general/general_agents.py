@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import logging
 
 # bilbolab
-from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FRODO_ENVIRONMENT_ACTIONS, FRODO_SimulationObject, FRODO_VisionAgent_CommandSet
+from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FRODO_ENVIRONMENT_ACTIONS, FRODO_SimulationObject
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
@@ -33,7 +33,7 @@ class ExecutionPhase:
     """
     # TODO: Inputs als vorsteuerung -> Zeithorizont verändert sich? (für execution)
     inputs: tuple[np.ndarray, ...] = field(default_factory=tuple)     # shape (2,)
-    states: tuple[core.spaces.State, ...] | None = field(default=None)  # State objects at segment boundaries
+    states: tuple[np.ndarray, ...] | None = field(default=None)  # State objects at segment boundaries
     durations: tuple[float, ...] = field(default_factory=tuple)         # steps per input
     delta_t: float = 0.1 # time increment used during the planned phase (phase time % simulation time != 0 for compatibility reasons)
     phase_state: PhaseState = field(default_factory=PhaseState)
@@ -171,10 +171,12 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     - optional PhaseRunner for scripted inputs
     """
 
-    def __init__(self, agent_id: str,
+    def __init__(
+        self, 
+        agent_id: str,
         Ts = None,
         config: FRODO_General_Config | None = None,
-        start_config: list[float] = [0.0, 0.0, 0.0]
+        start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
     ):
 
         if config is None:
@@ -185,8 +187,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
             Ts = 0.1
         self.Ts = Ts
 
-        # Init dynamic agent (this handles most initialization including state)
-        FRODO_DynamicAgent.__init__(self, agent_id=agent_id, Ts=Ts)
+        super().__init__(agent_id= agent_id, Ts= Ts)
         
         # Set FRODO_SimulationObject attributes
         self.agent_id = agent_id
@@ -194,15 +195,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.color = config.color
         self.size = getattr(config, "size", 0.2)
         self.logger = Logger(agent_id)
-
-        # Initialize space and configuration for collision detection
-        if not hasattr(self, 'space') or self.space is None:
-            import extensions.simulation.src.core.spaces as spaces
-            self.space = spaces.Space2D()
-        if not hasattr(self, '_configuration') or self._configuration is None:
-            self._configuration = self.space.getState()
-
-        self._initial_start_config = list(start_config)
 
         self.cli = FRODO_GeneralAgent_CommandSet(self)
 
@@ -212,11 +204,13 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.setup_scheduling()
 
         # Apply initial start configuration
-        x0, y0, psi0 = self._initial_start_config
-        if hasattr(self, 'state'):
-            self.state.x = float(x0)
-            self.state.y = float(y0)
-            self.state.psi = float(psi0)
+        x0, y0, psi0 = start_config
+
+        self.state.x = float(x0)
+        self.state.y = float(y0)
+        self.state.psi = float(psi0)
+
+
 
     def setup_scheduling(self):
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION,
@@ -249,6 +243,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         durations: tuple[int, ...] | None = None,
         delta_t: float = 0.1,
         origin_state=None,
+        states: tuple[np.ndarray, ...] = None
     ):
         if durations is None:
             durations = tuple([1] * len(inputs))
@@ -256,37 +251,38 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         if origin_state is None:
             origin_state = self.state
 
-        states = self.compute_states(inputs, durations, origin_state, delta_t)
+        # if states == None:
+        #     states = self.compute_states(inputs, durations, origin_state, delta_t)
         phase = ExecutionPhase(inputs, states, durations, delta_t)
         self.runner.add_phase(name, phase)
 
     # ----------------------------------------------------------------------
-    def compute_states(self, inputs, durations, initial_state, delta_t):
-        ratio = delta_t / self.Ts
-        r_int = round(ratio)
-        if not math.isclose(ratio, r_int, abs_tol=1e-12):
-            raise ValueError(f"delta_t {delta_t} not integer multiple of Ts {self.Ts}")
+    # def compute_states(self, inputs, durations, initial_state, delta_t):
+    #     ratio = delta_t / self.Ts
+    #     r_int = round(ratio)
+    #     if not math.isclose(ratio, r_int, abs_tol=1e-12):
+    #         raise ValueError(f"delta_t {delta_t} not integer multiple of Ts {self.Ts}")
 
-        x = copy.deepcopy(initial_state)
-        states = [copy.deepcopy(x)]
+    #     x = copy.deepcopy(initial_state)
+    #     states = [copy.deepcopy(x)]
 
-        for duration, u_arr in zip(durations, inputs):
-            sim_ticks = duration * r_int
+    #     for duration, u_arr in zip(durations, inputs):
+    #         sim_ticks = duration * r_int
 
-            u = self.input_space.getState()
-            u["v"] = float(u_arr[0])
-            u["psi_dot"] = float(u_arr[1])
+    #         u = self.input_space.getState()
+    #         u["v"] = float(u_arr[0])
+    #         u["psi_dot"] = float(u_arr[1])
 
-            for _ in range(sim_ticks):
-                x = self.dynamics._dynamics(state=x, input=u)
+    #         for _ in range(sim_ticks):
+    #             x = self.dynamics._dynamics(state=x, input=u)
 
-            states.append(copy.deepcopy(x))
+    #         states.append(copy.deepcopy(x))
 
-        return tuple(states)
+    #     return tuple(states)
 
     # ----------------------------------------------------------------------
     def change_phase(self, name: str, reset: bool = True):
-        self.runner.change_phase(name, reset)
+        self.runner.change_phase(name, reset = reset)
 
     # ----------------------------------------------------------------------
     def output(self, env):

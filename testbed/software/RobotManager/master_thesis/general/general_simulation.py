@@ -95,7 +95,7 @@ class FRODO_General_CommandSet(CommandSet):
         config = FRODO_General_Config(color=color)
         return self.sim.new_agent(
             agent_id=agent_id,
-            config=config,
+            agent_config=config,
             start_config=[x, y, psi],
         )
 
@@ -267,8 +267,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     def new_agent(self,
                   agent_id: str,
-                  config: FRODO_General_Config | None = None,
+                  agent_config: FRODO_General_Config | None = None,
                   agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
+                  start_config: tuple[float, ...] | None = None,
                   *args,
                   **kwargs) -> FRODOGeneralAgent | None:
 
@@ -285,34 +286,25 @@ class FRODO_general_Simulation(FRODO_Simulation):
                     f"or define the agent definition in the definitions.py file.")
                 return None
 
-            config = FRODO_General_Config()
+            agent_config = FRODO_General_Config()
 
-        if config is None:
-            config = FRODO_General_Config()
+        if agent_config is None:
+            agent_config = FRODO_General_Config()
 
-        update_dataclass_from_dict(config, kwargs)
+        update_dataclass_from_dict(agent_config, kwargs)
 
-        start_config = kwargs.pop('start_config', None)
+        if start_config is None:
+            start_config = (0.0,0.0,0.0)
 
         agent = agent_class(
             agent_id=agent_id,
             Ts=self.Ts,
-            config=config,
+            config=agent_config,
+            start_config= start_config,
             **kwargs
         )
         
         self.add_agent(agent)
-
-        if start_config is not None:
-            x, y, psi = start_config
-            agent.state.x = x
-            agent.state.y = y
-            agent.state.psi = psi
-            # call output if available to populate configuration_global without assuming method exists
-            try:
-                getattr(agent, 'output', lambda env: None)(self.environment)
-            except Exception:
-                pass
 
         return agent
     
@@ -331,7 +323,7 @@ def main():
 
     # === Initial agent poses ===
     start_a = [0.0, 0.0, 0.0]
-    start_b = [1.0, 0.5, 0.0]
+    start_b = [10.0, 10.5, 0.0]
 
     # === Colors (GUI) ===
     color_ag1 = (0.7, 0, 0)
@@ -343,7 +335,7 @@ def main():
         agent_id="vfrodo1",
         agent_class=FRODOGeneralAgent,
         start_config=start_a,
-        config=vfr1_config,
+        agent_config=vfr1_config,
     )
 
     vfr2_config = FRODO_General_Config(color=color_ag2)
@@ -351,7 +343,7 @@ def main():
         agent_id="vfrodo2",
         agent_class=FRODOGeneralAgent,
         start_config=start_b,
-        config=vfr2_config,
+        agent_config=vfr2_config,
     )
 
     # === Add virtual obstacle (optional) ===
@@ -362,11 +354,19 @@ def main():
         
     )
 
-    # === Example: input phases for scripted motion (optional) ===
-    # inputs = tuple([np.array([1.0, 0.0]) for _ in range(100)])
-    # durations = tuple([1] * len(inputs))
-    # agent_a.add_input_phase("forward", inputs=inputs, durations=durations, delta_t=0.4)
-    # sim.set_phase_all_agents("forward")
+    # === Example: input phases for moving straight forward ===
+    inputs_1 = tuple([np.array([1.0, 0.0]) for _ in range(2)])
+    inputs_2 = tuple([np.array([-1.0, 0.0]) for _ in range(2)])
+    durations = tuple([1] * len(inputs_1))
+
+
+    assert agent_a, FRODOGeneralAgent
+    assert agent_b, FRODOGeneralAgent
+    agent_a.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)
+    agent_b.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)
+    agent_a.add_input_phase("after", inputs=inputs_2, durations=durations, delta_t=0.4)
+    agent_b.add_input_phase("after", inputs=inputs_2, durations=durations, delta_t=0.4)
+    sim.set_phase_all_agents("forward")
 
     # === Start simulation ===
     sim.start()
