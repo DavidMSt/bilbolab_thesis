@@ -3,14 +3,12 @@ import numpy as np
 
 from general.general_agents import FRODOGeneralAgent
 from general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from bilbolab.applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS
-from bilbolab.applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
+from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS
+from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
 class ExecutionAgent(FRODOGeneralAgent):
     def __init__(self, start_config: list[float], fov_deg=360, view_range=1.5, runner: bool = True, *args, **kwargs) -> None:
         super().__init__(start_config, fov_deg, view_range, runner, *args, **kwargs)
-
-    
 
 
 if __name__ == "__main__":
