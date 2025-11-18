@@ -80,7 +80,7 @@ def motion_planning_task():
 
     time.sleep(1)
 
-    app.set_phase_all_agents(phase="goal")
+    app.activate_phase_all_agents(phase="goal")
 
     time.sleep(5)
 

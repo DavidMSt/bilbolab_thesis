@@ -17,7 +17,7 @@ from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerBase
-from master_thesis.general.general_agents import PhaseRunner, ExecutionPhase
+from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
@@ -74,7 +74,7 @@ class MPAgentModule():
     width: float = 0.115
     height: float = 0.052  
 
-    def __init__(self, env: FrodoGeneralEnvironment, runner: PhaseRunner, id: str, logger: Logger, plotting_group = None) -> None:
+    def __init__(self, env: FrodoGeneralEnvironment, runner: InputPhaseRunner, id: str, logger: Logger, plotting_group = None) -> None:
         self.env = env
         self.runner = runner
         self.id = id
@@ -110,7 +110,7 @@ class MPAgentModule():
 
         if solved:
             solution_dict = self.motion_planner.export_solution_dict()
-            phase = ExecutionPhase(
+            phase = InputPhase(
                 inputs=solution_dict["actions"],
                 states=solution_dict["states"],
                 durations=solution_dict["durations"],
@@ -154,7 +154,7 @@ class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
     mp_interface: MPAgentModule
  
     def __init__(self, env, agent_id: str, Ts=None, config: FRODO_General_Config | None = None, start_config=[0,0,0], *args, **kwargs) -> None:
-        super().__init__(agent_id=agent_id, Ts=Ts, config=config, start_config=start_config, *args, **kwargs)
+        super().__init__(agent_id=agent_id, Ts=Ts, agent_config=config, start_config=start_config, *args, **kwargs)
 
         # motion_planning interface for OMPL configuration
         self.mpi = MPAgentModule(
@@ -235,7 +235,7 @@ if __name__ == '__main__':
     sim.add_agent(agent)
     agent.mpi.plan_motion(phase_key='test_phase', start_config=start_config, goal_config=goal_config)
     
-    agent.runner.change_phase('test_phase')
+    agent.runner.activate_phase('test_phase')
 
     sleep(3)
     print(agent._configuration)

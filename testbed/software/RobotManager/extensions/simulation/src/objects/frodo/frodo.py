@@ -47,7 +47,7 @@ class FRODO_State(State):
 
 # === Dynamics ===============================================================================
 class FRODO_Dynamics(Generic[TInput]):
-    x0: FRODO_State = FRODO_State(x=0, y=0, v=0, psi=0, psi_dot=0)
+    x0: FRODO_State
     state: FRODO_State
     input_type: Type[TInput]
 
@@ -59,8 +59,9 @@ class FRODO_Dynamics(Generic[TInput]):
             x0: Optional[FRODO_State] = None,
             input_type: Type[TInput] = FRODO_Input,
     ):
-        if x0 is not None:
-            self.x0 = x0
+        self.x0 = copy.deepcopy(x0) if x0 is not None else FRODO_State(0,0,0,0,0)
+        # if x0 is not None:
+        #     self.x0 = x0
         if model.d_wheels <= 0:
             raise ValueError("d_wheels must be > 0")
         self.model = model

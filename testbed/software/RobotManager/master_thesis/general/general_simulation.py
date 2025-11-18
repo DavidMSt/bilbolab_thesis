@@ -263,6 +263,8 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         self.events.new_agent.set(agent)
 
+        print('x0 from dynamics: ',agent.dynamics.x0, 'ahsjkhfkjdhfsjkhdsffhjkdshfkdsjfdhskj')
+
         return agent
 
     def new_agent(self,
@@ -299,7 +301,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         agent = agent_class(
             agent_id=agent_id,
             Ts=self.Ts,
-            config=agent_config,
+            agent_config=agent_config,
             start_config= start_config,
             **kwargs
         )
@@ -308,9 +310,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agent
     
-    def set_phase_all_agents(self, phase :str):
+    def activate_phase_all_agents(self, phase :str):
         for agent in self.agents.values():
-            agent.change_phase(phase)
+            agent.activate_phase(phase)
 
 def main():
     # === Simulation setup ===
@@ -322,8 +324,9 @@ def main():
     sim.init()
 
     # === Initial agent poses ===
-    start_a = [0.0, 0.0, 0.0]
-    start_b = [10.0, 10.5, 0.0]
+    start_a = (0.0, 0.0, 0.0)
+    start_b = (10.0, 10.5, 0.0)
+    start_c = (5.0, 3.5, 0.0)
 
     # === Colors (GUI) ===
     color_ag1 = (0.7, 0, 0)
@@ -339,12 +342,26 @@ def main():
     )
 
     vfr2_config = FRODO_General_Config(color=color_ag2)
-    agent_b = sim.new_agent(
+    agent_b = FRODOGeneralAgent(
         agent_id="vfrodo2",
-        agent_class=FRODOGeneralAgent,
         start_config=start_b,
         agent_config=vfr2_config,
     )
+    sim.add_agent(agent_b)
+
+    # vfr3_config = FRODO_General_Config(color=color_ag2)
+    # agent_c = FRODOGeneralAgent(
+    #     agent_id="vfrodo3",
+    #     start_config=start_c,
+    #     agent_config=vfr3_config,
+    # )
+    
+    # agent_b = sim.new_agent(
+    #     agent_id="vfrodo2",
+    #     agent_class=FRODOGeneralAgent,
+    #     start_config=start_b,
+    #     agent_config=vfr2_config,
+    # )
 
     # === Add virtual obstacle (optional) ===
     vob1_config = Obstacle_Config()
@@ -366,10 +383,13 @@ def main():
     agent_b.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)
     agent_a.add_input_phase("after", inputs=inputs_2, durations=durations, delta_t=0.4)
     agent_b.add_input_phase("after", inputs=inputs_2, durations=durations, delta_t=0.4)
-    sim.set_phase_all_agents("forward")
+    sim.activate_phase_all_agents("forward")
+    sim.activate_phase_all_agents("after")
 
     # === Start simulation ===
     sim.start()
+
+    time.sleep(1)
 
     # === Infinite keep-alive ===
     while True:

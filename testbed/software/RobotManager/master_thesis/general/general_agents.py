@@ -15,7 +15,7 @@ import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
 
 @dataclass
-class PhaseState():
+class InputPhaseState():
     index: int = 0
     ticks_left: int | None = None
 
@@ -24,7 +24,7 @@ class PhaseState():
         self.ticks_left = 0
 
 @dataclass(frozen=True, slots=True)
-class ExecutionPhase:
+class InputPhase:
     """Represents executable pre-planned motion phase. 
 
     Raises:
@@ -36,7 +36,7 @@ class ExecutionPhase:
     states: tuple[np.ndarray, ...] | None = field(default=None)  # State objects at segment boundaries
     durations: tuple[float, ...] = field(default_factory=tuple)         # steps per input
     delta_t: float = 0.1 # time increment used during the planned phase (phase time % simulation time != 0 for compatibility reasons)
-    phase_state: PhaseState = field(default_factory=PhaseState)
+    phase_state: InputPhaseState = field(default_factory=InputPhaseState)
 
     def __post_init__(self):
         if len(self.inputs) != len(self.durations):
@@ -44,11 +44,12 @@ class ExecutionPhase:
         if self.states is not None and len(self.states) != len(self.inputs) + 1:
             raise ValueError(f"len(states) must be len(inputs)+1 (or 0 if unknown). States has length: {len(self.states)}, Inputs has length: {len(self.inputs)}.")
 
-class PhaseRunner:
-    _phases: dict[str, ExecutionPhase] # individual phases that can be executed
+class InputPhaseRunner:
+    _phases: dict[str, InputPhase] # individual phases that can be executed
     _sim_dt: float # simulation time step
     _active: str # name of the currently active phase
     _current_phase_state: dict[str, int | float]
+    _queued_phases: list[str]
 
     """Holds multiple ExecutionPhase objects; only one is active at a time and executed each step."""
     def __init__(self, simulation_dt: float, logger: Logger | None = None) -> None:
@@ -58,18 +59,19 @@ class PhaseRunner:
         self._logger = logger or logging.getLogger(__name__ + ".PhaseRunner")
 
         # create base idle phase
-        idle_phase = ExecutionPhase(inputs=(np.zeros(2),), durations=(1,), delta_t=self._sim_dt)
+        idle_phase = InputPhase(inputs=(np.zeros(2),), durations=(1,), delta_t=self._sim_dt)
 
         # Register the idle phase
-        self._phases: dict[str, ExecutionPhase] = {}
+        self._phases: dict[str, InputPhase] = {}
         self.add_phase("idle", idle_phase)
 
         self._active = 'idle'
         self._pending_end: bool = False
+        self._queued_phases = []
 
     # ---------- Phase management ----------
 
-    def add_phase(self, name: str, phase: ExecutionPhase) -> None:
+    def add_phase(self, name: str, phase: InputPhase) -> None:
         # Check 
         if name in self._phases:
             raise ValueError(f"Phase '{name}' already exists with a different object.")
@@ -82,20 +84,24 @@ class PhaseRunner:
         self._phases[name] = phase
         self._logger.debug(f"Added phase '{name}': {phase}")
 
-    def change_phase(self, name: str, *, reset: bool = True) -> None:
+    def activate_phase(self, name: str, *, cut_current: bool = False, reset: bool = True) -> None:
         if name not in self._phases:
-            raise KeyError(f"Unknown phase '{name}', can't be started. Add it to the runner first.")
+            raise KeyError(f"Unknown phase '{name}', can't be activated. Add it to the runner first.")
         if reset:
             p = self._phases[name]
             p.phase_state.index = 0
             p.phase_state.ticks_left = None # will be set on first step when active 
 
         # Clear any pending end carried over from a previous phase
-        self._pending_end = False
+        self._pending_end = False # TODO: remove this param
 
-        self.active = name
-        if name != 'idle':
-            self._logger.info(f"Starting phase '{name}'")
+        # immediately stop current phase and start the next one
+        if cut_current: 
+            self.change_phase(name=name)
+        
+        # wait until it is finished, just add new phase to active queue
+        else:
+            self._queued_phases.append(name)
 
     @property
     def active(self) -> str:
@@ -110,7 +116,14 @@ class PhaseRunner:
         if name != 'idle':
             self._logger.info(f"Active phase set to '{name}'")
 
-    def get_phase(self, name: str) -> ExecutionPhase:
+    def change_phase(self, name: str):
+        self.active = name
+
+        # not necessary to print ending idle
+        if name != 'idle':
+            self._logger.info(f"Starting phase '{name}'")
+
+    def get_phase(self, name: str) -> InputPhase:
         return self._phases[name]
 
     # ---------- Stepping ----------
@@ -157,7 +170,13 @@ class PhaseRunner:
             self._logger.info(f"Phase '{active_phase}' ended, removing it now.")
             del self._phases[active_phase]
         
-        self.change_phase("idle", reset=True)
+        if self._queued_phases == []:
+            self.activate_phase("idle", reset=True)
+        
+        else:
+            phase_name = self._queued_phases.pop()
+            self.change_phase(phase_name)
+
 
 @dataclass
 class FRODO_General_Config:
@@ -175,12 +194,12 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self, 
         agent_id: str,
         Ts = None,
-        config: FRODO_General_Config | None = None,
+        agent_config: FRODO_General_Config | None = None,
         start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
     ):
-
-        if config is None:
-            config = FRODO_General_Config()
+        print('this is the start config:', start_config)
+        if agent_config is None:
+            agent_config = FRODO_General_Config()
 
         # Store Ts before parent init
         if Ts is None:
@@ -191,15 +210,15 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         
         # Set FRODO_SimulationObject attributes
         self.agent_id = agent_id
-        self.config = config
-        self.color = config.color
-        self.size = getattr(config, "size", 0.2)
+        self.config = agent_config
+        self.color = agent_config.color
+        self.size = getattr(agent_config, "size", 0.2)
         self.logger = Logger(agent_id)
 
         self.cli = FRODO_GeneralAgent_CommandSet(self)
 
         # Runner (use stored Ts)
-        self.runner = PhaseRunner(simulation_dt=self.Ts, logger=self.logger)
+        self.runner = InputPhaseRunner(simulation_dt=self.Ts, logger=self.logger)
 
         self.setup_scheduling()
 
@@ -210,6 +229,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.state.y = float(y0)
         self.state.psi = float(psi0)
 
+        print("INIT STATE:", self.state)
 
 
     def setup_scheduling(self):
@@ -253,7 +273,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
         # if states == None:
         #     states = self.compute_states(inputs, durations, origin_state, delta_t)
-        phase = ExecutionPhase(inputs, states, durations, delta_t)
+        phase = InputPhase(inputs, states, durations, delta_t)
         self.runner.add_phase(name, phase)
 
     # ----------------------------------------------------------------------
@@ -281,8 +301,8 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     #     return tuple(states)
 
     # ----------------------------------------------------------------------
-    def change_phase(self, name: str, reset: bool = True):
-        self.runner.change_phase(name, reset = reset)
+    def activate_phase(self, name: str, reset: bool = True):
+        self.runner.activate_phase(name, reset = reset)
 
     # ----------------------------------------------------------------------
     def output(self, env):
@@ -354,7 +374,7 @@ class FRODO_GeneralAgent_CommandSet(CommandSet):
 
     # ------------------------------------------------------------------
     def _change_phase(self, name):
-        self.agent.change_phase(name)
+        self.agent.activate_phase(name)
 
 
 def main():
