@@ -263,8 +263,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         self.events.new_agent.set(agent)
 
-        print('x0 from dynamics: ',agent.dynamics.x0, 'ahsjkhfkjdhfsjkhdsffhjkdshfkdsjfdhskj')
-
         return agent
 
     def new_agent(self,

@@ -96,7 +96,7 @@ class InputPhaseRunner:
         self._pending_end = False # TODO: remove this param
 
         # immediately stop current phase and start the next one
-        if cut_current: 
+        if cut_current or self.active == 'idle': 
             self.change_phase(name=name)
         
         # wait until it is finished, just add new phase to active queue
@@ -171,9 +171,11 @@ class InputPhaseRunner:
             del self._phases[active_phase]
         
         if self._queued_phases == []:
-            self.activate_phase("idle", reset=True)
+            print('no next phases available')
+            self.change_phase("idle")
         
         else:
+            print('found the next phase')
             phase_name = self._queued_phases.pop()
             self.change_phase(phase_name)
 
@@ -197,7 +199,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         agent_config: FRODO_General_Config | None = None,
         start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
     ):
-        print('this is the start config:', start_config)
         if agent_config is None:
             agent_config = FRODO_General_Config()
 
@@ -228,8 +229,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.state.x = float(x0)
         self.state.y = float(y0)
         self.state.psi = float(psi0)
-
-        print("INIT STATE:", self.state)
 
 
     def setup_scheduling(self):
