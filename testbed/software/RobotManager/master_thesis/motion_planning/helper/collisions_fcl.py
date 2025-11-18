@@ -228,7 +228,168 @@ class CollisionChecker():
             yaml.dump(collision_content, file, default_flow_style=False)
 
 
-if __name__ == "__main__":
+class EnvironmentCollisionChecker:
+
+    def __init__(self):
+        self.static_objs = {}
+        self.dynamic_objs = {}
+        self.dynamic_refs = {}
+        self.manager = fcl.DynamicAABBTreeCollisionManager()
+        self.dim = None  # filled at initialize()
+
+    # ----------------------------------------------------------------------
+    # INITIALIZATION
+    # ----------------------------------------------------------------------
+    def initialize(self, agents, obstacles):
+        """
+        Called ONCE before simulation starts.
+        Extract robot dimensions from agent_config.
+        Build the static objects once.
+        """
+        # --- store dimensions from ANY agent (all same for now)
+        if len(agents) > 0:
+            ag0 = next(iter(agents.values()))
+            self.dim = {
+                "L": ag0.agent_config.length,
+                "W": ag0.agent_config.width,
+                "H": ag0.agent_config.height,
+            }
+        else:
+            raise RuntimeError("CollisionChecker.initialize() called with no agents.")
+
+        # --- build static objects once
+        for oid, obs in obstacles.items():
+            obj = self._make_obstacle_obj(obs)
+            self.static_objs[oid] = obj
+
+        # dynamic objects will be rebuilt every check, so nothing stored here
+
+        # Build a static manager for obstacles only
+        self.manager.registerObjects(list(self.static_objs.values()))
+        self.manager.setup()
+
+    # ----------------------------------------------------------------------
+    # MAIN CHECK FUNCTION
+    # ----------------------------------------------------------------------
+    def check_all(self, agents, obstacles):
+        """
+        agents: dict[str, FRODOGeneralAgent]
+        obstacles: dict[str, GeneralObstacle]
+
+        Returns:
+            dict: agent_id -> list of collided object IDs
+        """
+        fcl_objects, id_from_obj = self._build_fcl_objects(agents, obstacles)
+
+        # New manager including dynamic + static objects
+        manager = fcl.DynamicAABBTreeCollisionManager()
+        manager.registerObjects(list(fcl_objects.keys()))
+        manager.setup()
+
+        collisions: dict[str, list[str]] = {aid: [] for aid in agents.keys()}
+
+        def cb(objA, objB, data):
+            # map back to IDs; ignore objects we didn't track
+            a = id_from_obj.get(objA)
+            b = id_from_obj.get(objB)
+            if a is None or b is None:
+                return False
+
+            if a in collisions and b not in collisions[a]:
+                collisions[a].append(b)
+            if b in collisions and a not in collisions[b]:
+                collisions[b].append(a)
+
+            # False => continue checking
+            return False
+
+        # create request/data and run self-collision
+        req = fcl.CollisionRequest(num_max_contacts=1, enable_contact=False)
+        data = fcl.CollisionData(request=req)
+        # perform a manager–manager collision check (self-collision)
+        req = fcl.CollisionRequest(num_max_contacts=1, enable_contact=False)
+        data = fcl.CollisionData(request=req)
+        manager.collide(manager, data, cb)
+
+        return collisions
+
+    # ----------------------------------------------------------------------
+    # INTERNAL: Build all objects for a single check
+    # ----------------------------------------------------------------------
+    def _build_fcl_objects(self, agents, obstacles):
+        """
+        Returns:
+            fcl_objects: dict[fcl.CollisionObject, None]
+            id_from_obj: dict[fcl.CollisionObject → str]
+        """
+        fcl_objects = {}
+        id_from_obj = {}
+
+        # --- dynamic: agents ---
+        for aid, ag in agents.items():
+            obj = self._make_agent_obj(ag)
+            fcl_objects[obj] = None
+            id_from_obj[obj] = aid
+
+        # --- static: obstacles ---
+        for oid, obs in obstacles.items():
+            obj = self._make_obstacle_obj(obs)
+            fcl_objects[obj] = None
+            id_from_obj[obj] = oid
+
+        return fcl_objects, id_from_obj
+
+    # ------------------------------------- GEOMETRY: Agent -------------------------------------
+    
+    def _make_agent_obj(self, ag):
+        L = ag.agent_config.length
+        W = ag.agent_config.width
+        H = ag.agent_config.height
+
+
+        if L <= 0 or W <= 0 or H <= 0:
+            print("[FCL ERROR] Invalid agent dimensions:", L, W, H)
+
+        x = ag.state.x
+        y = ag.state.y
+        psi = ag.state.psi
+
+        pos = [x, y, 0.0]
+        q = [np.cos(psi / 2), 0, 0, np.sin(psi / 2)]
+
+        geom = fcl.Box(L, W, H)
+        tf = fcl.Transform(q, pos)
+        return fcl.CollisionObject(geom, tf)
+
+    # ------------------------------------- GEOMETRY: Obstacle -------------------------------------
+
+    def _make_obstacle_obj(self, obs):
+        L = obs.config.length
+        W = obs.config.width
+        H = obs.config.height
+
+        if L <= 0 or W <= 0 or H <= 0:
+            print("[FCL ERROR] Invalid obstacle dimensions:", L, W, H)
+
+        x = obs.state.x
+        y = obs.state.y
+        psi = obs.state.psi
+
+        pos = [x, y, 0.0]
+        q = [np.cos(psi / 2), 0, 0, np.sin(psi / 2)]
+
+        geom = fcl.Box(L, W, H)
+        tf = fcl.Transform(q, pos)
+        return fcl.CollisionObject(geom, tf)
+    
+def frodo_collision_example():
     collision_checker = CollisionChecker()
     collision_checker.run_from_yaml()
     collision_checker.dump_collisions_to_yaml()
+
+def simulatio_collision_example():
+    ...
+
+
+if __name__ == "__main__":
+    simulatio_collision_example()    

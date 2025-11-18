@@ -22,7 +22,7 @@ class MPSimulationModule():
 
     def agent_motion_planning(self, agent: str | FRODOGeneralAgent, 
                               solution_phase_name: str, *, goal_config: tuple[float, ...], 
-                              start_config: tuple[float] | None = None):
+                              start_config: tuple[float, ...] | None = None, planner: str = 'rrt*'): # TODO: specify planner on this level already
         if isinstance(agent, str):
             agent = self.agents[agent]
         
@@ -53,10 +53,10 @@ def mp_task_example1():
     app = FRODO_MP_Simulation()
     app.init()
 
-    ag1_start = [2, 0, np.pi]
-    ag1_goal = [-1.0, 0.0, np.pi]
-    ag2_start = [2, 0, np.pi]
-    ag2_goal = [3.0, 0, 0]
+    ag1_start = (2.0, 0.0, np.pi)
+    ag1_goal = (-1.0, 0.0, np.pi)
+    ag2_start = (2, 0, np.pi)
+    ag2_goal = (3.0, 0, 0)
 
     ag1 = FRODO_MotionPlanning_Agent(
         env=app.environment,
@@ -65,7 +65,7 @@ def mp_task_example1():
         start_config=ag1_start
     )
     app.add_agent(ag1)
-    app.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=tuple(ag1_start), goal_config=tuple(ag1_goal))
+    app.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=ag1_start, goal_config= ag1_goal)
 
     ag2 = FRODO_MotionPlanning_Agent(
         env=app.environment,

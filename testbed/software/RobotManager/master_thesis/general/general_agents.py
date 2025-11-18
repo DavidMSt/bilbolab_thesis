@@ -180,9 +180,13 @@ class InputPhaseRunner:
             self.change_phase(phase_name)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class FRODO_General_Config:
     color: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    length: float = 0.157
+    width: float = 0.115
+    height: float = 0.11
+
 
 class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     """
@@ -211,7 +215,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         
         # Set FRODO_SimulationObject attributes
         self.agent_id = agent_id
-        self.config = agent_config
+        self.agent_config = agent_config
         self.color = agent_config.color
         self.size = getattr(agent_config, "size", 0.2)
         self.logger = Logger(agent_id)

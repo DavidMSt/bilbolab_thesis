@@ -69,7 +69,7 @@ class MPAgentModule():
     env: FrodoGeneralEnvironment
     id: str # mainly used for optional plotting of start/ goal configurations in the GUi
 
-    # physical dimensions for all FRODOs
+    # physical dimensions for all FRODOs # TODO: Use the general agent config to extract this in the future
     length: float = 0.157
     width: float = 0.115
     height: float = 0.052  
@@ -105,6 +105,9 @@ class MPAgentModule():
     def plan_motion(self, phase_key: str, start_config, goal_config, motion_planner = OMPLPlannerFRODOKino):
         if self.runner is None:
             self.logger.warning("Runner not initialized, Solution is not added as executable phase")
+
+        if isinstance(motion_planner, str):
+            raise NotImplementedError
         self.motion_planner = motion_planner(self.export_config(start_config, goal_config))# TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
         solved, path_length = self.motion_planner.solve_problem()
 

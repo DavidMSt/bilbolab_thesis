@@ -18,6 +18,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 # master thesis
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
+from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
@@ -102,7 +103,8 @@ class FRODO_General_CommandSet(CommandSet):
 class FrodoGeneralEnvironment(FrodoEnvironment):
     def __init__(self, Ts, run_mode, *args, **kwargs):
         self.space = core.spaces.Space2D()
-        self._obstacles = []            
+        self._obstacles = []  
+        self.collision_checker = None      
 
         super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
         # # Call core environment init directly (skip FrodoEnvironment’s extra input registration)
@@ -119,7 +121,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COLLISION,
                         object=self,
-                        function=self.collision_checking,
+                        function=self._collision_checking,
                         priority=65,
                         parent=self.scheduling.actions['objects'])
         
@@ -135,6 +137,28 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         for obj in self.objects.values():
             obj.output(self)
 
+    def setup_collision_checker(self):
+        agents = {}
+        obstacles = {}
+
+        for obj_id, obj in self.objects.items():
+            if isinstance(obj, FRODOGeneralAgent):
+                agents[obj_id] = obj
+            elif isinstance(obj, GeneralObstacle):
+                obstacles[obj_id] = obj
+            else:
+                raise AssertionError("Unknown object class during env collision checker setup")
+
+        self.collision_checker = EnvironmentCollisionChecker()
+        self.collision_checker.initialize(
+            agents=agents,
+            obstacles=obstacles
+        )
+
+        self.logger.info(
+            f"Collision checker initialized with {len(agents)} agents and {len(obstacles)} obstacles."
+        )
+
     def set_limits(self, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), wrapping = [False, False]):
         pos_dim = self.space.dimensions[0] # Get the first dimension of the space (E(2) vector)
         pos_dim.kwargs['wrapping'] = wrapping
@@ -144,24 +168,18 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         # print(f"=== ENV INPUT PHASE @ tick {self.scheduling.tick}") # TODO: enabling this shows that this phase is called twice? bug? 
         self.logger.debug(f"{self.scheduling.tick}: Action Frodo Input")
 
-    def collision_checking(self):
-        for key, obj in self.objects.items():
-            # Just use the state directly instead of configuration_global
-            if hasattr(obj, 'state'):
-                state = obj.state
-                x = getattr(state, 'x', None)
-                y = getattr(state, 'y', None)
-                psi = getattr(state, 'psi', 0.0)
-                
-                if x is not None and y is not None:
-                    pass
-                    # print(key, "pos:", x, y, "psi:", psi)
-                else:
-                    pass
-                    # print("ERROR: object", key, "has no x/y in state")
-            else:
-                pass
-                # print("ERROR: object", key, "has no state attribute")
+    def _collision_checking(self):
+        assert self.collision_checker is not None
+
+        # dynamic, up-to-date dictionaries:
+        agents = {k: v for k, v in self.objects.items() if isinstance(v, FRODOGeneralAgent)}
+        obstacles = {k: v for k, v in self.objects.items() if isinstance(v, GeneralObstacle)}
+
+        collisions = self.collision_checker.check_all(agents, obstacles)
+
+        for aid, hits in collisions.items():
+            if hits:
+                print(f"[COLLISION] Agent {aid} collided with {hits}")
 
     @property
     def limits(self) ->list[list[float]]:
@@ -173,7 +191,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
 class FRODO_general_Simulation(FRODO_Simulation):
 
-    environment: FrodoEnvironment
+    environment: FrodoGeneralEnvironment
 
     cli: FRODO_General_CommandSet | None = None
 
@@ -314,6 +332,10 @@ class FRODO_general_Simulation(FRODO_Simulation):
     def activate_phase_all_agents(self, phase :str):
         for agent in self.agents.values():
             agent.activate_phase(phase)
+
+    def start(self):
+        self.environment.setup_collision_checker()
+        super().start()
 
 def main():
     # === Simulation setup ===
