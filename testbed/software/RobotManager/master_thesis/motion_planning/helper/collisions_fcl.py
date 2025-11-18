@@ -140,42 +140,7 @@ class CollisionChecker():
         else:
             raise ValueError
         return _obs
-    
-    # def create_objects_arm(self, state):
-    #     L = self.dimensions["L"]
-    #     radius = 0.04
-    #     theta1, theta2, theta3 = state
-    #     offset = np.pi / 2
-
-    #     links = []
-    #     transforms = []
-
-    #     # Link 1
-    #     l1_x = L[0]/2 * np.cos(theta1)
-    #     l1_y = L[0]/2 * np.sin(theta1)
-    #     T1 = tf.translation_matrix([l1_x, l1_y, 0]) @ tf.euler_matrix(np.pi/2, 0, offset + theta1)
-    #     tf1 = fcl.Transform(T1[:3, :3], T1[:3, 3])
-    #     links.append(fcl.Cylinder(radius, L[0]))
-    #     transforms.append(tf1)
-
-    #     # Link 2
-    #     l2_x = L[0] * np.cos(theta1) + L[1]/2 * np.cos(theta1 + theta2)
-    #     l2_y = L[0] * np.sin(theta1) + L[1]/2 * np.sin(theta1 + theta2)
-    #     T2 = tf.translation_matrix([l2_x, l2_y, 0]) @ tf.euler_matrix(np.pi/2, 0, offset + theta1 + theta2)
-    #     tf2 = fcl.Transform(T2[:3, :3], T2[:3, 3])
-    #     links.append(fcl.Cylinder(radius, L[1]))
-    #     transforms.append(tf2)
-
-    #     # Link 3
-    #     l3_x = L[0] * np.cos(theta1) + L[1] * np.cos(theta1 + theta2) + L[2]/2 * np.cos(theta1 + theta2 + theta3)
-    #     l3_y = L[0] * np.sin(theta1) + L[1] * np.sin(theta1 + theta2) + L[2]/2 * np.sin(theta1 + theta2 + theta3)
-    #     T3 = tf.translation_matrix([l3_x, l3_y, 0]) @ tf.euler_matrix(np.pi/2, 0, offset + theta1 + theta2 + theta3)
-    #     tf3 = fcl.Transform(T3[:3, :3], T3[:3, 3])
-    #     links.append(fcl.Cylinder(radius, L[2]))
-    #     transforms.append(tf3)
-
-    #     objs = [fcl.CollisionObject(geom, transform) for geom, transform in zip(links, transforms)]
-    #     return objs
+  
 
     def create_objects_frodo(self, state):
         x, y, theta = state
@@ -230,12 +195,19 @@ class CollisionChecker():
 
 class EnvironmentCollisionChecker:
 
-    def __init__(self):
+    def __init__(self, compute_closest_distance = False):
         self.static_objs = {}
         self.dynamic_objs = {}
         self.dynamic_refs = {}
         self.manager = fcl.DynamicAABBTreeCollisionManager()
         self.dim = None  # filled at initialize()
+        
+        if compute_closest_distance: 
+            self.closest_objects: dict[str, float] | None = {}
+
+        else: 
+            self.closest_object = None
+            self.closest_agent = None
 
     # ----------------------------------------------------------------------
     # INITIALIZATION
@@ -267,6 +239,44 @@ class EnvironmentCollisionChecker:
         # Build a static manager for obstacles only
         self.manager.registerObjects(list(self.static_objs.values()))
         self.manager.setup()
+
+    def distance_and_bearing_to_closest_obstacle(self, agent):
+        min_dist = float('inf')
+        angle = 0.0
+
+        for obst in self.static_objs.values():
+            dist, p_agent, p_obst = self.compute_distance(agent, obst)
+
+            if dist < min_dist:
+                min_dist = dist
+                # direction: from agent to obstacle nearest point
+                vec = p_obst - np.array([agent.state.x, agent.state.y])
+                angle = np.atan2(vec[1], vec[0]) - agent.state.psi
+
+        return min_dist, angle
+    
+    def compute_distance(self, agent, obstacle):
+        req = fcl.DistanceRequest(enable_nearest_points=True)
+        res = fcl.DistanceResult()
+        fcl.distance(req, res, agent.fcl_obj, obstacle.fcl_obj)
+        return res.min_distance, np.array(res.nearest_points[0]), np.array(res.nearest_points[1])
+
+    def distance_and_bearing_to_closest_agent(self, agent, agents_dict):
+        min_dist = float('inf')
+        angle = 0.0
+
+        for other in agents_dict.values():
+            if other is agent:
+                continue
+
+            dist, p_self, p_other = self.compute_distance(agent, other)
+
+            if dist < min_dist:
+                min_dist = dist
+                vec = p_other - np.array([agent.state.x, agent.state.y])
+                angle = np.atan2(vec[1], vec[0]) - agent.state.psi
+
+        return min_dist, angle
 
     # ----------------------------------------------------------------------
     # MAIN CHECK FUNCTION

@@ -38,5 +38,21 @@ class FrodoRLEnv(gym.Env):
         return obs, reward, terminated, truncated, {}
 
     def _get_obs(self):
-        ag = list(self.sim.agents.values())[0]
-        return np.array([ag.state.x, ag.state.y, ag.state.psi], dtype=np.float32)
+        a = list(self.sim.agents.values())[0]
+
+        # distance to the goal
+        dx = 5 - a.state.x
+        dy = 5 - a.state.y
+
+        # distance and angle to nearest obstacle
+        d_obs, ang_obs = self.sim.environment.collision_checker.distance_and_bearing_to_closest_obstacle(a)
+
+        # distance and angle to nearest agent
+        d_agent, ang_agent = self.sim.environment.collision_checker.distance_and_bearing_to_closest_agent(a)
+
+        return np.array([
+            a.state.x, a.state.y, a.state.psi,
+            dx, dy,
+            d_obs, ang_obs,
+            d_agent, ang_agent,
+        ], dtype=np.float32)
